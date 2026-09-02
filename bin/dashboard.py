@@ -23,10 +23,29 @@ TOKEN = os.environ.get("VODLOOP_TOKEN", "")
 PORT = int(os.environ.get("VODLOOP_PORT", "8770"))
 
 COMMON_JS = """
-const tok = new URLSearchParams(location.search).get('token') || '';
+// The token is kept in this browser, not in the address bar: a query string
+// ends up in history, in the proxy's access log and in outgoing Referer
+// headers. A token passed in the URL once is stored and then removed from it.
+let tok = '';
+try {
+  const fromUrl = new URLSearchParams(location.search).get('token');
+  if (fromUrl) {
+    localStorage.setItem('vodloop_token', fromUrl);
+    history.replaceState(null, '', location.pathname);
+  }
+  tok = localStorage.getItem('vodloop_token') || '';
+} catch (e) { tok = new URLSearchParams(location.search).get('token') || ''; }
+
+const setToken = t => { tok = t; try { localStorage.setItem('vodloop_token', t); } catch (e) {} };
+const forgetToken = () => { tok = ''; try { localStorage.removeItem('vodloop_token'); } catch (e) {} };
+
+// resolves to {ok, data} so a caller can tell a refusal from a value
 const call = (p, body) => fetch(p, {method: body ? 'POST' : 'GET',
   headers: {'X-Token': tok, 'Content-Type': 'application/json'},
-  body: body ? JSON.stringify(body) : null}).then(r => r.json());
+  body: body ? JSON.stringify(body) : null})
+  .then(r => r.json().then(d => ({ok: r.ok, status: r.status, data: d})))
+  .catch(() => ({ok: false, status: 0, data: {error: 'serveur injoignable'}}));
+
 // user-supplied strings are only ever set as text, never parsed as markup
 const el = (tag, text, cls) => { const n = document.createElement(tag);
   if (text !== undefined) n.textContent = text; if (cls) n.className = cls; return n; };
@@ -45,7 +64,15 @@ PAGE = """<!doctype html><meta charset=utf-8><title>vodloop</title>
  table{width:100%;border-collapse:collapse;font-size:13px}
  td,th{text-align:left;padding:6px 4px;border-bottom:1px solid #232830}
  .k{color:#9aa4b2}.ok{color:#5fbf7f}.bad{color:#e06c75}.v{color:#d8a657}
+ #gate{position:fixed;inset:0;background:#0e1116;display:none;align-items:center;justify-content:center}
+ #gate .card{max-width:420px;width:90%}
 </style>
+<div id=gate><div class=card>
+  <div style=margin-bottom:10px>Ce panneau pilote un direct. Colle le jeton d'acces.</div>
+  <div class=row><input id=tokin type=password placeholder="jeton"><button onclick=unlock()>Entrer</button></div>
+  <div id=gatemsg class=bad style=margin-top:8px></div>
+  <div class=k style=margin-top:10px>Il est garde dans ce navigateur, jamais dans l'URL.</div>
+</div></div>
 <main>
 <h1>vodloop</h1>
 <div class=card id=health></div>
@@ -87,11 +114,42 @@ function table(s) {
     cell.append(b); r.append(cell);
   });
 }
-const refresh = () => call('/api/state').then(s => { health(s); table(s); });
-const note = r => { document.getElementById('msg').textContent = r.error || r.note || ''; };
+const gate = document.getElementById('gate');
+// Called with no reason, this leaves any existing message alone. The polling
+// loop calls it every few seconds, and it used to wipe "jeton refuse" a moment
+// after it appeared.
+const showGate = why => { gate.style.display = 'flex';
+  if (why !== undefined) document.getElementById('gatemsg').textContent = why; };
+function unlock() {
+  const v = document.getElementById('tokin').value.trim();
+  if (!v) return;
+  setToken(v);
+  showGate('verification...');
+  call('/api/state').then(r => {
+    if (r.ok) { gate.style.display = 'none'; document.getElementById('gatemsg').textContent = '';
+                document.getElementById('tokin').value = ''; health(r.data); table(r.data); }
+    else if (r.status === 401) { forgetToken(); showGate('jeton refuse'); }
+    else { showGate(r.data.error || 'le service ne repond pas'); }
+  });
+}
+document.getElementById('tokin').addEventListener('keydown',
+  e => { if (e.key === 'Enter') unlock(); });
+
+function refresh() {
+  if (!tok) { showGate(); return Promise.resolve(); }
+  return call('/api/state').then(r => {
+    if (r.status === 401) { forgetToken(); showGate('jeton refuse'); return; }
+    if (!r.ok) { document.getElementById('health').textContent =
+      r.data.error || 'le service ne repond pas'; return; }
+    gate.style.display = 'none';
+    health(r.data); table(r.data);
+  });
+}
+const note = r => { document.getElementById('msg').textContent =
+  r.data.error || r.data.note || ''; };
 const add = () => call('/api/add', {url: document.getElementById('url').value})
-  .then(r => { note(r); document.getElementById('url').value = ''; refresh(); });
-const skip = () => call('/api/skip', {}).then(refresh);
+  .then(r => { note(r); if (r.ok) document.getElementById('url').value = ''; refresh(); });
+const skip = () => call('/api/skip', {}).then(r => { note(r); refresh(); });
 refresh(); setInterval(refresh, 5000);
 </script>""".replace("__COMMON__", COMMON_JS)
 
@@ -125,7 +183,9 @@ function draw(s) {
   document.getElementById('skip').textContent =
     s.skip_votes ? s.skip_votes + ' vote(s) pour passer' : '';
 }
-const tick = () => call('/api/overlay').then(draw);
+// the overlay stays silent when it cannot read: a compositor source showing an
+// error string on stream is worse than one showing nothing
+const tick = () => call('/api/overlay').then(r => { if (r.ok) draw(r.data); });
 tick(); setInterval(tick, 4000);
 </script>""".replace("__COMMON__", COMMON_JS)
 
