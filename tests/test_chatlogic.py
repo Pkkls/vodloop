@@ -71,10 +71,10 @@ def test_url_accepts_the_real_shapes_and_always_rebuilds_https():
 def test_one_user_cannot_flood():
     queue, state = fresh()
     reply, changed = say(queue, state, "u1", "!play dQw4w9WgXcQ", now=1000)
-    assert changed and reply == "ajoute"
+    assert changed and reply == "added"
     # a second add inside the cooldown is refused
     reply, changed = say(queue, state, "u1", "!play AAAAAAAAAAA", now=1010)
-    assert not changed and "attends" in reply
+    assert not changed and "wait" in reply
     # and is allowed once the cooldown has passed
     reply, changed = say(queue, state, "u1", "!play AAAAAAAAAAA", now=1100)
     assert changed, reply
@@ -88,14 +88,14 @@ def test_one_user_cannot_hold_the_whole_queue():
         assert changed
         now += common.ADD_COOLDOWN_SECONDS + 1
     reply, changed = say(queue, state, "u1", "!play bbbbbbbbbb9", now=now)
-    assert not changed and "attente" in reply
+    assert not changed and "waiting" in reply
 
 
 def test_duplicates_are_refused():
     queue, state = fresh()
     say(queue, state, "u1", "!play dQw4w9WgXcQ", now=1000)
     reply, changed = say(queue, state, "u2", "!play https://youtu.be/dQw4w9WgXcQ", now=1000)
-    assert not changed and reply == "deja dans la file"
+    assert not changed and reply == "already in the queue"
 
 
 def test_a_vote_counts_once_per_user():
@@ -120,23 +120,23 @@ def test_skip_needs_several_distinct_people():
     # the same person shouting does not move the counter past one
     for _ in range(5):
         reply, _ = say(queue, state, "u1", "!skip", now=2000)
-    assert reply != "passe", reply
+    assert reply != "skipping", reply
     assert len(state["skip_votes"]) == 1
 
     for n, user in enumerate(("u2", "u3")):
         reply, _ = say(queue, state, user, "!skip", now=2000 + n)
-    assert reply == "passe", reply
+    assert reply == "skipping", reply
 
 
 def test_skip_cannot_be_chained():
     queue, state = fresh()
     for user in ("u1", "u2", "u3"):
         reply, _ = say(queue, state, user, "!skip", now=2000)
-    assert reply == "passe"
+    assert reply == "skipping"
     # immediately afterwards the cooldown swallows a second attempt
     for user in ("u1", "u2", "u3"):
         reply, changed = say(queue, state, user, "!skip", now=2005)
-        assert reply != "passe" and not changed
+        assert reply != "skipping" and not changed
 
 
 def test_stale_skip_votes_expire():
@@ -146,7 +146,7 @@ def test_stale_skip_votes_expire():
     # the third vote arrives long after the window, so the first two are gone
     late = 2000 + common.SKIP_WINDOW_SECONDS + 10
     reply, _ = say(queue, state, "u3", "!skip", now=late)
-    assert reply != "passe", reply
+    assert reply != "skipping", reply
     assert len(state["skip_votes"]) == 1
 
 
@@ -161,7 +161,7 @@ def test_moderator_powers_are_not_available_to_everyone():
     assert not changed
     # and a moderator skips alone
     reply, _ = say(queue, state, "mod1", "!skip", now=1000)
-    assert reply == "passe"
+    assert reply == "skipping"
 
 
 def test_noise_is_ignored_in_silence():

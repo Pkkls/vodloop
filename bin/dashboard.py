@@ -173,16 +173,16 @@ OVERLAY = """<!doctype html><meta charset=utf-8><title>vodloop overlay</title>
 <script>
 __COMMON__
 function draw(s) {
-  document.getElementById('now').textContent = s.now_title || 'en attente';
-  document.getElementById('by').textContent = s.now_by ? 'demande par ' + s.now_by : '';
+  document.getElementById('now').textContent = s.now_title || 'nothing playing';
+  document.getElementById('by').textContent = s.now_by ? 'requested by ' + s.now_by : '';
   const next = document.getElementById('next'); next.textContent = '';
   if (s.next.length) {
-    next.append(el('span', 'a suivre  '));
+    next.append(el('span', 'up next  '));
     s.next.forEach(n => { next.append(el('b', n.title || n.url), el('span',
       '  (' + n.votes + ')  ')); });
   }
   document.getElementById('skip').textContent =
-    s.skip_votes ? s.skip_votes + ' vote(s) pour passer' : '';
+    s.skip_votes ? s.skip_votes + ' vote(s) to skip' : '';
 }
 // the overlay stays silent when it cannot read: a compositor source showing an
 // error string on stream is worse than one showing nothing

@@ -25,7 +25,9 @@ import time
 
 import common
 
-HELP = "!play <lien youtube>  |  !vote <n>  |  !skip"
+# Every string returned from here can land in chat, so they are all written in
+# the channel's language rather than the one the code is discussed in.
+HELP = "!play <youtube link>  |  !vote <n>  |  !skip"
 
 
 def new_state():
@@ -84,7 +86,7 @@ def handle(message, queue, state, mods=(), now=None):
         target = common.clean_text(argument, 64)
         if target and target not in state["banned"]:
             state["banned"].append(target)
-            return f"{target} ne peut plus interagir", True
+            return f"{target} can no longer use the commands", True
         return None, False
     if command == "!help":
         return HELP, False
@@ -99,15 +101,15 @@ def _add(argument, queue, state, user_id, message, now, is_mod):
     if not is_mod:
         waited = now - state["last_add"].get(user_id, 0)
         if waited < common.ADD_COOLDOWN_SECONDS:
-            return f"attends {int(common.ADD_COOLDOWN_SECONDS - waited)}s", False
+            return f"wait {int(common.ADD_COOLDOWN_SECONDS - waited)}s", False
         if len(_pending_of(queue, user_id)) >= common.MAX_PENDING_PER_USER:
-            return "tu as deja assez de titres en attente", False
+            return "you already have enough waiting", False
 
     if _already_queued(queue, video_id):
-        return "deja dans la file", False
+        return "already in the queue", False
     live = [i for i in queue["items"] if i["status"] in ("pending", "preparing", "ready")]
     if len(live) >= common.MAX_QUEUE:
-        return "file pleine", False
+        return "the queue is full", False
 
     queue["seq"] += 1
     queue["items"].append({
@@ -126,7 +128,7 @@ def _add(argument, queue, state, user_id, message, now, is_mod):
         cutoff = now - common.ADD_COOLDOWN_SECONDS
         state["last_add"] = {k: v for k, v in state["last_add"].items() if v > cutoff}
     _prune(queue)
-    return "ajoute", True
+    return "added", True
 
 
 def _vote(argument, queue, user_id):
@@ -147,7 +149,7 @@ def _skip(queue, state, user_id, now, is_mod):
     if is_mod:
         state["skip_votes"] = {}
         state["last_skip"] = now
-        return "passe", True
+        return "skipping", True
 
     since_last = now - state["last_skip"]
     if since_last < common.SKIP_COOLDOWN_SECONDS:
@@ -163,9 +165,9 @@ def _skip(queue, state, user_id, now, is_mod):
     if len(state["skip_votes"]) >= common.SKIP_MIN_VOTERS:
         state["skip_votes"] = {}
         state["last_skip"] = now
-        return "passe", True
+        return "skipping", True
     remaining = common.SKIP_MIN_VOTERS - len(state["skip_votes"])
-    return f"{remaining} vote(s) de plus pour passer", True
+    return f"{remaining} more vote(s) to skip", True
 
 
 def playback_order(queue):

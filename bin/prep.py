@@ -77,7 +77,7 @@ def prepare(item):
     title_file = common.STATE / f"title_{item['id']:05d}.txt"
     caption = common.clean_text(item.get("title"), 70)
     if item.get("by_name"):
-        caption = f"{caption}   -   demande par {common.clean_text(item['by_name'], 24)}"
+        caption = f"{caption}   -   requested by {common.clean_text(item['by_name'], 24)}"
     title_file.write_text(caption, encoding="utf-8")
 
     encode = list(common.ENCODE)
@@ -156,7 +156,7 @@ def main():
             length = 0.0
         if length > common.MAX_DURATION_SECONDS:
             item["status"] = "error"
-            item["error"] = f"trop long ({int(length / 3600)}h)"
+            item["error"] = f"too long ({int(length / 3600)}h)"
             common.save_queue(queue)
             continue
 
