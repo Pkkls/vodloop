@@ -199,6 +199,40 @@ def test_most_voted_plays_first():
     assert chatlogic.playback_order(queue)[0]["id"] == second["id"]
 
 
+def test_a_real_bus_envelope_is_unwrapped():
+    """Regression: the payload sits under "data", not at the top level.
+
+    Reading the envelope as the payload finds no sender, and the command is then
+    dropped without a word. The chat looks connected and simply never answers,
+    which is exactly how this shipped once.
+    """
+    import chat
+
+    envelope = {
+        "id": "01M1J4Z2EMK3VM0VY8RE104SGD",
+        "type": "chat.message.sent",
+        "version": "1",
+        "broadcaster": "127469285",
+        "received_at": "2026-09-02T22:48:49Z",
+        "data": {
+            "message_id": "52f6ac83-0668-4282-bd73-e358c0a64db7",
+            "content": "!help",
+            "sender": {"user_id": 127469285, "username": "CX247_CX"},
+            "broadcaster": {"user_id": 127469285, "username": "CX247_CX"},
+        },
+    }
+    message = chat.as_message(chat.unwrap(envelope))
+    assert message["user_id"] == 127469285, message
+    assert message["text"] == "!help", message
+
+    queue, state = fresh()
+    reply, _ = chatlogic.handle(message, queue, state, MODS, 1000.0)
+    assert reply == chatlogic.HELP, reply
+
+    # a bare payload, with no envelope, must keep working too
+    assert chat.as_message(chat.unwrap(envelope["data"]))["text"] == "!help"
+
+
 def _with_allowlist(content):
     """Point the allowlist at a temporary file holding exactly `content`."""
     import tempfile

@@ -42,6 +42,23 @@ def save_state(state):
     tmp.replace(STATE_FILE)
 
 
+def unwrap(event):
+    """Pull the chat payload out of the bus envelope.
+
+    kickbus wraps each event as {id, type, version, broadcaster, data}. Reading
+    the envelope as if it were the payload finds no sender, which the command
+    handler then rejects without a word: the chat looks connected and simply
+    never answers.
+    """
+    if not isinstance(event, dict):
+        return None
+    for key in ("data", "payload"):
+        inner = event.get(key)
+        if isinstance(inner, dict):
+            return inner
+    return event
+
+
 def as_message(payload):
     """Map a Kick chat event onto what chatlogic expects, tolerating shape drift."""
     if not isinstance(payload, dict):
@@ -97,8 +114,8 @@ class Store:
         self.dirty = False
 
 
-def apply(payload, mods, store):
-    message = as_message(payload)
+def apply(event, mods, store):
+    message = as_message(unwrap(event))
     if message is None:
         return
     now = time.time()
@@ -125,7 +142,7 @@ def stream(mods, store):
                         event = json.loads(line[5:].strip())
                     except ValueError:
                         continue  # a malformed frame is not worth dying over
-                    apply(event.get("payload", event), mods, store)
+                    apply(event, mods, store)
         except (urllib.error.URLError, OSError, TimeoutError):
             # the feed went quiet, so nothing is waiting on the pacing any more
             store.flush(time.time(), force=True)
