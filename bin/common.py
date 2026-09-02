@@ -6,6 +6,8 @@ import re
 
 ROOT = pathlib.Path(os.environ.get("VODLOOP_ROOT", pathlib.Path.home() / "vodloop"))
 SEGMENTS = ROOT / "segments"
+# drop a video file in here and it joins the queue, no downloader involved
+INCOMING = ROOT / "incoming"
 STATE = ROOT / "state"
 QUEUE = STATE / "queue.json"
 OFFSET = STATE / "offset"

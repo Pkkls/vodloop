@@ -83,20 +83,31 @@ def prepare(item):
     encode = list(common.ENCODE)
     encode[encode.index("-vf") + 1] = overlay_filter(title_file)
 
-    puller = subprocess.Popen(
-        BASE + ["-f", FORMAT, "-o", "-", "--", item["url"]],
-        stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-    )
-    encoder = subprocess.Popen(
-        ["ffmpeg", "-hide_banner", "-loglevel", "error", "-i", "pipe:0"]
-        + encode
-        + ["-f", "segment", "-segment_time", str(common.CHUNK_SECONDS),
-           "-segment_format", "mpegts", "-reset_timestamps", "1", pattern],
-        stdin=puller.stdout, stderr=subprocess.PIPE,
-    )
-    puller.stdout.close()  # so yt-dlp sees EPIPE if ffmpeg dies first
+    tail = ["-f", "segment", "-segment_time", str(common.CHUNK_SECONDS),
+            "-segment_format", "mpegts", "-reset_timestamps", "1", pattern]
+
+    if item.get("path"):
+        # a file handed over directly: ffmpeg reads it, no downloader involved
+        puller = None
+        encoder = subprocess.Popen(
+            ["ffmpeg", "-hide_banner", "-loglevel", "error", "-i", item["path"]]
+            + encode + tail,
+            stderr=subprocess.PIPE,
+        )
+    else:
+        puller = subprocess.Popen(
+            BASE + ["-f", FORMAT, "-o", "-", "--", item["url"]],
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+        )
+        encoder = subprocess.Popen(
+            ["ffmpeg", "-hide_banner", "-loglevel", "error", "-i", "pipe:0"]
+            + encode + tail,
+            stdin=puller.stdout, stderr=subprocess.PIPE,
+        )
+        puller.stdout.close()  # so yt-dlp sees EPIPE if ffmpeg dies first
+
     enc_err = encoder.communicate()[1].decode(errors="replace")
-    pull_err = puller.communicate()[1].decode(errors="replace")
+    pull_err = puller.communicate()[1].decode(errors="replace") if puller else ""
 
     produced = list(common.SEGMENTS.glob(f"{item['id']:05d}_*.ts"))
     if encoder.returncode != 0 or not produced:
@@ -105,6 +116,43 @@ def prepare(item):
         return False
     item["chunks"] = len(produced)
     return True
+
+
+MEDIA_SUFFIXES = {".mp4", ".mkv", ".mov", ".webm", ".ts", ".m4v", ".avi"}
+SETTLE_SECONDS = 30
+
+
+def take_dropped_files(queue):
+    """Queue any video file dropped in incoming/.
+
+    This path exists because a channel's videos are not always fetchable, while
+    the people who made them can simply hand over the files. Nothing here goes
+    through the downloader, and chat cannot reach it: the command parser only
+    ever produces YouTube ids, never a path.
+    """
+    common.INCOMING.mkdir(parents=True, exist_ok=True)
+    known = {i.get("path") for i in queue["items"] if i.get("path")}
+    for candidate in sorted(common.INCOMING.iterdir()):
+        if not candidate.is_file() or candidate.suffix.lower() not in MEDIA_SUFFIXES:
+            continue
+        if str(candidate) in known:
+            continue
+        # a file still being copied must not be handed to ffmpeg half-written
+        if time.time() - candidate.stat().st_mtime < SETTLE_SECONDS:
+            continue
+        queue["seq"] += 1
+        queue["items"].append({
+            "id": queue["seq"],
+            "url": candidate.name,
+            "path": str(candidate),
+            "status": "pending",
+            "by": "file",
+            "by_name": "",
+            "title": common.clean_text(candidate.stem, 120),
+            "votes": [],
+            "added_at": time.time(),
+        })
+        print(f"queued from incoming/: {candidate.name}", flush=True)
 
 
 def reap(queue):
@@ -132,6 +180,7 @@ def disk_is_tight():
 def main():
     while True:
         queue = common.load_queue()
+        take_dropped_files(queue)
         reap(queue)
         # chat votes decide the order; ties fall back to who asked first
         pending = chatlogic.playback_order(queue)
@@ -143,6 +192,30 @@ def main():
             continue
 
         item = pending[0]
+
+        if item.get("path"):
+            # handed over by the operator, not requested by a stranger: there is
+            # no publisher to check and no downloader to ask
+            item["status"] = "preparing"
+            common.save_queue(queue)
+            ok = prepare(item)
+            if not ok:
+                failed = common.INCOMING / "failed"
+                failed.mkdir(exist_ok=True)
+                try:
+                    pathlib.Path(item["path"]).rename(failed / pathlib.Path(item["path"]).name)
+                except OSError:
+                    pass
+            else:
+                pathlib.Path(item["path"]).unlink(missing_ok=True)
+            queue = common.load_queue()
+            for entry in queue["items"]:
+                if entry["id"] == item["id"]:
+                    entry.update(item)
+                    entry["status"] = "ready" if ok else "error"
+            common.save_queue(queue)
+            continue
+
         meta, err = probe(item["url"])
         if err:
             item["status"] = "error"
