@@ -93,8 +93,13 @@ class Replier:
         if user_id and now - self.last_per_user.get(user_id, 0) < self.PER_USER_GAP_SECONDS:
             return False
         try:
+            # Posting as "bot" is what the docs describe, but Kick answers 500
+            # to it today, with or without a broadcaster id. Sending as "user"
+            # works, at the cost of the answers appearing under the channel
+            # owner's name rather than a separate bot identity. Worth retrying
+            # the bot path once Kick stops erroring on it.
             body = json.dumps({"broadcaster_user_id": int(self.broadcaster_id),
-                               "content": text[:480], "type": "bot"}).encode()
+                               "content": text[:480], "type": "user"}).encode()
             request = urllib.request.Request(self.CHAT_URL, data=body, method="POST")
             request.add_header("Authorization", f"Bearer {self._access_token()}")
             request.add_header("Content-Type", "application/json")
