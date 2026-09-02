@@ -47,17 +47,20 @@ BASE = [YTDLP, "--no-warnings", "--no-progress"]
 
 
 def probe(url):
-    """Title and duration, without downloading. Returns (meta, error)."""
+    """Title, duration and publishing channel, without downloading."""
     out = subprocess.run(
-        BASE + ["--simulate", "--print", "%(title)s\t%(duration)s", url],
+        BASE + ["--simulate", "--print",
+                "%(title)s\t%(duration)s\t%(channel_id)s\t%(channel)s", url],
         capture_output=True, text=True, timeout=180,
     )
     if out.returncode != 0:
         last = (out.stderr.strip().splitlines() or ["extraction failed"])[-1]
         return None, last
     line = (out.stdout.strip().splitlines() or [""])[-1]
-    title, _, duration = line.partition("\t")
-    return {"title": title[:120], "duration": duration}, None
+    parts = (line.split("\t") + ["", "", "", ""])[:4]
+    return {"title": common.clean_text(parts[0], 120), "duration": parts[1],
+            "channel_id": parts[2].strip(),
+            "channel": common.clean_text(parts[3], 60)}, None
 
 
 def seconds_on_disk():
@@ -154,6 +157,17 @@ def main():
         if length > common.MAX_DURATION_SECONDS:
             item["status"] = "error"
             item["error"] = f"trop long ({int(length / 3600)}h)"
+            common.save_queue(queue)
+            continue
+
+        # Who published it is the only control that holds. A chat member can
+        # queue anything YouTube hosts, and a video that gets the Kick channel
+        # banned is indistinguishable from any other by its title or its words.
+        if not common.channel_allowed(meta["channel_id"]):
+            item["status"] = "error"
+            item["error"] = "channel not on the allowlist"
+            item["channel"] = meta["channel"]
+            item["channel_id"] = meta["channel_id"]
             common.save_queue(queue)
             continue
 

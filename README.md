@@ -64,6 +64,30 @@ channel online throughout.
 !ban <user id>         moderators only
 ```
 
+## Channel allowlist
+
+The queue is closed by default. A video is prepared only if its publishing
+channel is on an explicit list, managed by hand:
+
+```sh
+python3 bin/allowlist.py add https://www.youtube.com/@somechannel
+python3 bin/allowlist.py list
+python3 bin/allowlist.py remove UCxxxxxxxxxxxxxxxxxxxxxx
+```
+
+This is the difference between a channel that survives and one that does not.
+Anyone in chat can queue anything YouTube hosts, and nothing in a title or a
+transcript reliably predicts whether a video gets the Kick channel taken down.
+Who published it does.
+
+Channel ids are stored rather than handles, because a handle can be changed or
+reassigned and an id cannot. The check runs at preparation time, where the
+publisher is known, and a refused item is marked on the queue rather than
+silently dropped.
+
+A missing, empty or malformed list allows nothing. That direction is deliberate:
+a broken list must take the channel off the air, never open it up.
+
 ## Hardening
 
 Chat is the only surface strangers can reach, so it is treated as hostile input.

@@ -3,6 +3,7 @@
 
 Every case here is something a stranger in chat can actually send.
 """
+import json
 import pathlib
 import sys
 
@@ -196,6 +197,56 @@ def test_most_voted_plays_first():
     second = queue["items"][1]
     say(queue, state, "u3", f"!vote {second['id']}", now=1000)
     assert chatlogic.playback_order(queue)[0]["id"] == second["id"]
+
+
+def _with_allowlist(content):
+    """Point the allowlist at a temporary file holding exactly `content`."""
+    import tempfile
+    path = pathlib.Path(tempfile.mkdtemp()) / "allowed_channels.json"
+    if content is not None:
+        path.write_text(content, encoding="utf-8")
+    common.ALLOWLIST = path
+    return path
+
+
+def test_allowlist_is_closed_by_default():
+    real = common.ALLOWLIST
+    try:
+        # missing file, empty file, malformed json, wrong shape: all allow nothing
+        for content in (None, "", "{", '{"channels": []}', '{"channels": null}', "{}"):
+            _with_allowlist(content)
+            assert common.load_allowlist() == {}, repr(content)
+            assert not common.channel_allowed("UC" + "a" * 22), repr(content)
+    finally:
+        common.ALLOWLIST = real
+
+
+def test_allowlist_only_admits_what_is_listed():
+    real = common.ALLOWLIST
+    try:
+        good = "UC" + "a" * 22
+        other = "UC" + "b" * 22
+        _with_allowlist(json.dumps({"channels": {good: "an approved channel"}}))
+        assert common.channel_allowed(good)
+        assert not common.channel_allowed(other)
+        # and an empty or absent id never slips through
+        for junk in ("", None, "UC", "not-an-id", good + "extra"):
+            assert not common.channel_allowed(junk), repr(junk)
+    finally:
+        common.ALLOWLIST = real
+
+
+def test_allowlist_ignores_malformed_entries():
+    real = common.ALLOWLIST
+    try:
+        good = "UC" + "a" * 22
+        _with_allowlist(json.dumps({"channels": {
+            good: "kept", "UC-too-short": "dropped", "": "dropped",
+            "../../etc/passwd": "dropped",
+        }}))
+        assert list(common.load_allowlist()) == [good]
+    finally:
+        common.ALLOWLIST = real
 
 
 if __name__ == "__main__":

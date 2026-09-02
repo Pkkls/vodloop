@@ -10,6 +10,7 @@ STATE = ROOT / "state"
 QUEUE = STATE / "queue.json"
 OFFSET = STATE / "offset"
 FIFO = ROOT / "pipe"
+ALLOWLIST = ROOT / "allowed_channels.json"
 
 # every segment must share these exactly, or concatenation breaks at the junction
 WIDTH, HEIGHT, FPS = 1280, 720, 30
@@ -45,6 +46,8 @@ MIN_FREE_BYTES = 4 * 1024 ** 3
 # downloader: the id is extracted and a canonical URL is rebuilt from scratch,
 # so no part of a chat message is ever passed through as a URL.
 VIDEO_ID = re.compile(r"^[A-Za-z0-9_-]{11}$")
+# a channel id is stable and cannot be reassigned, unlike a handle or a name
+CHANNEL_ID = re.compile(r"^UC[A-Za-z0-9_-]{22}$")
 _URL_PATTERNS = (
     re.compile(r"^https?://(?:www\.|m\.)?youtube\.com/watch\?(?:.*&)?v=([A-Za-z0-9_-]{11})(?:&|$)"),
     re.compile(r"^https?://(?:www\.)?youtu\.be/([A-Za-z0-9_-]{11})(?:\?|$)"),
@@ -79,6 +82,30 @@ def clean_text(raw, limit=120):
     if not isinstance(raw, str):
         return ""
     return "".join(c for c in raw if ord(c) >= 0x20 and c != "\x7f")[:limit].strip()
+
+
+def load_allowlist():
+    """Channel ids allowed on air, as {id: note}.
+
+    Returns an empty mapping when the file is missing or unreadable, and an
+    empty mapping allows nothing. That is the point: a broken or absent list
+    must take the channel off the air, never open it up. Deciding a video is
+    acceptable from its title or its words is not possible, so the only workable
+    control is who published it.
+    """
+    try:
+        data = json.loads(ALLOWLIST.read_text())
+    except (OSError, ValueError):
+        return {}
+    channels = data.get("channels")
+    if not isinstance(channels, dict):
+        return {}
+    return {str(k): str(v)[:120] for k, v in channels.items()
+            if isinstance(k, str) and CHANNEL_ID.match(k)}
+
+
+def channel_allowed(channel_id):
+    return bool(channel_id) and channel_id in load_allowlist()
 
 
 def env():
