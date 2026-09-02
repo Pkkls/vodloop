@@ -1,0 +1,27 @@
+[Unit]
+# kickbus receives Kick's signed webhooks and republishes them locally as SSE.
+# It is the only process here that is reachable from the internet, through the
+# TLS front, so it runs with the tightest sandbox of the set.
+Description=kickbus webhook receiver
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=exec
+User=ubuntu
+WorkingDirectory=/home/ubuntu/vodloop
+EnvironmentFile=/home/ubuntu/vodloop/bus.env
+ExecStart=/home/ubuntu/vodloop/bin/kickbus -addr 127.0.0.1:8787
+Restart=always
+RestartSec=5
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=/home/ubuntu/vodloop
+# it holds no state worth writing and only listens on loopback
+PrivateDevices=yes
+RestrictAddressFamilies=AF_INET AF_INET6
+
+[Install]
+WantedBy=multi-user.target

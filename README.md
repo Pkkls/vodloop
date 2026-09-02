@@ -141,7 +141,41 @@ VODLOOP_MODS=<comma separated user ids>
 ```
 
 The dashboard reads `VODLOOP_TOKEN` from `web.env` and listens on loopback only.
-Put a reverse proxy with TLS in front of it before exposing it.
+`deploy/nginx-vodloop.conf` is the reverse proxy in front of it; run
+`certbot --nginx` against that host to add the certificate.
+
+## Chat wiring
+
+Chat arrives through kickbus, which verifies Kick's RSA signature on every
+webhook and republishes the events locally as SSE. Nothing else is exposed:
+kickbus and the dashboard both listen on loopback, and only the webhook path and
+the panel are proxied.
+
+```
+Kick -> https://<host>/kick/webhook -> kickbus :8787 -> /events -> chat.py
+```
+
+The webhook path carries no dashboard token on purpose. Authenticity there is
+the signature, not a shared secret, and Kick has no way to send one.
+
+To connect it, create an app at kick.com/settings/developer, point its webhook
+at `https://<host>/kick/webhook`, subscribe to `chat.message.sent`, and put the
+credentials in `bus.env`:
+
+```
+KICK_CLIENT_ID=...
+KICK_CLIENT_SECRET=...
+```
+
+Then subscribe the broadcaster:
+
+```sh
+bin/kickbus -subscribe -broadcaster <user id>
+```
+
+Credentials are only needed so kickbus can check and repair its subscriptions;
+it verifies and serves events without them. Note the id is sent as an integer,
+not a string, or the subscription is rejected.
 
 ## Limits
 

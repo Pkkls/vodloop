@@ -19,7 +19,7 @@ import urllib.request
 import chatlogic
 import common
 
-SSE_URL = "http://127.0.0.1:8080/events?type=chat.message.sent"
+SSE_URL = "http://127.0.0.1:8787/events?type=chat.message.sent"
 STATE_FILE = common.STATE / "chat.json"
 RECONNECT_SECONDS = 5
 MAX_EVENT_BYTES = 64 * 1024
