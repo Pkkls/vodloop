@@ -15,6 +15,7 @@ import http.server
 import json
 import os
 import shutil
+import urllib.parse
 import urllib.request
 
 import common
@@ -273,8 +274,22 @@ class Handler(http.server.BaseHTTPRequestHandler):
         self.wfile.write(body)
 
     def do_GET(self):
-        path = self.path.split("?")[0]
+        parsed = urllib.parse.urlsplit(self.path)
+        path = parsed.path
         if path == "/":
+            # the registered redirect URI is the site root, so the OAuth return
+            # lands here rather than on a route of its own
+            query = urllib.parse.parse_qs(parsed.query)
+            if "code" in query:
+                import oauth
+                ok, message = oauth.exchange(query["code"][0],
+                                             (query.get("state") or [""])[0])
+                page = ("<!doctype html><meta charset=utf-8>"
+                        f"<body style='font:15px system-ui;background:#111418;color:#e8eaed;padding:40px'>"
+                        f"{'Autorisation enregistree. Le bot peut ecrire dans le chat.' if ok else 'Echec : ' + message}"
+                        "</body>")
+                return self.reply(200 if ok else 400, page.encode(),
+                                  "text/html; charset=utf-8")
             return self.reply(200, PAGE.encode(), "text/html; charset=utf-8")
         if path == "/overlay":
             return self.reply(200, OVERLAY.encode(), "text/html; charset=utf-8")

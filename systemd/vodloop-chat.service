@@ -6,6 +6,10 @@ After=network-online.target
 Type=exec
 User=ubuntu
 WorkingDirectory=/home/ubuntu/vodloop
+# the app credentials, so the bot can answer in chat. They reach the process
+# through its environment only: never in argv, never in a file it reads itself.
+EnvironmentFile=/home/ubuntu/vodloop/bus.env
+Environment=KICK_USER_ID=127469285
 ExecStart=/usr/bin/python3 /home/ubuntu/vodloop/bin/chat.py
 Restart=always
 RestartSec=5
