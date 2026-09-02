@@ -16,6 +16,7 @@ import os
 import secrets
 import sys
 import time
+import urllib.error
 import urllib.parse
 import urllib.request
 
@@ -71,8 +72,14 @@ def _post(fields):
     request.add_header("Content-Type", "application/x-www-form-urlencoded")
     # Kick answers 403 to the default Python agent; a neutral name passes
     request.add_header("User-Agent", USER_AGENT)
-    with urllib.request.urlopen(request, timeout=20) as response:
-        return json.load(response)
+    try:
+        with urllib.request.urlopen(request, timeout=20) as response:
+            return json.load(response)
+    except urllib.error.HTTPError as failure:
+        # the server's own words are the whole diagnosis; swallowing them for a
+        # tidy message is how the first attempt at this told us nothing
+        detail = failure.read().decode("utf-8", "replace")[:400]
+        raise RuntimeError(f"HTTP {failure.code}: {detail}") from None
 
 
 def exchange(code, state):
@@ -87,17 +94,32 @@ def exchange(code, state):
     if time.time() - pending.get("at", 0) > 900:
         return False, "authorisation expired, start again"
 
-    try:
-        payload = _post({
-            "grant_type": "authorization_code",
-            "code": code,
-            "redirect_uri": redirect_uri(),
-            "client_id": setting("KICK_CLIENT_ID"),
-            "client_secret": setting("KICK_CLIENT_SECRET"),
-            "code_verifier": pending["verifier"],
-        })
-    except Exception as problem:
-        return False, f"exchange failed: {type(problem).__name__}"
+    # An empty client id is sent as an empty field rather than refused, and Kick
+    # answers 400 with no body, which names nothing. Say it here instead.
+    if not setting("KICK_CLIENT_ID") or not setting("KICK_CLIENT_SECRET"):
+        return False, ("app credentials missing from this process: "
+                       "bus.env is not in its environment")
+
+    base = {
+        "grant_type": "authorization_code",
+        "code": code,
+        "redirect_uri": redirect_uri(),
+        "client_id": setting("KICK_CLIENT_ID"),
+        "code_verifier": pending["verifier"],
+    }
+    # Some servers reject a client secret sent alongside a PKCE verifier and
+    # some require it, so try both rather than guess which kind this is.
+    attempts = [dict(base, client_secret=setting("KICK_CLIENT_SECRET")), base]
+    problems = []
+    payload = None
+    for fields in attempts:
+        try:
+            payload = _post(fields)
+            break
+        except Exception as problem:
+            problems.append(str(problem))
+    if payload is None:
+        return False, " | ".join(problems)[:500]
 
     payload["obtained_at"] = time.time()
     _write_private(TOKEN_FILE, payload)

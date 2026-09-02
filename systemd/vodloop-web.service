@@ -7,6 +7,10 @@ Type=exec
 User=ubuntu
 WorkingDirectory=/home/ubuntu/vodloop
 EnvironmentFile=/home/ubuntu/vodloop/web.env
+# the OAuth return lands on this service, so it needs the app credentials to
+# exchange the code. Without them it sent an empty client_id and Kick answered
+# 400 with an empty body, which said nothing about the real cause.
+EnvironmentFile=/home/ubuntu/vodloop/bus.env
 ExecStart=/usr/bin/python3 /home/ubuntu/vodloop/bin/dashboard.py
 Restart=always
 RestartSec=5
