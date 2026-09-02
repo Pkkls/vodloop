@@ -1,0 +1,18 @@
+[Unit]
+Description=vodloop chunk preparation
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=exec
+User=ubuntu
+WorkingDirectory=/home/ubuntu/vodloop
+ExecStart=/usr/bin/python3 /home/ubuntu/vodloop/bin/prep.py
+Restart=always
+RestartSec=10
+# encoding competes with the pusher for two vCPUs; the stream wins
+Nice=10
+CPUWeight=20
+
+[Install]
+WantedBy=multi-user.target

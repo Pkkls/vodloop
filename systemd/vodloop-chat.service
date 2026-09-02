@@ -1,0 +1,20 @@
+[Unit]
+Description=vodloop chat commands
+After=network-online.target
+
+[Service]
+Type=exec
+User=ubuntu
+WorkingDirectory=/home/ubuntu/vodloop
+ExecStart=/usr/bin/python3 /home/ubuntu/vodloop/bin/chat.py
+Restart=always
+RestartSec=5
+# this process only ever talks to loopback and writes inside its own directory
+PrivateTmp=yes
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=/home/ubuntu/vodloop
+
+[Install]
+WantedBy=multi-user.target

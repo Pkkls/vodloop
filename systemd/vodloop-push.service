@@ -1,0 +1,22 @@
+[Unit]
+# The connection to Kick. Restarting this unit ends the live stream, starts a
+# new VOD and drops every viewer, so deployments must never touch it. The
+# placeholder FIFO writer lives in this cgroup on purpose: systemd kills a whole
+# control group on restart, and if that writer sat in the feeder unit instead,
+# every feeder restart would take the stream down with it.
+Description=vodloop RTMPS pusher
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=exec
+User=ubuntu
+WorkingDirectory=/home/ubuntu/vodloop
+ExecStart=/home/ubuntu/vodloop/bin/pusher.sh
+Restart=always
+RestartSec=5
+# a stall on the wire should not be mistaken for a crash
+TimeoutStopSec=20
+
+[Install]
+WantedBy=multi-user.target

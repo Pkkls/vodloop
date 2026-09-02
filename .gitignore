@@ -1,0 +1,20 @@
+# secrets and per-host configuration
+.env
+web.env
+cookies*.txt
+*.key
+
+# operational notes: server address, key paths, channel ids
+PROMPT.md
+
+# runtime state
+segments/
+state/
+pipe
+*.ts
+*.log
+__pycache__/
+*.pyc
+
+# not part of this project
+json2netscape.py
