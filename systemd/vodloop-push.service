@@ -17,6 +17,9 @@ Restart=always
 RestartSec=5
 # a stall on the wire should not be mistaken for a crash
 TimeoutStopSec=20
+# ffmpeg exits 255 when it is asked to stop mid-session. Without this, every
+# deliberate stop leaves the unit in "failed" and a real failure stops standing out.
+SuccessExitStatus=255
 
 [Install]
 WantedBy=multi-user.target
