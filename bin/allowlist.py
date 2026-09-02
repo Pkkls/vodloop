@@ -14,13 +14,46 @@ Ids are stored, not handles: a handle can be changed or reassigned, a channel id
 cannot.
 """
 import json
+import re
 import shutil
 import subprocess
 import sys
+import urllib.request
 
 import common
 
 YTDLP = shutil.which("yt-dlp") or str(common.ROOT.parent / ".local/bin/yt-dlp")
+
+
+def from_page(url):
+    """Read the channel id off the channel page itself.
+
+    Asking the downloader means extracting a video, which fails whenever a
+    channel's videos are behind a sign-in check, and then a channel cannot be
+    approved at all. The page carries the id in three separate fields; they must
+    agree, because the raw UC-shaped strings scattered through the HTML are
+    mostly unrelated base64.
+    """
+    request = urllib.request.Request(url, headers={"User-Agent": "vodloop/0.1"})
+    try:
+        with urllib.request.urlopen(request, timeout=25) as response:
+            html = response.read().decode("utf-8", "replace")
+    except Exception as problem:
+        return None, f"{type(problem).__name__} fetching the channel page"
+
+    found = []
+    for pattern in (r'"externalId":"(UC[A-Za-z0-9_-]{22})"',
+                    r'youtube\.com/channel/(UC[A-Za-z0-9_-]{22})',
+                    r'"browseId":"(UC[A-Za-z0-9_-]{22})"'):
+        hits = set(re.findall(pattern, html))
+        if len(hits) == 1:
+            found.append(hits.pop())
+    if len(found) < 2 or len(set(found)) != 1:
+        return None, "could not read a single channel id from the page"
+
+    title = re.search(r"<title>([^<]{0,80})", html)
+    name = (title.group(1).replace(" - YouTube", "") if title else "")
+    return found[0], common.clean_text(name, 60)
 
 
 def resolve(reference):
@@ -38,13 +71,15 @@ def resolve(reference):
          "--print", "%(channel_id)s\t%(channel)s", "--", reference],
         capture_output=True, text=True, timeout=180,
     )
-    if out.returncode != 0:
-        return None, (out.stderr.strip().splitlines() or ["lookup failed"])[-1][:160]
     line = (out.stdout.strip().splitlines() or [""])[0]
     channel_id, _, name = line.partition("\t")
-    if not common.CHANNEL_ID.match(channel_id.strip()):
-        return None, f"no channel id found (got {channel_id[:40]!r})"
-    return channel_id.strip(), common.clean_text(name, 60)
+    if out.returncode == 0 and common.CHANNEL_ID.match(channel_id.strip()):
+        return channel_id.strip(), common.clean_text(name, 60)
+
+    # the downloader could not reach the video; the page still names the channel
+    if "/watch" not in reference and "youtu.be/" not in reference:
+        return from_page(reference)
+    return None, (out.stderr.strip().splitlines() or ["lookup failed"])[-1][:160]
 
 
 def save(channels):
