@@ -11,7 +11,8 @@ Type=exec
 User=ubuntu
 WorkingDirectory=/home/ubuntu/vodloop
 EnvironmentFile=/home/ubuntu/vodloop/bus.env
-ExecStart=/home/ubuntu/vodloop/bin/kickbus -addr 127.0.0.1:8787
+# the broadcaster id is public, unlike the credentials, which come from bus.env
+ExecStart=/home/ubuntu/vodloop/bin/kickbus -addr 127.0.0.1:8787 -broadcaster 127469285
 Restart=always
 RestartSec=5
 NoNewPrivileges=yes
