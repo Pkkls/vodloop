@@ -19,9 +19,10 @@ def fresh():
     return {"seq": 0, "items": []}, chatlogic.new_state()
 
 
-def say(queue, state, user, text, now=1000.0, name="someone"):
+def say(queue, state, user, text, now=1000.0, name="someone", verdicts=None):
     return chatlogic.handle(
-        {"user_id": user, "username": name, "text": text}, queue, state, MODS, now
+        {"user_id": user, "username": name, "text": text}, queue, state, MODS, now,
+        verdicts,
     )
 
 
@@ -72,9 +73,11 @@ def test_one_user_cannot_flood():
     queue, state = fresh()
     reply, changed = say(queue, state, "u1", "!play dQw4w9WgXcQ", now=1000)
     assert changed and reply == "added"
-    # a second add inside the cooldown is refused
+    # a second add inside the cooldown is refused. A refusal now does change the
+    # state, it records the rejection, so the property to assert is the one that
+    # matters: nothing reached the queue.
     reply, changed = say(queue, state, "u1", "!play AAAAAAAAAAA", now=1010)
-    assert not changed and "wait" in reply
+    assert "wait" in reply and len(queue["items"]) == 1
     # and is allowed once the cooldown has passed
     reply, changed = say(queue, state, "u1", "!play AAAAAAAAAAA", now=1100)
     assert changed, reply
@@ -88,14 +91,14 @@ def test_one_user_cannot_hold_the_whole_queue():
         assert changed
         now += common.ADD_COOLDOWN_SECONDS + 1
     reply, changed = say(queue, state, "u1", "!play bbbbbbbbbb9", now=now)
-    assert not changed and "waiting" in reply
+    assert "waiting" in reply and len(queue["items"]) == common.MAX_PENDING_PER_USER
 
 
 def test_duplicates_are_refused():
     queue, state = fresh()
     say(queue, state, "u1", "!play dQw4w9WgXcQ", now=1000)
     reply, changed = say(queue, state, "u2", "!play https://youtu.be/dQw4w9WgXcQ", now=1000)
-    assert not changed and reply == "already in the queue"
+    assert reply == "already in the queue" and len(queue["items"]) == 1
 
 
 def test_a_vote_counts_once_per_user():
@@ -166,9 +169,12 @@ def test_moderator_powers_are_not_available_to_everyone():
 
 def test_noise_is_ignored_in_silence():
     queue, state = fresh()
-    for junk in ("hello", "", "!", "!unknown thing", "!!!!", " !play x"):
+    # a chat is not a shell prompt: unknown input gets no answer at all, which
+    # is also why it cannot be used to farm replies. A malformed !play does
+    # answer, so it lives in the rejection-budget test instead of here.
+    for junk in ("hello", "", "!", "!unknown thing", "!!!!"):
         reply, changed = say(queue, state, "u1", junk, now=1000)
-        assert not changed, junk
+        assert not changed and reply is None, junk
     # an oversized message is dropped without being parsed
     _, changed = say(queue, state, "u1", "!play " + "a" * 6000, now=1000)
     assert not changed
@@ -281,6 +287,73 @@ def test_allowlist_ignores_malformed_entries():
         assert list(common.load_allowlist()) == [good]
     finally:
         common.ALLOWLIST = real
+
+
+def test_a_video_already_refused_costs_nothing_the_second_time():
+    """The point of the cache: no queue entry, so no yt-dlp call to refuse it again."""
+    queue, state = fresh()
+    verdicts = {"dQw4w9WgXcQ": {"ok": False, "reason": "channel not on the allowlist"}}
+    reply, _ = say(queue, state, "u1", "!play dQw4w9WgXcQ", now=1000, verdicts=verdicts)
+    assert reply == "channel not on the allowlist", reply
+    assert queue["items"] == [], queue["items"]
+    # the control: a video the cache says is fine still goes through normally
+    queue, state = fresh()
+    reply, changed = say(queue, state, "u1", "!play dQw4w9WgXcQ", now=1000,
+                         verdicts={"dQw4w9WgXcQ": {"ok": True}})
+    assert changed and reply == "added" and len(queue["items"]) == 1
+    # and an unknown video is not refused on a guess
+    queue, state = fresh()
+    reply, changed = say(queue, state, "u1", "!play dQw4w9WgXcQ", now=1000, verdicts={})
+    assert changed and reply == "added"
+
+
+def test_a_user_who_only_earns_refusals_stops_getting_answers():
+    queue, state = fresh()
+    now = 1000.0
+    replies = []
+    for n in range(common.MAX_REJECTS_IN_WINDOW + 3):
+        reply, _ = say(queue, state, "u1", "!play x", now=now + n)
+        replies.append(reply)
+    answered = [r for r in replies if r is not None]
+    assert len(answered) == common.MAX_REJECTS_IN_WINDOW - 1, answered
+    assert replies[-1] is None, replies
+    # muted means muted: even a valid link gets nothing while the silence lasts
+    reply, changed = say(queue, state, "u1", "!play dQw4w9WgXcQ", now=now + 10)
+    assert reply is None and not changed and queue["items"] == []
+    # and it does expire rather than being a permanent ban
+    reply, changed = say(queue, state, "u1", "!play dQw4w9WgXcQ",
+                         now=now + common.REJECT_SILENCE_SECONDS + 20)
+    assert changed and reply == "added", reply
+    # one loud user must not silence anybody else
+    reply, changed = say(queue, state, "u2", "!play AAAAAAAAAAA", now=now + 5)
+    assert changed and reply == "added", reply
+
+
+def test_the_backlog_prep_still_owes_a_lookup_is_bounded():
+    queue, state = fresh()
+    now = 1000.0
+    for n in range(common.MAX_UNRESOLVED):
+        _, changed = say(queue, state, f"u{n}", f"!play {'b' * 10}{n % 10}", now=now)
+        assert changed
+        queue["items"][-1]["video_id"] = f"unique{n:05d}"  # keep them distinct
+    reply, changed = say(queue, state, "flood", "!play zzzzzzzzzzz", now=now)
+    assert not changed and "too many" in reply, reply
+    assert len(queue["items"]) == common.MAX_UNRESOLVED
+    # resolving the backlog reopens the door
+    for item in queue["items"]:
+        item["status"] = "ready"
+    reply, changed = say(queue, state, "flood", "!play zzzzzzzzzzz", now=now)
+    assert changed and reply == "added", reply
+
+
+def test_the_ban_list_stays_bounded():
+    queue, state = fresh()
+    for n in range(common.MAX_BANNED + 25):
+        say(queue, state, "mod1", f"!ban user{n}", now=1000)
+    assert len(state["banned"]) == common.MAX_BANNED, len(state["banned"])
+    # the newest bans are the ones kept, an evicted one is the oldest
+    assert "user0" not in state["banned"]
+    assert f"user{common.MAX_BANNED + 24}" in state["banned"]
 
 
 if __name__ == "__main__":

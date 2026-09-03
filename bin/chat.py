@@ -182,10 +182,18 @@ class Store:
         self.dirty = False
         self.flushed_at = 0.0
         self.stamp = self._mtime()
+        self.verdicts = common.load_verdicts()
+        self.verdict_stamp = self._verdict_mtime()
 
     def _mtime(self):
         try:
             return common.QUEUE.stat().st_mtime
+        except OSError:
+            return 0.0
+
+    def _verdict_mtime(self):
+        try:
+            return common.VERDICTS.stat().st_mtime
         except OSError:
             return 0.0
 
@@ -194,6 +202,10 @@ class Store:
         if not self.dirty and self._mtime() != self.stamp:
             self.queue = common.load_queue()
             self.stamp = self._mtime()
+        # prep is the only writer of the verdicts, so this side only ever reads
+        if self._verdict_mtime() != self.verdict_stamp:
+            self.verdicts = common.load_verdicts()
+            self.verdict_stamp = self._verdict_mtime()
 
     def flush(self, now, force=False):
         if not self.dirty:
@@ -213,7 +225,8 @@ def apply(event, mods, store, replier=None):
         return
     now = time.time()
     store.refresh()
-    reply, changed = chatlogic.handle(message, store.queue, store.state, mods, now)
+    reply, changed = chatlogic.handle(message, store.queue, store.state, mods, now,
+                                      store.verdicts)
     if changed:
         store.dirty = True
     store.flush(now)
