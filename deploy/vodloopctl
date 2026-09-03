@@ -1,0 +1,80 @@
+#!/bin/sh
+# The only privileged thing the control panel can reach. Install as root:
+#
+#   sudo install -o root -g root -m 0755 vodloopctl /usr/local/sbin/vodloopctl
+#   echo 'ubuntu ALL=(root) NOPASSWD: /usr/local/sbin/vodloopctl' \
+#       | sudo tee /etc/sudoers.d/50-vodloopctl
+#   sudo visudo -c
+#
+# One fixed verb, nothing from the caller ever reaches a shell, no argument
+# passthrough. The panel can start and stop these units and read their state,
+# and it can do nothing else with root.
+#
+# The asymmetry between the two directions is not a style choice. pusher.sh
+# holds the single ffmpeg that talks to Kick: restarting it drops the RTMP
+# session, which ends the stream, closes the VOD and loses the viewers. So
+# there is no restart verb for the pusher, "pause" stops the feeder instead,
+# and the pusher is always the last thing stopped and the first thing started.
+set -u
+
+PUSH=vodloop-push
+FEED=vodloop-feed
+PREP=vodloop-prep
+CHAT=vodloop-chat
+
+usage() {
+    echo "usage: vodloopctl {go-live|stop|pause|resume|bot-start|bot-stop|status}" >&2
+    exit 2
+}
+
+[ $# -eq 1 ] || usage
+
+case "$1" in
+    go-live)
+        # the pusher first: the feeder falls back to filler.ts when no chunk is
+        # ready, so the channel has something to send from the first second
+        systemctl start "$PUSH" || exit 1
+        systemctl start "$FEED" || exit 1
+        systemctl start "$PREP" || exit 1
+        systemctl start "$CHAT" || exit 1
+        echo "live"
+        ;;
+    stop)
+        # chat first, so no new command lands during the teardown, and the
+        # pusher last, so the stream ends cleanly rather than being cut short
+        systemctl stop "$CHAT"
+        systemctl stop "$FEED"
+        systemctl stop "$PREP"
+        systemctl stop "$PUSH"
+        echo "stopped"
+        ;;
+    pause)
+        # the feeder may be restarted freely, its timeline offset is persisted.
+        # The pusher and its placeholder writer stay up, so the RTMP session
+        # survives and the filler keeps the channel alive.
+        systemctl stop "$FEED"
+        echo "paused"
+        ;;
+    resume)
+        systemctl start "$FEED" || exit 1
+        echo "resumed"
+        ;;
+    bot-start)
+        systemctl start "$CHAT" || exit 1
+        echo "bot up"
+        ;;
+    bot-stop)
+        systemctl stop "$CHAT"
+        echo "bot down"
+        ;;
+    status)
+        printf '{"push":"%s","feed":"%s","prep":"%s","chat":"%s"}\n' \
+            "$(systemctl is-active $PUSH)" \
+            "$(systemctl is-active $FEED)" \
+            "$(systemctl is-active $PREP)" \
+            "$(systemctl is-active $CHAT)"
+        ;;
+    *)
+        usage
+        ;;
+esac
