@@ -41,6 +41,10 @@ while :; do
       alerted=1
     fi
   fi
+  # Proof the probe ran, not merely that a process exists. Two readings
+  # spaced apart tell a watchdog still checking from one hung on a socket.
+  printf '%s %s
+' "$(date +%s)" "$misses" > /tmp/vodloop-watchdog.state
   rm -f /tmp/vw.json
   sleep "$INTERVAL"
 done

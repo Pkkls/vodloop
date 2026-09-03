@@ -1,0 +1,78 @@
+#!/bin/sh
+# Persistance de la sonde vodloop (busybox init). rcS lance ce script avec
+# "start" au boot.
+#
+# Meme discipline que S99clawd, pour les memes raisons apprises a la dure :
+# "start" prend un verrou atomique, sinon chaque appel (reboot, redeploiement)
+# empile une sonde de plus et elles alertent en choeur. "stop" verifie que le
+# processus est parti au lieu de rapporter l'intention. "status" repond sur ce
+# qui EST, et un argument inconnu sort 2 plutot que de faire semblant.
+#
+# "status" lit aussi la preuve de vie : un processus vivant qui ne sonde plus
+# rien ressemble en tout point a une sonde qui marche, sauf sur ce fichier.
+
+DIR=/root/vodloop-watchdog
+STATE=/tmp/vodloop-watchdog.state
+LOG=/root/vodloop-watchdog/watchdog.log
+LOCK=/tmp/vodloop-watchdog.lock
+
+pid() { ps | grep '[w]atchdog.sh' | awk '{print $1}'; }
+
+case "$1" in
+start)
+    if [ ! -f "$DIR/env" ]; then
+        echo "ECHEC: $DIR/env manquant, la sonde ne saurait ni qui surveiller ni qui prevenir" >&2
+        exit 1
+    fi
+    # mkdir est atomique : un seul "start" gagne, les suivants sont des no-op.
+    if mkdir "$LOCK" 2>/dev/null; then
+        (
+            trap 'rmdir "$LOCK" 2>/dev/null' EXIT INT TERM
+            set -a
+            . "$DIR/env"
+            set +a
+            exec "$DIR/watchdog.sh"
+        ) >> "$LOG" 2>&1 &
+        echo "sonde lancee"
+    else
+        echo "sonde deja lancee (verrou $LOCK)"
+    fi
+    ;;
+
+stop)
+    P=$(pid)
+    [ -n "$P" ] || { echo "sonde deja arretee"; rmdir "$LOCK" 2>/dev/null; exit 0; }
+    kill "$P" 2>/dev/null
+    i=0
+    while [ $i -lt 10 ] && [ -d "/proc/$P" ]; do sleep 1; i=$((i+1)); done
+    if [ -d "/proc/$P" ]; then
+        kill -9 "$P" 2>/dev/null
+        sleep 1
+    fi
+    rmdir "$LOCK" 2>/dev/null
+    if [ -n "$(pid)" ]; then
+        echo "ECHEC: la sonde tourne toujours (pid $(pid))"
+        exit 1
+    fi
+    echo "sonde arretee (pid $P, ${i}s)"
+    ;;
+
+status)
+    P=$(pid)
+    if [ -z "$P" ]; then
+        echo "sonde arretee"
+        exit 1
+    fi
+    if [ -f "$STATE" ]; then
+        AGE=$(( $(date +%s) - $(cut -d' ' -f1 "$STATE") ))
+        echo "sonde en marche, pid $P, derniere mesure il y a ${AGE}s, $(cut -d' ' -f2 "$STATE") absence(s)"
+    else
+        echo "sonde en marche, pid $P, mais aucune mesure ecrite pour l instant"
+    fi
+    ;;
+
+*)
+    echo "usage: $0 {start|stop|status}" >&2
+    exit 2
+    ;;
+esac
