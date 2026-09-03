@@ -6,8 +6,9 @@ returns only {active, client_id, token_type: app}. Posting a chat message needs 
 user token, which only exists once the channel owner has approved the app in a
 browser. That approval happens once; the refresh token then keeps it alive.
 
-    python3 bin/oauth.py url     print the link to open
-    python3 bin/oauth.py show    report what is stored, without printing secrets
+    python3 bin/oauth.py url      print the link to open
+    python3 bin/oauth.py show     report what is stored, without printing secrets
+    python3 bin/oauth.py refresh  renew the token now, for the timer to call
 """
 import base64
 import hashlib
@@ -127,14 +128,19 @@ def exchange(code, state):
     return True, "authorised"
 
 
-def access_token():
-    """A valid user access token, refreshing it when it is close to expiry."""
+def access_token(force=False):
+    """A valid user access token, refreshing it when it is close to expiry.
+
+    force skips that judgement and renews anyway, which is what the timer wants:
+    the thirty day clock on the refresh token only resets when it is spent, so
+    waiting for the two hour access token to lapse is beside the point.
+    """
     try:
         stored = json.loads(TOKEN_FILE.read_text())
     except (OSError, ValueError):
         return None
     age = time.time() - stored.get("obtained_at", 0)
-    if age < max(60, int(stored.get("expires_in", 3600)) - 120):
+    if not force and age < max(60, int(stored.get("expires_in", 3600)) - 120):
         return stored.get("access_token")
     if not stored.get("refresh_token"):
         return None
@@ -167,6 +173,27 @@ def main(argv):
         print(f"user token stored, scope={stored.get('scope', '?')}, "
               f"{'refreshable' if stored.get('refresh_token') else 'no refresh token'}, "
               f"{left}s left on the current one")
+        return 0
+    if action == "refresh":
+        # Nothing else ever renews this on its own. access_token() is called
+        # only when the bot has a reply to send, so a channel nobody talks in
+        # lets the refresh token reach its thirty days unused and die, and the
+        # bot loses the right to write without a single error anywhere.
+        if not TOKEN_FILE.exists():
+            print("no user token stored: nothing to refresh")
+            return 1
+        was = json.loads(TOKEN_FILE.read_text()).get("obtained_at", 0)
+        if access_token(force=True) is None:
+            print("refresh failed: the authorisation has to be granted again")
+            return 1
+        stored = json.loads(TOKEN_FILE.read_text())
+        # saying "renewed" without checking would hide the one failure that
+        # matters, a call that quietly changed nothing
+        if stored.get("obtained_at", 0) <= was:
+            print("refresh did nothing: the stored token was not replaced")
+            return 1
+        print(f"user token renewed, scope={stored.get('scope', '?')}, "
+              f"{int(stored.get('expires_in', 0))}s on the new one")
         return 0
     print(__doc__.strip())
     return 2

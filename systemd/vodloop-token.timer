@@ -1,0 +1,13 @@
+[Unit]
+Description=renew the vodloop chat token daily
+
+[Timer]
+# The refresh token lives thirty days and only a renewal resets that clock.
+# Daily leaves thirty chances to survive a bad day, and Persistent catches up
+# after a reboot instead of skipping the run the machine slept through.
+OnCalendar=daily
+RandomizedDelaySec=1h
+Persistent=true
+
+[Install]
+WantedBy=timers.target

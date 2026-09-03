@@ -1,0 +1,30 @@
+[Unit]
+Description=vodloop chat token renewal
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=ubuntu
+WorkingDirectory=/home/ubuntu/vodloop
+# the client id and secret live here, not in .env: a renewal without them is
+# answered 400 by Kick, which is how this unit failed the first time it ran
+EnvironmentFile=/home/ubuntu/vodloop/bus.env
+ExecStart=/usr/bin/python3 /home/ubuntu/vodloop/bin/oauth.py refresh
+# the same sandbox the long running units carry, narrowed to what a one shot
+# that only rewrites the token file can possibly need
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=/home/ubuntu/vodloop/state
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+RestrictRealtime=yes
+LockPersonality=yes
+RestrictNamespaces=yes
+RestrictAddressFamilies=AF_INET AF_INET6
+CapabilityBoundingSet=
