@@ -9,6 +9,7 @@ Only publicly reachable videos are handled. There is deliberately no support for
 supplying an account session, so a video behind a sign-in check is reported as an
 error on the queue item rather than retried by other means.
 """
+import os
 import pathlib
 import shutil
 import subprocess
@@ -101,8 +102,13 @@ def prepare(item):
     encode = list(common.ENCODE)
     encode[encode.index("-vf") + 1] = overlay_filter(title_file)
 
+    # the muxer's own record of what it wrote. Counting the files instead would
+    # be wrong: the feeder deletes each chunk as it plays it, and on a dry queue
+    # it can eat the whole video before ffmpeg returns.
+    listing = common.STATE / f"list_{item['id']:05d}.txt"
     tail = ["-f", "segment", "-segment_time", str(common.CHUNK_SECONDS),
-            "-segment_format", "mpegts", "-reset_timestamps", "1", pattern]
+            "-segment_format", "mpegts", "-segment_list", str(listing),
+            "-reset_timestamps", "1", pattern]
 
     if item.get("path"):
         # a file handed over directly: ffmpeg reads it, no downloader involved
@@ -145,10 +151,12 @@ def prepare(item):
                 pass
         for chunk in common.SEGMENTS.glob(f"{item['id']:05d}_*.ts"):
             chunk.unlink(missing_ok=True)  # half a video is worse than none
+        listing.unlink(missing_ok=True)
         item["error"] = f"gave up after {int(budget / 60)} min"
         return False
 
-    produced = list(common.SEGMENTS.glob(f"{item['id']:05d}_*.ts"))
+    produced = listing.read_text().split() if listing.exists() else []
+    listing.unlink(missing_ok=True)
     if encoder.returncode != 0 or not produced:
         message = (pull_err or enc_err or "no output").strip()
         item["error"] = (message.splitlines() or ["failed"])[-1][:200]
@@ -212,6 +220,52 @@ def reap(queue):
             chunk.unlink(missing_ok=True)
 
 
+# A folder of files to fall back on when nothing is queued, so the channel keeps
+# playing instead of sitting on the standby clip. Unset means the behaviour is
+# exactly what it was: run dry and show the filler.
+LIBRARY = pathlib.Path(os.environ["VODLOOP_LIBRARY"]) if os.environ.get("VODLOOP_LIBRARY") else None
+REFILL_BELOW_SECONDS = 10 * 60
+
+
+def refill_from_library(queue):
+    """Put the library back in the queue once it has been played through.
+
+    Relinking the files is not enough on its own: take_dropped_files skips any
+    path already named by a queue entry, and after a pass those entries are
+    still there marked "played". So the old entries for exactly these paths go
+    first, and the files come back in as new items.
+
+    It only fires when there is nothing left to encode and the backlog is nearly
+    gone, so playback is what paces it, not this function.
+    """
+    if LIBRARY is None or not LIBRARY.is_dir():
+        return 0
+    waiting = [i for i in queue["items"] if i["status"] in ("pending", "preparing")]
+    if waiting or seconds_on_disk() >= REFILL_BELOW_SECONDS:
+        return 0
+
+    sources = sorted(p for p in LIBRARY.glob("*.mp4") if p.is_file())
+    if not sources:
+        return 0
+
+    common.INCOMING.mkdir(parents=True, exist_ok=True)
+    targets = {str(common.INCOMING / p.name) for p in sources}
+    before = len(queue["items"])
+    queue["items"] = [i for i in queue["items"] if i.get("path") not in targets]
+    for src in sources:
+        target = common.INCOMING / src.name
+        if not target.exists():
+            try:
+                os.link(src, target)  # when it works, it costs no disk at all
+            except OSError:
+                # the unit sandboxes incoming/ as its own bind mount, so a link
+                # out of the library is cross-device there and the kernel says no
+                shutil.copy2(src, target)
+    print(f"bibliotheque remise en file: {len(sources)} fichier(s), "
+          f"{before - len(queue['items'])} ancienne(s) entree(s) retiree(s)", flush=True)
+    return len(sources)
+
+
 def recover_orphans(queue):
     """Put back anything left mid-encode by a previous run.
 
@@ -252,8 +306,10 @@ def main():
             if recover_orphans(queue):
                 common.save_queue(queue)
             first = False
-        take_dropped_files(queue)
         reap(queue)
+        # before take_dropped_files, which is what actually queues them
+        refill_from_library(queue)
+        take_dropped_files(queue)
         # chat votes decide the order; ties fall back to who asked first
         pending = chatlogic.playback_order(queue)
 

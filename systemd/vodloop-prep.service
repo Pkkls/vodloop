@@ -7,6 +7,10 @@ Wants=network-online.target
 Type=exec
 User=ubuntu
 WorkingDirectory=/home/ubuntu/vodloop
+# Once everything queued has been played, the queue runs dry and the channel
+# sits on the standby clip. This folder is what it falls back on, replayed in
+# order. Unset means no fallback, which is the old behaviour.
+Environment=VODLOOP_LIBRARY=/home/ubuntu/videos
 ExecStart=/usr/bin/python3 /home/ubuntu/vodloop/bin/prep.py
 Restart=always
 RestartSec=10
