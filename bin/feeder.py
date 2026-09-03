@@ -54,7 +54,15 @@ def feed(path, offset):
     with open(common.FIFO, "wb") as pipe:
         subprocess.run(
             ["ffmpeg", "-v", "error", "-i", str(path), "-c", "copy",
-             "-output_ts_offset", f"{offset:.3f}", "-f", "mpegts", "-"],
+             "-output_ts_offset", f"{offset:.3f}",
+             # Each chunk is a self-contained mpegts stream, and concatenating
+             # them in the FIFO makes the TS continuity counters jump at every
+             # junction, which the pusher reports as "Packet corrupt". Marking
+             # each chunk as an expected discontinuity silences that at the
+             # source. Measured: 2 corrupt packets per junction -> 0, stream
+             # intact. Masking it on the read side with +discardcorrupt does
+             # not remove it and would drop packets.
+             "-mpegts_flags", "+initial_discontinuity", "-f", "mpegts", "-"],
             stdout=pipe, check=False,
         )
 
