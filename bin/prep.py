@@ -212,13 +212,46 @@ def reap(queue):
             chunk.unlink(missing_ok=True)
 
 
+def recover_orphans(queue):
+    """Put back anything left mid-encode by a previous run.
+
+    This process is the only thing that ever writes "preparing", so at startup
+    nothing can legitimately be in that state: whatever is there was interrupted,
+    and the loop only ever looks at "pending", so it would sit untouched forever.
+    Twice on 2026-09-03 a restart of this unit left an item stranded that way and
+    the queue quietly stopped moving behind it.
+
+    The chunks it half wrote go too. Half a video reaching the stream is worse
+    than the item being encoded again.
+    """
+    recovered = 0
+    for item in queue["items"]:
+        if item["status"] != "preparing":
+            continue
+        item["status"] = "pending"
+        item.pop("error", None)
+        recovered += 1
+        for chunk in common.SEGMENTS.glob(f"{item['id']:05d}_*.ts"):
+            chunk.unlink(missing_ok=True)
+    if recovered:
+        print(f"reprise: {recovered} item(s) laisses en cours par un arret", flush=True)
+    return recovered
+
+
 def disk_is_tight():
     return shutil.disk_usage(common.ROOT).free < common.MIN_FREE_BYTES
 
 
 def main():
+    first = True
     while True:
         queue = common.load_queue()
+        if first:
+            # once, before anything else: whatever the previous run left mid
+            # encode has to go back in the pile or it blocks the queue forever
+            if recover_orphans(queue):
+                common.save_queue(queue)
+            first = False
         take_dropped_files(queue)
         reap(queue)
         # chat votes decide the order; ties fall back to who asked first
