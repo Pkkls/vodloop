@@ -151,9 +151,13 @@ if [ "${leaks:-0}" != "0" ]; then
             sudo sed -i 's/token=[A-Za-z0-9]*/token=REDACTED/g' "$f"
         done
         say "  jetons purges de access.log"
-        say "  ATTENTION: le jeton actuel a ete ecrit en clair, il faut le renouveler:"
-        say "      printf 'YT2O_TOKEN=%s\\n' \"\$(openssl rand -hex 16)\" > ~/yt2oracle/web.env"
-        say "      chmod 600 ~/yt2oracle/web.env && sudo systemctl restart yt2oracle-web"
+        say "  ATTENTION: le jeton actuel a ete ecrit en clair, il faut le renouveler."
+        # sed on the one line, never a redirect over the file: web.env holds the
+        # admin token too, and "> web.env" would take it with it.
+        say "      sed -i \"s|^YT2O_TOKEN=.*|YT2O_TOKEN=\$(openssl rand -hex 16)|\" ~/yt2oracle/web.env"
+        say "      sudo systemctl restart yt2oracle-web"
+        say "  (ne PAS faire '> ~/yt2oracle/web.env': ce fichier contient aussi"
+        say "   YT2O_ADMIN_TOKEN, une redirection l'effacerait)"
         changed=1
     fi
 fi
