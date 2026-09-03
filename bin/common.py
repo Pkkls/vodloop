@@ -54,6 +54,11 @@ MAX_VERDICTS = 2000
 FLUSH_INTERVAL_SECONDS = 1.0
 # refuse to prepare more video when the disk gets this low
 MIN_FREE_BYTES = 4 * 1024 ** 3
+# a wall clock on one encode, so a single hostile input cannot pin the machine
+# and stall everything behind it. Scaled by the video's own length.
+ENCODE_TIMEOUT_FACTOR = 4
+ENCODE_TIMEOUT_FLOOR = 30 * 60
+ENCODE_TIMEOUT_CEILING = 8 * 3600
 
 # A YouTube id is exactly these 11 characters. Anything else never reaches the
 # downloader: the id is extracted and a canonical URL is rebuilt from scratch,

@@ -69,6 +69,24 @@ def seconds_on_disk():
     return len(common.ready_segments()) * common.CHUNK_SECONDS
 
 
+def encode_budget(item):
+    """How long this item's encode may run, in seconds.
+
+    Tied to the video's own duration rather than fixed, because a four hour
+    video legitimately takes hours on this machine while a three minute clip
+    that has not finished in half an hour is stuck.
+    """
+    try:
+        length = float(item.get("duration") or 0)
+    except (TypeError, ValueError):
+        length = 0.0
+    if length <= 0:
+        return common.ENCODE_TIMEOUT_CEILING
+    budget = length * common.ENCODE_TIMEOUT_FACTOR
+    return max(common.ENCODE_TIMEOUT_FLOOR,
+               min(budget, common.ENCODE_TIMEOUT_CEILING))
+
+
 def prepare(item):
     """Stream one URL through ffmpeg into numbered chunks. True on success."""
     common.SEGMENTS.mkdir(parents=True, exist_ok=True)
@@ -106,8 +124,29 @@ def prepare(item):
         )
         puller.stdout.close()  # so yt-dlp sees EPIPE if ffmpeg dies first
 
-    enc_err = encoder.communicate()[1].decode(errors="replace")
-    pull_err = puller.communicate()[1].decode(errors="replace") if puller else ""
+    # A wall clock on the encode. Without it one hostile or pathological input
+    # pins the encoder for as long as it likes on a box with two vCPUs, and the
+    # queue behind it never moves again. The budget follows the video's own
+    # length so a legitimately long one is not cut off: several times realtime,
+    # with a floor for short clips and a ceiling for anything that reports no
+    # duration at all.
+    budget = encode_budget(item)
+    try:
+        enc_err = encoder.communicate(timeout=budget)[1].decode(errors="replace")
+        pull_err = puller.communicate(timeout=60)[1].decode(errors="replace") if puller else ""
+    except subprocess.TimeoutExpired:
+        for process in (encoder, puller):
+            if process is None:
+                continue
+            process.kill()
+            try:
+                process.communicate(timeout=30)
+            except subprocess.TimeoutExpired:
+                pass
+        for chunk in common.SEGMENTS.glob(f"{item['id']:05d}_*.ts"):
+            chunk.unlink(missing_ok=True)  # half a video is worse than none
+        item["error"] = f"gave up after {int(budget / 60)} min"
+        return False
 
     produced = list(common.SEGMENTS.glob(f"{item['id']:05d}_*.ts"))
     if encoder.returncode != 0 or not produced:
