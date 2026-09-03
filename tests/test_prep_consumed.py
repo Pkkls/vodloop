@@ -64,11 +64,16 @@ class FakeEncoder:
 
 
 def run(item):
+    # This is about how a finished encode is judged, so the source is declared
+    # not already in target shape. Without it the probe inside matches_target
+    # goes through subprocess.run, which reaches the same patched Popen.
     real, prep.subprocess.Popen = prep.subprocess.Popen, FakeEncoder
+    real_match, prep.matches_target = prep.matches_target, lambda path: False
     try:
         return prep.prepare(item)
     finally:
         prep.subprocess.Popen = real
+        prep.matches_target = real_match
 
 
 item = {"id": 8, "path": str(common.INCOMING / "v.mp4"), "url": "v.mp4",

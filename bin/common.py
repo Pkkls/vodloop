@@ -16,8 +16,10 @@ OFFSET = STATE / "offset"
 FIFO = ROOT / "pipe"
 ALLOWLIST = ROOT / "allowed_channels.json"
 
-# every segment must share these exactly, or concatenation breaks at the junction
-WIDTH, HEIGHT, FPS = 1280, 720, 30
+# every segment must share these exactly, or concatenation breaks at the junction.
+# 50 is not a taste: it is what the library already is, and this box encodes at
+# 0.77x realtime, so anything that forces a re-encode loses to the clock forever.
+WIDTH, HEIGHT, FPS = 1280, 720, 50
 VFILTER = (
     f"scale={WIDTH}:{HEIGHT}:force_original_aspect_ratio=decrease,"
     f"pad={WIDTH}:{HEIGHT}:(ow-iw)/2:(oh-ih)/2,fps={FPS},format=yuv420p"
@@ -28,6 +30,10 @@ ENCODE = [
     "-g", str(FPS * 2), "-keyint_min", str(FPS * 2), "-sc_threshold", "0",
     "-c:a", "aac", "-b:a", "128k", "-ar", "44100", "-ac", "2",
 ]
+# A source already in exactly that shape needs no picture work at all. Only the
+# audio is touched, because the sources carry opus and MPEG-TS will not take it,
+# and transcoding sound costs almost nothing next to transcoding a picture.
+REMUX = ["-c:v", "copy", "-c:a", "aac", "-b:a", "128k", "-ar", "44100", "-ac", "2"]
 CHUNK_SECONDS = 300
 # stop preparing once this much unplayed video is on disk
 AHEAD_LIMIT_SECONDS = 2 * 3600

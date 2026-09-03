@@ -88,6 +88,24 @@ def encode_budget(item):
                min(budget, common.ENCODE_TIMEOUT_CEILING))
 
 
+def matches_target(path):
+    """Whether a file already holds exactly the picture a chunk must carry.
+
+    Only the video is judged. The audio is transcoded either way, so letting it
+    differ costs nothing, while a single re-encoded picture costs more wall time
+    than the video it produces buys back.
+    """
+    try:
+        out = subprocess.run(
+            ["ffprobe", "-v", "error", "-select_streams", "v:0", "-show_entries",
+             "stream=codec_name,width,height,r_frame_rate", "-of", "csv=p=0", str(path)],
+            capture_output=True, text=True, timeout=60).stdout
+    except (OSError, subprocess.SubprocessError):
+        return False
+    want = f"h264,{common.WIDTH},{common.HEIGHT},{common.FPS}/1"
+    return out.strip().splitlines()[:1] == [want]
+
+
 def prepare(item):
     """Stream one URL through ffmpeg into numbered chunks. True on success."""
     common.SEGMENTS.mkdir(parents=True, exist_ok=True)
@@ -101,6 +119,10 @@ def prepare(item):
 
     encode = list(common.ENCODE)
     encode[encode.index("-vf") + 1] = overlay_filter(title_file)
+    if item.get("path") and matches_target(item["path"]):
+        # nothing to redraw, so the title overlay goes with it: a caption is not
+        # worth a channel that cannot keep a picture on the wire
+        encode = list(common.REMUX)
 
     # the muxer's own record of what it wrote. Counting the files instead would
     # be wrong: the feeder deletes each chunk as it plays it, and on a dry queue
