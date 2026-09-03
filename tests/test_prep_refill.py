@@ -3,15 +3,19 @@
 
 A 24/7 channel that runs out of queue does not go offline, it sits on a 20 second
 standby clip, which passes every check except looking at it. This is the loop
-that stops that, and the thing it has to get right is that relinking a file is
-not enough: a played entry naming the same path makes take_dropped_files skip it.
+that stops that.
+
+Two things it has to get right. The library is queued where it lives, because
+copying it into incoming/ first doubled the disk for nothing. And playing a
+library file must not consume it: prep deletes a source once it has encoded it,
+which is correct for a file handed over for one play and would delete the whole
+library on its first pass through the rotation.
 """
 import importlib
 import os
 import pathlib
 import sys
 import tempfile
-import time
 
 root = pathlib.Path(tempfile.mkdtemp(prefix="prep-refill-"))
 (root / "segments").mkdir()
@@ -21,10 +25,6 @@ library = root / "videos"
 library.mkdir()
 for name in ("a.mp4", "b.mp4"):
     (library / name).write_text("video")
-    # a library file is not a file being copied right now: hard links keep the
-    # inode's mtime, so prep's settle delay must not hold them back
-    old = time.time() - 3600
-    os.utime(library / name, (old, old))
 (library / "notes.txt").write_text("pas une video")
 
 os.environ["VODLOOP_ROOT"] = str(root)
@@ -54,8 +54,8 @@ def check(label, ok, detail=""):
 
 inc = common.INCOMING
 played = {"seq": 2, "items": [
-    {"id": 1, "status": "played", "path": str(inc / "a.mp4"), "url": "a.mp4"},
-    {"id": 2, "status": "played", "path": str(inc / "b.mp4"), "url": "b.mp4"},
+    {"id": 1, "status": "played", "path": str(library / "a.mp4"), "url": "a.mp4"},
+    {"id": 2, "status": "played", "path": str(library / "b.mp4"), "url": "b.mp4"},
 ]}
 
 # --- it does not fire while there is still work ---------------------------
@@ -77,43 +77,25 @@ for chunk in common.SEGMENTS.glob("*.ts"):
 queue = {"seq": 2, "items": list(played["items"])}
 n = prep.refill_from_library(queue)
 check("la bibliotheque revient en file", n == 2, n)
-check("les fichiers sont dans incoming",
-      sorted(p.name for p in inc.glob("*.mp4")) == ["a.mp4", "b.mp4"])
-check("ce sont des liens durs, pas des copies",
-      (inc / "a.mp4").stat().st_ino == (library / "a.mp4").stat().st_ino)
-check("les anciennes entrees jouees sont retirees", queue["items"] == [], queue["items"])
-check("un fichier qui n'est pas une video est ignore", not (inc / "notes.txt").exists())
+check("les items pointent sur la bibliotheque, pas sur une copie",
+      sorted(i["path"] for i in queue["items"])
+      == sorted(str(library / f) for f in ("a.mp4", "b.mp4")),
+      [i["path"] for i in queue["items"]])
+check("rien n'est copie dans incoming", list(inc.iterdir()) == [], list(inc.iterdir()))
+check("les anciennes entrees jouees sont retirees", len(queue["items"]) == 2, queue["items"])
+check("et les nouvelles attendent", all(i["status"] == "pending" for i in queue["items"]))
+check("un fichier qui n'est pas une video est ignore",
+      all("notes" not in i["path"] for i in queue["items"]))
+check("les ids restent uniques", queue["seq"] == 4 and {i["id"] for i in queue["items"]} == {3, 4},
+      queue["seq"])
 
-# under the unit's sandbox incoming/ is its own bind mount, so linking out of
-# the library is cross-device and only a copy gets the file in
-for f in inc.glob("*.mp4"):
-    f.unlink()
-real_link, os.link = os.link, lambda *a: (_ for _ in ()).throw(OSError(18, "cross-device"))
-try:
-    prep.refill_from_library({"seq": 2, "items": []})
-finally:
-    os.link = real_link
-check("un lien impossible tombe sur une copie",
-      sorted(p.name for p in inc.glob("*.mp4")) == ["a.mp4", "b.mp4"])
-for f in inc.glob("*.mp4"):
-    f.unlink()
-prep.refill_from_library({"seq": 2, "items": []})
-
-# the point of the whole thing: take_dropped_files must now see them
-prep.take_dropped_files(queue)
-check("prep les reprend vraiment", len(queue["items"]) == 2, queue["items"])
-check("et en attente", all(i["status"] == "pending" for i in queue["items"]))
-
-# --- the control: without removing the old entries, prep skips them --------
-for f in inc.glob("*.mp4"):
-    f.unlink()
-stale = {"seq": 2, "items": list(played["items"])}
-for src in library.glob("*.mp4"):
-    os.link(src, inc / src.name)
-prep.take_dropped_files(stale)
-check("temoin: relier sans nettoyer la file ne relance rien",
-      len(stale["items"]) == 2 and all(i["status"] == "played" for i in stale["items"]),
-      stale["items"])
+# --- the guard that stands between prep and the whole library -------------
+check("un fichier de la bibliotheque n'est pas consommable",
+      not prep.consumable(str(library / "a.mp4")))
+check("un fichier depose dans incoming l'est",
+      prep.consumable(str(inc / "depose.mp4")))
+check("temoin: le repertoire seul decide, pas le nom",
+      prep.consumable(str(inc / "a.mp4")) and not prep.consumable(str(library / "a.mp4")))
 
 # --- unset means the old behaviour, exactly ------------------------------
 prep.LIBRARY = None

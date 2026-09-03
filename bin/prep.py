@@ -249,13 +249,24 @@ LIBRARY = pathlib.Path(os.environ["VODLOOP_LIBRARY"]) if os.environ.get("VODLOOP
 REFILL_BELOW_SECONDS = 10 * 60
 
 
+def consumable(path):
+    """Whether playing this file is allowed to consume it.
+
+    A file dropped in incoming/ is handed over for a single play and is removed
+    once it has been encoded. A library file is queued where it lives and has to
+    survive being played, or the first pass through the rotation deletes the
+    library it is supposed to replay.
+    """
+    return pathlib.Path(path).parent == common.INCOMING
+
+
 def refill_from_library(queue):
     """Put the library back in the queue once it has been played through.
 
-    Relinking the files is not enough on its own: take_dropped_files skips any
-    path already named by a queue entry, and after a pass those entries are
-    still there marked "played". So the old entries for exactly these paths go
-    first, and the files come back in as new items.
+    The files are queued where they are. Copying them into incoming/ first, as
+    this did, doubles the disk for nothing: a hard link cannot cross the bind
+    mounts the unit sandboxes incoming/ with, so every pass fell back to a real
+    copy of the whole library.
 
     It only fires when there is nothing left to encode and the backlog is nearly
     gone, so playback is what paces it, not this function.
@@ -266,25 +277,29 @@ def refill_from_library(queue):
     if waiting or seconds_on_disk() >= REFILL_BELOW_SECONDS:
         return 0
 
-    sources = sorted(p for p in LIBRARY.glob("*.mp4") if p.is_file())
+    sources = sorted(p for p in LIBRARY.iterdir()
+                     if p.is_file() and p.suffix.lower() in MEDIA_SUFFIXES)
     if not sources:
         return 0
 
-    common.INCOMING.mkdir(parents=True, exist_ok=True)
-    targets = {str(common.INCOMING / p.name) for p in sources}
-    before = len(queue["items"])
+    # the played entries naming these same files go first, or the queue keeps a
+    # dead copy of the whole library on every pass
+    targets = {str(p) for p in sources}
     queue["items"] = [i for i in queue["items"] if i.get("path") not in targets]
     for src in sources:
-        target = common.INCOMING / src.name
-        if not target.exists():
-            try:
-                os.link(src, target)  # when it works, it costs no disk at all
-            except OSError:
-                # the unit sandboxes incoming/ as its own bind mount, so a link
-                # out of the library is cross-device there and the kernel says no
-                shutil.copy2(src, target)
-    print(f"bibliotheque remise en file: {len(sources)} fichier(s), "
-          f"{before - len(queue['items'])} ancienne(s) entree(s) retiree(s)", flush=True)
+        queue["seq"] += 1
+        queue["items"].append({
+            "id": queue["seq"],
+            "url": src.name,
+            "path": str(src),
+            "status": "pending",
+            "by": "file",
+            "by_name": "",
+            "title": common.clean_text(src.stem, 120),
+            "votes": [],
+            "added_at": time.time(),
+        })
+    print(f"bibliotheque remise en file: {len(sources)} fichier(s)", flush=True)
     return len(sources)
 
 
@@ -350,13 +365,14 @@ def main():
             common.save_queue(queue)
             ok = prepare(item)
             if not ok:
-                failed = common.INCOMING / "failed"
-                failed.mkdir(exist_ok=True)
-                try:
-                    pathlib.Path(item["path"]).rename(failed / pathlib.Path(item["path"]).name)
-                except OSError:
-                    pass
-            else:
+                if consumable(item["path"]):
+                    failed = common.INCOMING / "failed"
+                    failed.mkdir(exist_ok=True)
+                    try:
+                        pathlib.Path(item["path"]).rename(failed / pathlib.Path(item["path"]).name)
+                    except OSError:
+                        pass
+            elif consumable(item["path"]):
                 pathlib.Path(item["path"]).unlink(missing_ok=True)
             queue = common.load_queue()
             for entry in queue["items"]:
