@@ -11,6 +11,7 @@ INCOMING = ROOT / "incoming"
 STATE = ROOT / "state"
 QUEUE = STATE / "queue.json"
 VERDICTS = STATE / "verdicts.json"
+BOTCONFIG = STATE / "botconfig.json"
 OFFSET = STATE / "offset"
 FIFO = ROOT / "pipe"
 ALLOWLIST = ROOT / "allowed_channels.json"
@@ -144,6 +145,20 @@ def save_queue(q):
     tmp = QUEUE.with_suffix(".tmp")
     tmp.write_text(json.dumps(q, indent=1))
     tmp.replace(QUEUE)  # atomic, so a reader never sees a half-written queue
+
+
+def load_botconfig():
+    """Settings the panel wrote, or {} if there are none or the file is broken.
+
+    Nothing here is trusted to be sane: chatlogic.setting() falls back to the
+    compiled constant for every value it does not recognise, so a corrupt file
+    leaves the bot running exactly as it was rather than half-configured.
+    """
+    try:
+        data = json.loads(BOTCONFIG.read_text())
+        return data if isinstance(data, dict) else {}
+    except (OSError, ValueError):
+        return {}
 
 
 def load_verdicts():

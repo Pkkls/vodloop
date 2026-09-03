@@ -184,6 +184,8 @@ class Store:
         self.stamp = self._mtime()
         self.verdicts = common.load_verdicts()
         self.verdict_stamp = self._verdict_mtime()
+        self.config = common.load_botconfig()
+        self.config_stamp = self._config_mtime()
 
     def _mtime(self):
         try:
@@ -197,6 +199,12 @@ class Store:
         except OSError:
             return 0.0
 
+    def _config_mtime(self):
+        try:
+            return common.BOTCONFIG.stat().st_mtime
+        except OSError:
+            return 0.0
+
     def refresh(self):
         """Pick up edits made by prep or the panel, without losing our own."""
         if not self.dirty and self._mtime() != self.stamp:
@@ -206,6 +214,11 @@ class Store:
         if self._verdict_mtime() != self.verdict_stamp:
             self.verdicts = common.load_verdicts()
             self.verdict_stamp = self._verdict_mtime()
+        # same for the panel's settings: picked up on the next message, so a
+        # change from the page applies without restarting the bot
+        if self._config_mtime() != self.config_stamp:
+            self.config = common.load_botconfig()
+            self.config_stamp = self._config_mtime()
 
     def flush(self, now, force=False):
         if not self.dirty:
@@ -226,7 +239,7 @@ def apply(event, mods, store, replier=None):
     now = time.time()
     store.refresh()
     reply, changed = chatlogic.handle(message, store.queue, store.state, mods, now,
-                                      store.verdicts)
+                                      store.verdicts, store.config)
     if changed:
         store.dirty = True
     store.flush(now)

@@ -35,25 +35,38 @@ def new_state():
             "rejects": {}, "muted": {}}
 
 
-def _refuse(state, user_id, now, reply):
+def _refuse(state, user_id, now, reply, config=None):
     """Record a refusal and answer it, or fall silent if the user keeps earning them.
 
     Answering is the thing being farmed: every refusal that carries a message is
     a free reply, and a reply is what makes flooding worth the trouble. So past
     the budget the user stops existing for a while, with no message announcing it.
     """
-    stamps = [t for t in state["rejects"].get(user_id, []) if now - t < common.REJECT_WINDOW_SECONDS]
+    window = setting(config, "REJECT_WINDOW_SECONDS")
+    stamps = [t for t in state["rejects"].get(user_id, []) if now - t < window]
     stamps.append(now)
     state["rejects"][user_id] = stamps
     if len(state["rejects"]) > 5000:
         state["rejects"] = {
             u: s for u, s in state["rejects"].items()
-            if s and now - s[-1] < common.REJECT_WINDOW_SECONDS
+            if s and now - s[-1] < window
         }
-    if len(stamps) >= common.MAX_REJECTS_IN_WINDOW:
-        state["muted"][user_id] = now + common.REJECT_SILENCE_SECONDS
+    if len(stamps) >= setting(config, "MAX_REJECTS_IN_WINDOW"):
+        state["muted"][user_id] = now + setting(config, "REJECT_SILENCE_SECONDS")
         return None, True
     return reply, True
+
+
+def setting(config, name):
+    """A tunable, from the panel's config if it set one, else the compiled default.
+
+    The panel validates every value before writing the file, and this falls back
+    to the constant for anything missing or unreadable, so a config that is
+    absent, empty or corrupt changes nothing about how the bot behaves.
+    """
+    value = (config or {}).get(name)
+    return getattr(common, name) if not isinstance(value, int) or isinstance(value, bool) \
+        else value
 
 
 def _pending_of(queue, user_id):
@@ -76,7 +89,7 @@ def _prune(queue):
     queue["items"] = [i for i in queue["items"] if id(i) not in drop]
 
 
-def handle(message, queue, state, mods=(), now=None, verdicts=None):
+def handle(message, queue, state, mods=(), now=None, verdicts=None, config=None):
     """Apply one chat message. Returns (reply or None, whether state changed)."""
     now = time.time() if now is None else now
 
@@ -84,10 +97,10 @@ def handle(message, queue, state, mods=(), now=None, verdicts=None):
     text = message.get("text")
     if not user_id or not isinstance(text, str):
         return None, False
-    if len(text) > common.MAX_MESSAGE_CHARS:
+    if len(text) > setting(config, "MAX_MESSAGE_CHARS"):
         return None, False  # dropped unread, not truncated and parsed
 
-    text = common.clean_text(text, common.MAX_MESSAGE_CHARS)
+    text = common.clean_text(text, setting(config, "MAX_MESSAGE_CHARS"))
     if not text.startswith("!"):
         return None, False
     if user_id in state["banned"]:
@@ -107,53 +120,62 @@ def handle(message, queue, state, mods=(), now=None, verdicts=None):
     is_mod = user_id in mods
 
     if command in ("!play", "!add"):
-        return _add(argument, queue, state, user_id, message, now, is_mod, verdicts)
+        return _add(argument, queue, state, user_id, message, now, is_mod, verdicts, config)
     if command in ("!vote", "!v"):
         return _vote(argument, queue, user_id)
     if command == "!skip":
-        return _skip(queue, state, user_id, now, is_mod)
+        return _skip(queue, state, user_id, now, is_mod, config)
     if command == "!ban" and is_mod:
         target = common.clean_text(argument, 64)
         if target and target not in state["banned"]:
             state["banned"].append(target)
             # the list grows with distinct chatters and is never emptied
-            del state["banned"][: max(0, len(state["banned"]) - common.MAX_BANNED)]
+            del state["banned"][: max(0, len(state["banned"]) - setting(config, "MAX_BANNED"))]
             return f"{target} can no longer use the commands", True
         return None, False
     if command == "!help":
-        return HELP, False
+        custom = (config or {}).get("HELP")
+        return (custom if isinstance(custom, str) and custom.strip() else HELP), False
+    # Commands the panel added. A name maps to a fixed sentence and nothing
+    # else: it is looked up after every built-in, so nothing here can shadow
+    # !play or !ban, and the value is sent to chat as text, never executed.
+    commands = (config or {}).get("commands")
+    if isinstance(commands, dict):
+        reply = commands.get(command)
+        if isinstance(reply, str) and reply.strip():
+            return common.clean_text(reply, 200), False
     return None, False
 
 
-def _add(argument, queue, state, user_id, message, now, is_mod, verdicts=None):
+def _add(argument, queue, state, user_id, message, now, is_mod, verdicts=None, config=None):
     video_id, result = common.canonical_youtube_url(argument)
     if video_id is None:
-        return _refuse(state, user_id, now, result)
+        return _refuse(state, user_id, now, result, config)
 
     # What prep already decided about this video, for free. Without this, a
     # video the allowlist refuses costs another yt-dlp call every single time
     # somebody pastes it, and the answer is still "added".
     known = (verdicts or {}).get(video_id)
     if isinstance(known, dict) and not known.get("ok", True):
-        return _refuse(state, user_id, now, known.get("reason") or "refused")
+        return _refuse(state, user_id, now, known.get("reason") or "refused", config)
 
     if not is_mod:
         waited = now - state["last_add"].get(user_id, 0)
-        if waited < common.ADD_COOLDOWN_SECONDS:
+        if waited < setting(config, "ADD_COOLDOWN_SECONDS"):
             return _refuse(state, user_id, now,
-                           f"wait {int(common.ADD_COOLDOWN_SECONDS - waited)}s")
-        if len(_pending_of(queue, user_id)) >= common.MAX_PENDING_PER_USER:
-            return _refuse(state, user_id, now, "you already have enough waiting")
+                           f"wait {int(setting(config, 'ADD_COOLDOWN_SECONDS') - waited)}s", config)
+        if len(_pending_of(queue, user_id)) >= setting(config, "MAX_PENDING_PER_USER"):
+            return _refuse(state, user_id, now, "you already have enough waiting", config)
 
     if _already_queued(queue, video_id):
-        return _refuse(state, user_id, now, "already in the queue")
+        return _refuse(state, user_id, now, "already in the queue", config)
     live = [i for i in queue["items"] if i["status"] in ("pending", "preparing", "ready")]
     if len(live) >= common.MAX_QUEUE:
         return "the queue is full", False
     # unresolved items are the ones prep still owes a metadata call to. The
     # queue cap is far too high to bound that work on its own.
     unresolved = [i for i in queue["items"] if i["status"] == "pending"]
-    if not is_mod and len(unresolved) >= common.MAX_UNRESOLVED:
+    if not is_mod and len(unresolved) >= setting(config, "MAX_UNRESOLVED"):
         return "hold on, too many waiting to be checked", False
 
     queue["seq"] += 1
@@ -170,7 +192,7 @@ def _add(argument, queue, state, user_id, message, now, is_mod, verdicts=None):
     state["last_add"][user_id] = now
     # the cooldown table would otherwise grow with every distinct chatter
     if len(state["last_add"]) > 5000:
-        cutoff = now - common.ADD_COOLDOWN_SECONDS
+        cutoff = now - setting(config, "ADD_COOLDOWN_SECONDS")
         state["last_add"] = {k: v for k, v in state["last_add"].items() if v > cutoff}
     _prune(queue)
     return "added", True
@@ -190,28 +212,28 @@ def _vote(argument, queue, user_id):
     return None, False
 
 
-def _skip(queue, state, user_id, now, is_mod):
+def _skip(queue, state, user_id, now, is_mod, config=None):
     if is_mod:
         state["skip_votes"] = {}
         state["last_skip"] = now
         return "skipping", True
 
     since_last = now - state["last_skip"]
-    if since_last < common.SKIP_COOLDOWN_SECONDS:
+    if since_last < setting(config, "SKIP_COOLDOWN_SECONDS"):
         return None, False
 
     # keep only votes inside the window, so old ones cannot be accumulated
     state["skip_votes"] = {
         voter: when for voter, when in state["skip_votes"].items()
-        if now - when < common.SKIP_WINDOW_SECONDS
+        if now - when < setting(config, "SKIP_WINDOW_SECONDS")
     }
     state["skip_votes"][user_id] = now
 
-    if len(state["skip_votes"]) >= common.SKIP_MIN_VOTERS:
+    if len(state["skip_votes"]) >= setting(config, "SKIP_MIN_VOTERS"):
         state["skip_votes"] = {}
         state["last_skip"] = now
         return "skipping", True
-    remaining = common.SKIP_MIN_VOTERS - len(state["skip_votes"])
+    remaining = setting(config, "SKIP_MIN_VOTERS") - len(state["skip_votes"])
     return f"{remaining} more vote(s) to skip", True
 
 

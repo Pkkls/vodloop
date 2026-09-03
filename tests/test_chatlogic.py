@@ -19,10 +19,10 @@ def fresh():
     return {"seq": 0, "items": []}, chatlogic.new_state()
 
 
-def say(queue, state, user, text, now=1000.0, name="someone", verdicts=None):
+def say(queue, state, user, text, now=1000.0, name="someone", verdicts=None, config=None):
     return chatlogic.handle(
         {"user_id": user, "username": name, "text": text}, queue, state, MODS, now,
-        verdicts,
+        verdicts, config,
     )
 
 
@@ -354,6 +354,60 @@ def test_the_ban_list_stays_bounded():
     # the newest bans are the ones kept, an evicted one is the oldest
     assert "user0" not in state["banned"]
     assert f"user{common.MAX_BANNED + 24}" in state["banned"]
+
+
+def test_a_setting_from_the_panel_actually_changes_the_bot():
+    def votes_needed(config):
+        queue, state = fresh()
+        for n in range(1, 9):
+            reply, _ = say(queue, state, f"voter{n}", "!skip", now=2000 + n, config=config)
+            if reply == "skipping":
+                return n
+        return None
+
+    check = votes_needed(None)
+    assert check == common.SKIP_MIN_VOTERS, check
+    assert votes_needed({"SKIP_MIN_VOTERS": 2}) == 2
+    assert votes_needed({"SKIP_MIN_VOTERS": 6}) == 6
+    # anything the panel could not have written falls back to the constant, so a
+    # broken file leaves the bot exactly as it was rather than half configured
+    for junk in ({}, {"SKIP_MIN_VOTERS": "2"}, {"SKIP_MIN_VOTERS": None},
+                 {"SKIP_MIN_VOTERS": True}, {"nonsense": 1}):
+        assert votes_needed(junk) == common.SKIP_MIN_VOTERS, junk
+
+
+def test_a_custom_command_answers_and_cannot_shadow_a_builtin():
+    config = {"commands": {"!discord": "discord.gg/exemple", "!play": "detourne",
+                           "!skip": "detourne"}}
+    queue, state = fresh()
+    reply, changed = say(queue, state, "u1", "!discord", now=1000, config=config)
+    assert reply == "discord.gg/exemple" and not changed, reply
+
+    # the built-ins are matched first, so a custom entry with the same name is
+    # dead weight rather than a takeover
+    reply, changed = say(queue, state, "u1", "!play dQw4w9WgXcQ", now=1000, config=config)
+    assert reply == "added" and len(queue["items"]) == 1, reply
+    reply, _ = say(queue, state, "u2", "!skip", now=1000, config=config)
+    assert reply != "detourne", reply
+
+    # unknown stays silent even with commands configured
+    reply, changed = say(queue, state, "u1", "!nothere", now=1000, config=config)
+    assert reply is None and not changed
+
+    # and a reply is text: control characters never reach the chat
+    dirty = {"commands": {"!x": "prop\x00re\x1b[31m"}}
+    reply, _ = say(queue, state, "u1", "!x", now=1000, config=dirty)
+    assert "\x00" not in reply and "\x1b" not in reply, repr(reply)
+
+
+def test_the_help_text_can_be_replaced_but_never_emptied():
+    queue, state = fresh()
+    assert say(queue, state, "u1", "!help", now=1000)[0] == chatlogic.HELP
+    assert say(queue, state, "u1", "!help", now=1000,
+               config={"HELP": "mon aide"})[0] == "mon aide"
+    for empty in ("", "   ", None, 5):
+        assert say(queue, state, "u1", "!help", now=1000,
+                   config={"HELP": empty})[0] == chatlogic.HELP, repr(empty)
 
 
 if __name__ == "__main__":
