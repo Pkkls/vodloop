@@ -232,14 +232,14 @@ class Store:
         self.dirty = False
 
 
-def apply(event, mods, store, replier=None):
+def apply(event, mods, store, replier=None, owner=None):
     message = as_message(unwrap(event))
     if message is None:
         return
     now = time.time()
     store.refresh()
     reply, changed = chatlogic.handle(message, store.queue, store.state, mods, now,
-                                      store.verdicts, store.config)
+                                      store.verdicts, store.config, owner=owner)
     if changed:
         store.dirty = True
     store.flush(now)
@@ -262,7 +262,7 @@ def stream(mods, store, replier=None):
                         event = json.loads(line[5:].strip())
                     except ValueError:
                         continue  # a malformed frame is not worth dying over
-                    apply(event, mods, store, replier)
+                    apply(event, mods, store, replier, owner)
         except (urllib.error.URLError, OSError, TimeoutError):
             # the feed went quiet, so nothing is waiting on the pacing any more
             store.flush(time.time(), force=True)
@@ -273,6 +273,8 @@ def main():
     mods = tuple(
         m.strip() for m in common.env().get("VODLOOP_MODS", "").split(",") if m.strip()
     )
+    # the broadcaster, for the commands that are theirs alone
+    owner = common.env().get("KICK_USER_ID", "").strip()
     config = common.env()
 
     def setting(name):
@@ -292,7 +294,7 @@ def main():
             line = line.strip()
             if line:
                 try:
-                    apply(json.loads(line), mods, store)
+                    apply(json.loads(line), mods, store, owner=owner)
                 except ValueError:
                     continue
         store.flush(time.time(), force=True)

@@ -89,7 +89,8 @@ def _prune(queue):
     queue["items"] = [i for i in queue["items"] if id(i) not in drop]
 
 
-def handle(message, queue, state, mods=(), now=None, verdicts=None, config=None):
+def handle(message, queue, state, mods=(), now=None, verdicts=None, config=None,
+           owner=None):
     """Apply one chat message. Returns (reply or None, whether state changed)."""
     now = time.time() if now is None else now
 
@@ -125,6 +126,16 @@ def handle(message, queue, state, mods=(), now=None, verdicts=None, config=None)
         return _vote(argument, queue, user_id)
     if command == "!skip":
         return _skip(queue, state, user_id, now, is_mod, config)
+    if command == "!nontent":
+        # The channel owner alone, matched on the Kick user id the message
+        # carries. Not a secret typed into chat: everything typed into chat is
+        # read by everyone in it, so a token there would be a published token.
+        # Unset owner refuses rather than opening it to the room.
+        if not owner or str(user_id) != str(owner):
+            return None, False
+        state["skip_votes"] = {}
+        state["last_skip"] = now
+        return "skipping", True
     if command == "!ban" and is_mod:
         target = common.clean_text(argument, 64)
         if target and target not in state["banned"]:

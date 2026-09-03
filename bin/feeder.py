@@ -12,6 +12,7 @@ Two things here are load-bearing and were established by measurement:
 This process may be restarted freely. The pusher and its placeholder writer must
 not be, which is why they live in a separate unit.
 """
+import json
 import subprocess
 import sys
 import time
@@ -49,10 +50,47 @@ def ensure_filler():
     return filler
 
 
-def feed(path, offset):
-    """Remux one chunk into the FIFO at the given timeline offset."""
+def skip_stamp():
+    """When the chat last granted a skip. Written by the chat, read here.
+
+    Nothing consumed this before, so a granted skip answered "skipping" and the
+    video kept playing to the end.
+    """
+    try:
+        state = json.loads((common.STATE / "chat.json").read_text())
+        return float(state.get("last_skip", 0.0))
+    except (OSError, ValueError, TypeError, AttributeError):
+        return 0.0
+
+
+def drop_item_of(chunk):
+    """Remove every remaining chunk of the video this one belongs to.
+
+    A skip that only ends the current chunk lands on the next chunk of the same
+    video, which is not what anyone asked for.
+    """
+    item = chunk.name.split("_")[0]
+    dropped = 0
+    for other in common.ready_segments():
+        if other.name.split("_")[0] == item:
+            other.unlink(missing_ok=True)
+            dropped += 1
+    return dropped
+
+
+POLL_SECONDS = 0.5
+
+
+def feed(path, offset, stop_when=None):
+    """Remux one chunk into the FIFO at the given timeline offset.
+
+    stop_when is polled while it plays. A skip has to cut the chunk in flight or
+    it waits up to CHUNK_SECONDS to be noticed, which no viewer would call a
+    skip. Cutting short leaves a gap in the claimed timeline, which the muxer
+    tolerates; what it does not tolerate is the same range sent twice.
+    """
     with open(common.FIFO, "wb") as pipe:
-        subprocess.run(
+        process = subprocess.Popen(
             ["ffmpeg", "-v", "error", "-i", str(path), "-c", "copy",
              "-output_ts_offset", f"{offset:.3f}",
              # Each chunk is a self-contained mpegts stream, and concatenating
@@ -63,8 +101,15 @@ def feed(path, offset):
              # intact. Masking it on the read side with +discardcorrupt does
              # not remove it and would drop packets.
              "-mpegts_flags", "+initial_discontinuity", "-f", "mpegts", "-"],
-            stdout=pipe, check=False,
+            stdout=pipe,
         )
+        while process.poll() is None:
+            if stop_when is not None and stop_when():
+                process.kill()
+                process.wait()
+                return True
+            time.sleep(POLL_SECONDS)
+    return False
 
 
 def main():
@@ -81,10 +126,14 @@ def main():
         # already sent, which sends DTS backwards and is what actually breaks.
         offset += length
         common.write_offset(offset)
-        feed(source, offset - length)
+        granted = skip_stamp()
+        cut = feed(source, offset - length, stop_when=lambda: skip_stamp() > granted)
 
         if segments:
             source.unlink(missing_ok=True)  # played chunks are purged immediately
+            if cut:
+                print(f"saut: {drop_item_of(source)} chunk(s) restant(s) ecarte(s)",
+                      flush=True)
         else:
             time.sleep(IDLE_POLL_SECONDS)
 
