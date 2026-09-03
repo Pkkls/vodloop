@@ -7,6 +7,12 @@
 Description=vodloop RTMPS pusher
 After=network-online.target
 Wants=network-online.target
+# The feeder is BindsTo= this unit, and BindsTo only ever propagates a stop. So
+# a pusher crash took the feeder down with it, Restart= brought the pusher back
+# alone, and the channel stayed dark until someone looked. Pulling the feeder in
+# on every start closes that. Not Upholds=, which would also undo the deliberate
+# feeder stop behind "vodloopctl pause".
+Wants=vodloop-feed.service
 
 [Service]
 Type=exec
