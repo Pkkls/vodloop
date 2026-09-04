@@ -35,7 +35,17 @@ PENDING_FILE = common.STATE / "kick_oauth_pending.json"
 
 
 def setting(name):
-    return os.environ.get(name) or common.env().get(name, "")
+    """A setting from the environment, then .env, then bus.env.
+
+    The client id and secret live in bus.env, which systemd hands to the chat
+    service as an EnvironmentFile. That made the services work while every
+    command in the docstring above, run by hand, built a URL with an empty
+    client_id and reported no error at all. Reading both files is what makes
+    the manual path behave like the service path.
+    """
+    return (os.environ.get(name)
+            or common.env().get(name)
+            or common.env("bus.env").get(name, ""))
 
 
 def redirect_uri():

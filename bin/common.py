@@ -132,10 +132,15 @@ def channel_allowed(channel_id):
     return bool(channel_id) and channel_id in load_allowlist()
 
 
-def env():
-    """Read ~/vodloop/.env into a dict. Values never get logged."""
+def env(filename=".env"):
+    """Read one ~/vodloop env file into a dict. Values never get logged.
+
+    The name is a parameter because the settings are split across two files:
+    .env holds the channel and ingest configuration, bus.env holds the OAuth
+    application credentials. Callers that need both read both.
+    """
     out = {}
-    path = ROOT / ".env"
+    path = ROOT / filename
     if path.exists():
         for line in path.read_text().splitlines():
             line = line.strip()
