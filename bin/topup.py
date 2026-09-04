@@ -52,6 +52,9 @@ LAST_ID = 99999
 # A remux of a four hour VOD runs in minutes even on a loaded box, so this is
 # far above any honest run and only ever catches a stuck one.
 REMUX_TIMEOUT_SECONDS = 30 * 60
+# Cron fires every five minutes, so three missed ticks is not a slow box, it is
+# a top-up that is no longer running.
+STALE_AFTER_SECONDS = 15 * 60
 
 LIBRARY = pathlib.Path(
     os.environ.get("VODLOOP_LIBRARY") or (pathlib.Path.home() / "videos"))
@@ -129,6 +132,29 @@ def seed(path, chunk_id):
     return True
 
 
+def beat():
+    """Record that a run happened at all.
+
+    A healthy run seeds nothing and logs nothing, which makes working and dead
+    look identical from outside: an empty log is either "the queue held all day"
+    or "cron never fired". One timestamp per run separates them, and --status
+    reads it back. A system whose success state cannot be told from its failure
+    state is the thing that had somebody watching the channel to find out.
+    """
+    try:
+        common.STATE.mkdir(parents=True, exist_ok=True)
+        (common.STATE / "topup.beat").write_text(str(int(time.time())))
+    except OSError:
+        pass  # a heartbeat that cannot be written must not stop the top-up
+
+
+def last_beat():
+    try:
+        return int((common.STATE / "topup.beat").read_text().strip())
+    except (OSError, ValueError):
+        return None
+
+
 def main(argv):
     if "--status" in argv:
         data = ledger()
@@ -136,7 +162,16 @@ def main(argv):
               f"target={TARGET_SECONDS}s gate={prep.NORMALISE_ABOVE_SECONDS}s")
         print(f"conformant in library: {len(candidates(data['seeded']))}")
         print(f"seeded so far: {len(data['seeded'])}")
+        seen = last_beat()
+        if seen is None:
+            print("last run: never, cron has not fired since this was installed")
+        else:
+            age = int(time.time()) - seen
+            state = "ok" if age < STALE_AFTER_SECONDS else "STALE, cron is not firing"
+            print(f"last run: {age}s ago ({state})")
         return 0
+
+    beat()
 
     # imported here rather than at the top: this is a POSIX-only module, and a
     # top-level import would stop the whole file being importable, and so

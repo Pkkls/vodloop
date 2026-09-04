@@ -80,8 +80,18 @@ with tempfile.TemporaryDirectory() as tmp:
             topup.LEDGER = common.STATE / "topup.json"
             topup.LOCK = common.STATE / "topup.lock"
             try:
+                check("no heartbeat before the first run",
+                      topup.last_beat() is None)
                 rc = topup.main([])
                 check("a full queue is left alone", calls == [] and rc == 0, str(calls))
+
+                # the run above seeded nothing and logged nothing. Without a
+                # heartbeat that is indistinguishable from cron never firing,
+                # which is the whole reason this file exists.
+                seen = topup.last_beat()
+                check("a run that does nothing still records that it ran",
+                      seen is not None and abs(int(time.time()) - seen) < 60,
+                      str(seen))
 
                 # the control: the same call on an empty queue must seed,
                 # otherwise the check above passes on a script that never seeds
