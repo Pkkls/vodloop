@@ -25,7 +25,10 @@ import common
 
 AUTHORIZE = "https://id.kick.com/oauth/authorize"
 TOKEN = "https://id.kick.com/oauth/token"
-SCOPES = "chat:write"
+# channel:write is what lets the stream title be set. Asking for it in the
+# same grant means the owner approves once instead of twice, and the stored
+# token keeps chat:write, which the bot already relies on.
+SCOPES = "chat:write channel:write"
 USER_AGENT = "vodloop/0.1"
 TOKEN_FILE = common.STATE / "kick_user_token.json"
 PENDING_FILE = common.STATE / "kick_oauth_pending.json"

@@ -85,6 +85,44 @@ check("temoin: la video suivante est intacte",
       == ["00008_00000.ts", "00008_00001.ts"],
       sorted(p.name for p in common.SEGMENTS.glob("*.ts")))
 
+# --- the wiring, which the logic tests above cannot see -------------------
+# The gate was right and the channel still had no working commands, because the
+# live loop called apply() with an owner it had never been given and died on
+# every message. Nothing here exercised that loop, so nothing caught it.
+import chat  # noqa: E402
+
+
+class OneEvent:
+    """A feed that yields a single chat frame, then is done."""
+
+    def __enter__(self):
+        return [b'data: {"data":{"sender":{"user_id":"7"},"content":"!help"}}\n']
+
+    def __exit__(self, *exc):
+        return False
+
+
+seen = {}
+
+
+def spy(event, mods, store, replier=None, owner=None):
+    seen["owner"] = owner
+    raise SystemExit  # the loop is infinite by design
+
+
+real_open, chat.urllib.request.urlopen = chat.urllib.request.urlopen, lambda *a, **k: OneEvent()
+real_apply, chat.apply = chat.apply, spy
+try:
+    chat.stream((), object(), None, "127469285")
+except SystemExit:
+    pass
+finally:
+    chat.urllib.request.urlopen = real_open
+    chat.apply = real_apply
+
+check("la boucle en direct transmet le proprietaire", seen.get("owner") == "127469285",
+      seen)
+
 print()
 print(f"{passed}/{passed + failed} passent")
 sys.exit(0 if failed == 0 else 1)

@@ -249,7 +249,7 @@ def apply(event, mods, store, replier=None, owner=None):
             replier.send(reply, str(message["user_id"]))
 
 
-def stream(mods, store, replier=None):
+def stream(mods, store, replier=None, owner=None):
     """Follow the SSE feed, reconnecting for as long as this process lives."""
     while True:
         try:
@@ -299,7 +299,7 @@ def main():
                     continue
         store.flush(time.time(), force=True)
         return
-    stream(mods, store, replier)
+    stream(mods, store, replier, owner)
 
 
 if __name__ == "__main__":
