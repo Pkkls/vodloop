@@ -106,6 +106,40 @@ def matches_target(path):
     return out.strip().splitlines()[:1] == [want]
 
 
+def normalise_in_place(path):
+    """Re-encode a library file into the exact shape a chunk must have, once.
+
+    A library file is replayed forever. Encoding it on every pass costs more
+    wall time than the video buys back on this box, so the queue can never get
+    ahead and the channel falls back to the standby clip. Doing it once here
+    means no one has to remember to run a tool after adding videos.
+
+    The replacement is a rename, so a reader already holding the old file keeps
+    reading it, and a failure leaves the original untouched.
+    """
+    target = path.with_suffix(".norm.mp4")
+    print(f"normalisation ({path.name})", flush=True)
+    try:
+        out = subprocess.run(
+            ["ffmpeg", "-v", "error", "-y", "-i", str(path)] + list(common.ENCODE)
+            + ["-f", "mp4", str(target)],
+            capture_output=True, text=True, timeout=common.ENCODE_TIMEOUT_CEILING)
+    except (OSError, subprocess.SubprocessError) as exc:
+        target.unlink(missing_ok=True)
+        print(f"  echec: {exc}", flush=True)
+        return None
+    if out.returncode != 0 or not target.exists():
+        target.unlink(missing_ok=True)
+        print(f"  echec: {(out.stderr or '').strip().splitlines()[-1:]}", flush=True)
+        return None
+    final = path.with_suffix(".mp4")
+    target.replace(final)
+    if final != path:
+        path.unlink(missing_ok=True)
+    print(f"  fait: {final.name}", flush=True)
+    return final
+
+
 def prepare(item):
     """Stream one URL through ffmpeg into numbered chunks. True on success."""
     common.SEGMENTS.mkdir(parents=True, exist_ok=True)
@@ -119,10 +153,19 @@ def prepare(item):
 
     encode = list(common.ENCODE)
     encode[encode.index("-vf") + 1] = overlay_filter(title_file)
-    if item.get("path") and matches_target(item["path"]):
-        # nothing to redraw, so the title overlay goes with it: a caption is not
-        # worth a channel that cannot keep a picture on the wire
-        encode = list(common.REMUX)
+    if item.get("path"):
+        source = pathlib.Path(item["path"])
+        # a library file in the wrong shape is normalised once instead of being
+        # re-encoded on every pass through the rotation
+        if not matches_target(source) and not consumable(source):
+            fixed = normalise_in_place(source)
+            if fixed is not None:
+                item["path"] = str(fixed)
+                source = fixed
+        if matches_target(source):
+            # nothing to redraw, so the title overlay goes with it: a caption is
+            # not worth a channel that cannot keep a picture on the wire
+            encode = list(common.REMUX)
 
     # the muxer's own record of what it wrote. Counting the files instead would
     # be wrong: the feeder deletes each chunk as it plays it, and on a dry queue

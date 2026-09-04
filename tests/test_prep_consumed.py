@@ -42,6 +42,7 @@ class FakeEncoder:
 
     segments = 1
     consume = True
+    last_args = []
 
     def __init__(self, args, **kwargs):
         # tolerated missing on purpose, so this test can be pointed at a version
@@ -57,6 +58,7 @@ class FakeEncoder:
                 chunk.unlink()  # the feeder played it and moved on
         if listing is not None:
             listing.write_text("".join(f"{n}\n" for n in names))
+        FakeEncoder.last_args = list(args)
         self.returncode = 0
 
     def communicate(self, timeout=None):
@@ -98,6 +100,34 @@ check("temoin: l'echec est explique", bool(item0.get("error")), item0)
 check("aucune liste laissee derriere",
       not list(common.STATE.glob("list_*.txt")),
       list(common.STATE.glob("list_*.txt")))
+
+# --- a file in the wrong shape is fixed once, not re-encoded forever -------
+calls = []
+real_norm, prep.normalise_in_place = prep.normalise_in_place, lambda p: calls.append(p)
+real_match, prep.matches_target = prep.matches_target, lambda p: False
+real_popen, prep.subprocess.Popen = prep.subprocess.Popen, FakeEncoder
+FakeEncoder.segments = 1
+try:
+    prep.prepare({"id": 20, "path": str(common.INCOMING / "depose.mp4"), "url": "d",
+                  "title": "D", "by_name": "", "duration": 60})
+    check("un fichier depose n'est pas normalise, il ne sert qu'une fois", calls == [], calls)
+
+    library = common.ROOT / "videos"
+    library.mkdir(exist_ok=True)
+    prep.prepare({"id": 21, "path": str(library / "vieux.mp4"), "url": "v",
+                  "title": "V", "by_name": "", "duration": 60})
+    check("un fichier de bibliotheque hors format est normalise", len(calls) == 1, calls)
+
+    prep.matches_target = lambda p: True
+    prep.prepare({"id": 22, "path": str(library / "bon.mp4"), "url": "b",
+                  "title": "B", "by_name": "", "duration": 60})
+    check("un fichier deja conforme n'est pas retouche", len(calls) == 1, calls)
+    check("et il est remuxe, pas reencode", "copy" in FakeEncoder.last_args,
+          FakeEncoder.last_args[:6])
+finally:
+    prep.normalise_in_place = real_norm
+    prep.matches_target = real_match
+    prep.subprocess.Popen = real_popen
 
 print()
 print(f"{passed}/{passed + failed} passent")
