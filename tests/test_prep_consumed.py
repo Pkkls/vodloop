@@ -114,12 +114,24 @@ try:
 
     library = common.ROOT / "videos"
     library.mkdir(exist_ok=True)
+    # with a thin backlog the file is encoded the slow way instead: normalising
+    # feeds the channel nothing while it runs, so it must not start here
+    for chunk in common.SEGMENTS.glob("*.ts"):
+        chunk.unlink()
     prep.prepare({"id": 21, "path": str(library / "vieux.mp4"), "url": "v",
                   "title": "V", "by_name": "", "duration": 60})
-    check("un fichier de bibliotheque hors format est normalise", len(calls) == 1, calls)
+    check("reserve mince: on n'entame pas une normalisation", calls == [], calls)
+
+    # with enough backlog to cover it, it goes ahead
+    needed = prep.NORMALISE_ABOVE_SECONDS // common.CHUNK_SECONDS + 1
+    for n in range(needed):
+        (common.SEGMENTS / f"00099_{n:05d}.ts").write_text("chunk")
+    prep.prepare({"id": 22, "path": str(library / "vieux.mp4"), "url": "v",
+                  "title": "V", "by_name": "", "duration": 60})
+    check("reserve confortable: la normalisation demarre", len(calls) == 1, calls)
 
     prep.matches_target = lambda p: True
-    prep.prepare({"id": 22, "path": str(library / "bon.mp4"), "url": "b",
+    prep.prepare({"id": 23, "path": str(library / "bon.mp4"), "url": "b",
                   "title": "B", "by_name": "", "duration": 60})
     check("un fichier deja conforme n'est pas retouche", len(calls) == 1, calls)
     check("et il est remuxe, pas reencode", "copy" in FakeEncoder.last_args,

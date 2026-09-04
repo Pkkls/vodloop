@@ -165,7 +165,8 @@ def prepare(item):
         source = pathlib.Path(item["path"])
         # a library file in the wrong shape is normalised once instead of being
         # re-encoded on every pass through the rotation
-        if not matches_target(source) and not consumable(source):
+        if (not matches_target(source) and not consumable(source)
+                and seconds_on_disk() >= NORMALISE_ABOVE_SECONDS):
             fixed = normalise_in_place(source)
             if fixed is not None:
                 item["path"] = str(fixed)
@@ -298,6 +299,12 @@ def reap(queue):
 # exactly what it was: run dry and show the filler.
 LIBRARY = pathlib.Path(os.environ["VODLOOP_LIBRARY"]) if os.environ.get("VODLOOP_LIBRARY") else None
 REFILL_BELOW_SECONDS = 10 * 60
+# Normalising produces nothing for the channel until it finishes, where an
+# ordinary encode feeds chunks out as it goes. So it is only worth starting with
+# enough backlog to cover it: a half hour video takes about forty minutes here.
+# Below this the file is encoded the slow way again and normalised on a later
+# pass, when the remuxes have built the reserve back up.
+NORMALISE_ABOVE_SECONDS = 45 * 60
 
 
 def consumable(path):
