@@ -82,7 +82,10 @@ for u in vodloop-web vodloop-prep kickvods; do
     say "  $u: NoNewPrivileges=$(systemctl show "$u" -p NoNewPrivileges --value) ProtectSystem=$(systemctl show "$u" -p ProtectSystem --value)"
 done
 dropin vodloop-web  "$V/state $V/segments"
-dropin vodloop-prep "$V/state $V/segments $V/incoming"
+# The library is here because prep normalises a file in place the first time it
+# meets one in the wrong shape. Without the write it retries that encode on
+# every pass forever, which this box cannot afford.
+dropin vodloop-prep "$V/state $V/segments $V/incoming /home/ubuntu/videos"
 dropin kickvods     "/home/ubuntu/kickvods"
 if [ "$APPLY" = 1 ] && [ "$changed" = 1 ]; then
     sudo systemctl daemon-reload

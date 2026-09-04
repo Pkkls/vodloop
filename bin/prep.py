@@ -114,6 +114,11 @@ def normalise_in_place(path):
     ahead and the channel falls back to the standby clip. Doing it once here
     means no one has to remember to run a tool after adding videos.
 
+    Every failure returns None and the caller encodes the file the slow way.
+    This is an optimisation, and an optimisation that can stop the pipeline is
+    worse than no optimisation: the first version let a read-only library raise
+    out of here and crash the service on a loop.
+
     The replacement is a rename, so a reader already holding the old file keeps
     reading it, and a failure leaves the original untouched.
     """
@@ -124,18 +129,21 @@ def normalise_in_place(path):
             ["ffmpeg", "-v", "error", "-y", "-i", str(path)] + list(common.ENCODE)
             + ["-f", "mp4", str(target)],
             capture_output=True, text=True, timeout=common.ENCODE_TIMEOUT_CEILING)
+        if out.returncode != 0 or not target.exists():
+            target.unlink(missing_ok=True)
+            print(f"  echec: {(out.stderr or '').strip().splitlines()[-1:]}", flush=True)
+            return None
+        final = path.with_suffix(".mp4")
+        target.replace(final)
+        if final != path:
+            path.unlink(missing_ok=True)
     except (OSError, subprocess.SubprocessError) as exc:
-        target.unlink(missing_ok=True)
+        try:
+            target.unlink(missing_ok=True)
+        except OSError:
+            pass  # a read-only library cannot even be tidied up
         print(f"  echec: {exc}", flush=True)
         return None
-    if out.returncode != 0 or not target.exists():
-        target.unlink(missing_ok=True)
-        print(f"  echec: {(out.stderr or '').strip().splitlines()[-1:]}", flush=True)
-        return None
-    final = path.with_suffix(".mp4")
-    target.replace(final)
-    if final != path:
-        path.unlink(missing_ok=True)
     print(f"  fait: {final.name}", flush=True)
     return final
 
