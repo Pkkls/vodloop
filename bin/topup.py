@@ -130,16 +130,12 @@ def seed(path, chunk_id):
 
 
 def main(argv):
-    buffered = int(prep.seconds_on_disk())
     if "--status" in argv:
         data = ledger()
-        print(f"buffer={buffered}s trigger={TRIGGER_SECONDS}s target={TARGET_SECONDS}s "
-              f"gate={prep.NORMALISE_ABOVE_SECONDS}s")
+        print(f"buffer={int(prep.seconds_on_disk())}s trigger={TRIGGER_SECONDS}s "
+              f"target={TARGET_SECONDS}s gate={prep.NORMALISE_ABOVE_SECONDS}s")
         print(f"conformant in library: {len(candidates(data['seeded']))}")
         print(f"seeded so far: {len(data['seeded'])}")
-        return 0
-
-    if buffered >= TRIGGER_SECONDS:
         return 0
 
     # imported here rather than at the top: this is a POSIX-only module, and a
@@ -152,7 +148,18 @@ def main(argv):
         try:
             fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except OSError:
-            log("another run holds the lock, leaving it alone")
+            # Silent, and before any measurement. A held lock is the normal
+            # state while a run works, not an event worth a log line every few
+            # minutes. The first version measured the queue before reaching
+            # here, and seconds_on_disk() runs ffprobe once per chunk: every
+            # cron tick then paid that cost even though it was about to do
+            # nothing. Four copies overlapping took the load average to ten on
+            # two vCPUs, which is the CPU starvation that drops the RTMP
+            # session. Nothing expensive belongs outside this lock.
+            return 0
+
+        buffered = int(prep.seconds_on_disk())
+        if buffered >= TRIGGER_SECONDS:
             return 0
 
         data = ledger()
