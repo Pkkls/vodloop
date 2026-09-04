@@ -138,6 +138,30 @@ with tempfile.TemporaryDirectory() as tmp:
                 topup.seed = real_seed2
                 common.STATE = real_state2
 
+        print("chunks are self contained on the timeline")
+        argv_seen = {}
+        real_run2 = topup.subprocess.run
+
+        def capture(argv, **_kw):
+            argv_seen["argv"] = list(argv)
+            return type("R", (), {"returncode": 0, "stderr": ""})()
+
+        topup.subprocess.run = capture
+        try:
+            topup.seed(library / "alpha.mp4", 90001)
+            argv = argv_seen.get("argv", [])
+            # -c copy keeps the source timestamps, so each chunk after the first
+            # would start where the previous ended. feeder.py then adds its own
+            # cumulative offset on top and the flv muxer rejects the result.
+            check("the segment muxer is told to reset timestamps",
+                  "-reset_timestamps" in argv
+                  and argv[argv.index("-reset_timestamps") + 1] == "1",
+                  " ".join(argv[-6:]))
+            check("the video is copied rather than re-encoded",
+                  "-c:v" in argv and argv[argv.index("-c:v") + 1] == "copy")
+        finally:
+            topup.subprocess.run = real_run2
+
         print("a stuck remux is abandoned, not waited on forever")
         segments = root / "segments"
         real_seg, common.SEGMENTS = common.SEGMENTS, segments

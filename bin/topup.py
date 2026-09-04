@@ -119,7 +119,15 @@ def seed(path, chunk_id):
             ["nice", "-n", "15", "ffmpeg", "-v", "error", "-i", str(path),
              "-c:v", "copy", "-c:a", "aac", "-b:a", "128k", "-ar", "44100",
              "-ac", "2", "-f", "segment", "-segment_time",
-             str(common.CHUNK_SECONDS), "-segment_format", "mpegts", pattern],
+             str(common.CHUNK_SECONDS), "-segment_format", "mpegts",
+             # Load-bearing, and its absence cost 126 pusher restarts. -c copy
+             # keeps the source timestamps, so without this the second chunk of
+             # a file starts at 300s, the third at 600s, and so on. feeder.py
+             # adds its own cumulative -output_ts_offset on top, assuming every
+             # chunk starts near zero the way prep's re-encoded ones do. The two
+             # offsets compound, the flv muxer gets timestamps it will not
+             # accept, and the pusher dies seven seconds after every restart.
+             "-reset_timestamps", "1", pattern],
             capture_output=True, text=True, timeout=REMUX_TIMEOUT_SECONDS)
     except subprocess.TimeoutExpired:
         log(f"timeout {path.name} apres {REMUX_TIMEOUT_SECONDS}s, abandon")
