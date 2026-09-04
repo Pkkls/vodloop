@@ -4,7 +4,7 @@
 #
 # The floor is not politeness. Chunks are written to the same volume, so a full
 # disk stops the encoder and the channel falls back to the standby clip: the
-# library would grow until it took the stream off the air.
+# library would otherwise grow until it took the stream off the air.
 #
 #     sh tools/fill-until.sh 30      stop at a 30 GB library
 set -u
@@ -18,8 +18,24 @@ OUT="${VODLOOP_OUT:-$HOME/Downloads/vodloop-out}"
 HERE=$(dirname "$0")
 LOG="$OUT/fill-until.log"
 
+# On Windows "python3" is a Store shim that prints an advert and exits 0, so a
+# run picked no ids, produced an empty batch, and reported the channel as
+# exhausted. Pick an interpreter that answers, and refuse to run without one.
+PY=""
+for candidate in python3 python py; do
+    if "$candidate" -c "import sys" > /dev/null 2>&1; then
+        PY="$candidate"
+        break
+    fi
+done
+if [ -z "$PY" ]; then
+    echo "aucun interpreteur python utilisable" >&2
+    exit 1
+fi
+
 mkdir -p "$OUT"
 : > "$LOG"
+echo "interpreteur: $PY" >> "$LOG"
 
 remote() { ssh -n -o BatchMode=yes -i "$KEY" "$HOST" "$1"; }
 
@@ -50,7 +66,10 @@ while : ; do
     fi
 
     remote "ls -1 ~/videos" > "$OUT/have.txt" 2>> "$LOG"
-    python3 - "$OUT" "$BATCH" >> "$LOG" 2>&1 <<'PY'
+    rm -f "$OUT/batch.txt"
+    # the exit code decides, not the size of what came out: an empty batch from
+    # a selector that crashed reads exactly like a channel with nothing left
+    if ! "$PY" - "$OUT" "$BATCH" >> "$LOG" 2>&1 <<'PY'
 import pathlib, sys
 out = pathlib.Path(sys.argv[1])
 batch = int(sys.argv[2])
@@ -62,12 +81,22 @@ todo = [r[0] for r in rows
 (out / "batch.txt").write_bytes(("\n".join(todo[:batch]) + "\n").encode())
 print(f"{len(todo)} manquantes, lot de {len(todo[:batch])}")
 PY
+    then
+        echo "ARRET: la selection des ids a echoue" >> "$LOG"
+        break
+    fi
     if [ ! -s "$OUT/batch.txt" ]; then
         echo "ARRET: plus rien a ajouter sur cette chaine" >> "$LOG"
         break
     fi
+
     sh "$HERE/fill-library.sh" "$OUT/batch.txt" >> "$LOG" 2>&1
-    echo "tour $round termine" >> "$LOG"
+    pushed=$(grep -c "pousse (" "$OUT/fill.log")
+    echo "tour $round termine, $pushed pousse(s)" >> "$LOG"
+    if [ "$pushed" -eq 0 ]; then
+        echo "ARRET: un tour entier sans un seul telechargement, le mur est en place" >> "$LOG"
+        break
+    fi
 done
 
 echo "TERMINE" >> "$LOG"
