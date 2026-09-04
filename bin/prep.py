@@ -268,7 +268,7 @@ def take_dropped_files(queue):
             "status": "pending",
             "by": "file",
             "by_name": "",
-            "title": common.clean_text(candidate.stem, 120),
+            "title": common.pretty_title(candidate.stem),
             "votes": [],
             "added_at": time.time(),
         })
@@ -346,7 +346,7 @@ def refill_from_library(queue):
             "status": "pending",
             "by": "file",
             "by_name": "",
-            "title": common.clean_text(src.stem, 120),
+            "title": common.pretty_title(src.stem),
             "votes": [],
             "added_at": time.time(),
         })

@@ -246,5 +246,25 @@ def library():
         return []
     files = sorted(p for p in folder.iterdir()
                    if p.is_file() and p.suffix.lower() in MEDIA_SUFFIXES)
-    return [{"n": n, "title": clean_text(p.stem, 120), "path": str(p)}
+    return [{"n": n, "title": pretty_title(p.stem), "path": str(p)}
             for n, p in enumerate(files, 1)]
+
+# What a downloader leaves on a filename and a reader does not want: the video
+# id it appends to keep names unique, the uploader handle, and the underscores
+# it uses because a space is awkward in a shell.
+_TRAILING_ID = re.compile(r"-[A-Za-z0-9_-]{11}$")
+_TRAILING_HANDLE = re.compile(r"[-_]@[A-Za-z0-9_.-]+$")
+
+
+def pretty_title(stem):
+    """A filename turned into something worth reading in chat.
+
+    Everything stripped here is an artefact of how the file arrived, never part
+    of what the video is. The result is also what the search matches on, so a
+    person can type the words they can see.
+    """
+    text = _TRAILING_ID.sub("", str(stem))
+    text = _TRAILING_HANDLE.sub("", text)
+    text = text.replace("_", " ").replace(".", " ")
+    text = " ".join(text.split()).strip(" -")
+    return clean_text(text or str(stem), 120)

@@ -299,6 +299,24 @@ def test_allowlist_ignores_malformed_entries():
         common.ALLOWLIST = real
 
 
+def test_a_filename_becomes_something_worth_reading():
+    """Everything stripped is an artefact of how the file arrived, not the video."""
+    cases = {
+        "Drunk_Nuisance_Foreigner_Gets_Arrested_in_Japan-3tK-eUJUtMU":
+            "Drunk Nuisance Foreigner Gets Arrested in Japan",
+        "Benny_Mack_On_Mount_Fuji_-@SomeChannel-Ubhtiec0Fdw":
+            "Benny Mack On Mount Fuji",
+        "Big_Buck_Bunny-YE7VzlLtp-4": "Big Buck Bunny",
+        "Me_at_the_zoo-jNQXAC9IVRw": "Me at the zoo",
+    }
+    for stem, expected in cases.items():
+        assert common.pretty_title(stem) == expected, (stem, common.pretty_title(stem))
+    # a name that is only an id keeps something rather than becoming empty
+    assert common.pretty_title("dQw4w9WgXcQ") == "dQw4w9WgXcQ"
+    # and control characters do not survive, as everywhere else
+    assert "" not in common.pretty_title("clip[31m_one-dQw4w9WgXcQ")
+
+
 def test_the_list_is_paged_and_numbered():
     queue, state = fresh()
     reply, changed = say(queue, state, "u1", "!vods", now=1000)
