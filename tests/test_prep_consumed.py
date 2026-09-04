@@ -103,7 +103,7 @@ check("aucune liste laissee derriere",
 
 # --- a file in the wrong shape is fixed once, not re-encoded forever -------
 calls = []
-real_norm, prep.normalise_in_place = prep.normalise_in_place, lambda p: calls.append(p)
+real_norm, prep.normalise_in_place = prep.normalise_in_place, lambda p, title=None: calls.append(p)
 real_match, prep.matches_target = prep.matches_target, lambda p: False
 real_popen, prep.subprocess.Popen = prep.subprocess.Popen, FakeEncoder
 FakeEncoder.segments = 1

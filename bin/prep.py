@@ -22,24 +22,46 @@ import common
 FONT = "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"
 
 
-def overlay_filter(title_file):
-    """Burn the title into the picture while prep is already re-encoding, so the
-    overlay costs nothing at push time, where the stream is only remuxed.
+def _drawtext(text_file, size, alpha, y):
+    """One drawtext box reading its text from a file.
 
     The title comes from YouTube, so a hostile one must not be able to reach the
     filter graph. Two things prevent that: the text is read from a file instead
     of being spliced into the graph string, and expansion is off so a title
     containing %{...} is drawn literally rather than evaluated.
     """
+    escaped = str(text_file).replace("\\", "/").replace(":", r"\:")
+    return (
+        "drawtext=fontfile=" + FONT
+        + f":textfile={escaped}:expansion=none:reload=0"
+        + f":fontsize={size}:fontcolor=white@{alpha}"
+        + ":box=1:boxcolor=black@0.45:boxborderw=10"
+        + f":x=28:y={y}"
+    )
+
+
+def overlay_filter(title_file, next_file=None):
+    """Burn what is playing, and what follows, while prep is already re-encoding
+    so the overlay costs nothing at push time, where the stream is only remuxed.
+
+    Two stacked boxes rather than one two-line box: the second line is the
+    weaker information and reads as such only if it is smaller and dimmer.
+
+    The "next" line is what the queue says at encode time. A vote landing later
+    can change the real order, and this text cannot follow it: drawtext bakes
+    pixels. It is a strong hint, not a promise, which is why it is worded as
+    one. An always-accurate answer is what !next and the dashboard are for.
+    """
     if not pathlib.Path(FONT).exists():
         return common.VFILTER
-    escaped = str(title_file).replace("\\", "/").replace(":", r"\:")
-    return (
-        common.VFILTER + ",drawtext=fontfile=" + FONT
-        + f":textfile={escaped}:expansion=none:reload=0"
-        + ":fontsize=22:fontcolor=white@0.85:box=1:boxcolor=black@0.45"
-        + ":boxborderw=10:x=28:y=h-th-28"
-    )
+    parts = [common.VFILTER]
+    if next_file is not None and pathlib.Path(next_file).exists():
+        # the upper box sits one line higher, so the pair reads top-down
+        parts.append(_drawtext(title_file, 23, "0.92", "h-th-58"))
+        parts.append(_drawtext(next_file, 17, "0.60", "h-th-26"))
+    else:
+        parts.append(_drawtext(title_file, 23, "0.92", "h-th-28"))
+    return ",".join(parts)
 
 YTDLP = shutil.which("yt-dlp") or str(common.ROOT.parent / ".local/bin/yt-dlp")
 FORMAT = "bv*[height<=1080][vcodec^=avc1]+ba/b[height<=1080]/b"
@@ -106,13 +128,23 @@ def matches_target(path):
     return out.strip().splitlines()[:1] == [want]
 
 
-def normalise_in_place(path):
+def normalise_in_place(path, title_file=None):
     """Re-encode a library file into the exact shape a chunk must have, once.
 
     A library file is replayed forever. Encoding it on every pass costs more
     wall time than the video buys back on this box, so the queue can never get
     ahead and the channel falls back to the standby clip. Doing it once here
     means no one has to remember to run a tool after adding videos.
+
+    The title is burned here rather than at chunk time, and that is the only
+    place it can be free: once a file is in the target shape every later pass
+    remuxes it, and a remux cannot draw. Burning it at chunk time instead would
+    force a re-encode of the one class of file that currently keeps a picture on
+    the wire.
+
+    Only the name of the video is burned. Who asked for it, and what follows it,
+    both change on every rotation, so baking either would make this file lie on
+    every play after the first.
 
     Every failure returns None and the caller encodes the file the slow way.
     This is an optimisation, and an optimisation that can stop the pipeline is
@@ -124,9 +156,16 @@ def normalise_in_place(path):
     """
     target = path.with_suffix(".norm.mp4")
     print(f"normalisation ({path.name})", flush=True)
+    encode = list(common.ENCODE)
+    if title_file is not None and pathlib.Path(title_file).exists():
+        # ponytail: no marker is written to say a file has been captioned. The
+        # guard is that a normalised file already matches the target, so this
+        # never runs twice on it. Change the target shape and the whole library
+        # is re-normalised, which would stack a second caption on the first.
+        encode[encode.index("-vf") + 1] = overlay_filter(title_file)
     try:
         out = subprocess.run(
-            ["ffmpeg", "-v", "error", "-y", "-i", str(path)] + list(common.ENCODE)
+            ["ffmpeg", "-v", "error", "-y", "-i", str(path)] + encode
             + ["-f", "mp4", str(target)],
             capture_output=True, text=True, timeout=common.ENCODE_TIMEOUT_CEILING)
         if out.returncode != 0 or not target.exists():
@@ -148,26 +187,43 @@ def normalise_in_place(path):
     return final
 
 
-def prepare(item):
+def prepare(item, upcoming=None):
     """Stream one URL through ffmpeg into numbered chunks. True on success."""
     common.SEGMENTS.mkdir(parents=True, exist_ok=True)
     pattern = str(common.SEGMENTS / f"{item['id']:05d}_%05d.ts")
 
     title_file = common.STATE / f"title_{item['id']:05d}.txt"
-    caption = common.clean_text(item.get("title"), 70)
+    name = common.clean_text(item.get("title"), 70)
+    caption = name
     if item.get("by_name"):
         caption = f"{caption}   -   requested by {common.clean_text(item['by_name'], 24)}"
     title_file.write_text(caption, encoding="utf-8")
 
+    # the burned-in copy carries the name alone. The requester belongs to one
+    # request, and this file is replayed forever: baked in, it would credit the
+    # wrong person on every play after the first.
+    name_file = common.STATE / f"name_{item['id']:05d}.txt"
+    name_file.write_text(name, encoding="utf-8")
+
+    # written even when nothing follows, so a stale file from the previous item
+    # can never be picked up and drawn as this one's "next"
+    next_file = common.STATE / f"next_{item['id']:05d}.txt"
+    following = common.clean_text(
+        (upcoming or {}).get("title") or (upcoming or {}).get("url"), 60)
+    next_file.write_text(f"a suivre  {following}" if following else "",
+                         encoding="utf-8")
+    if not following:
+        next_file.unlink(missing_ok=True)
+
     encode = list(common.ENCODE)
-    encode[encode.index("-vf") + 1] = overlay_filter(title_file)
+    encode[encode.index("-vf") + 1] = overlay_filter(title_file, next_file)
     if item.get("path"):
         source = pathlib.Path(item["path"])
         # a library file in the wrong shape is normalised once instead of being
         # re-encoded on every pass through the rotation
         if (not matches_target(source) and not consumable(source)
                 and seconds_on_disk() >= NORMALISE_ABOVE_SECONDS):
-            fixed = normalise_in_place(source)
+            fixed = normalise_in_place(source, name_file)
             if fixed is not None:
                 item["path"] = str(fixed)
                 source = fixed
@@ -415,13 +471,16 @@ def main():
             continue
 
         item = pending[0]
+        # what the queue says follows, at encode time. A vote landing later can
+        # still change it, so the overlay words it as a hint rather than a fact.
+        upcoming = pending[1] if len(pending) > 1 else None
 
         if item.get("path"):
             # handed over by the operator, not requested by a stranger: there is
             # no publisher to check and no downloader to ask
             item["status"] = "preparing"
             common.save_queue(queue)
-            ok = prepare(item)
+            ok = prepare(item, upcoming)
             if not ok:
                 if consumable(item["path"]):
                     failed = common.INCOMING / "failed"
@@ -476,7 +535,7 @@ def main():
         item["status"] = "preparing"
         common.save_queue(queue)
 
-        ok = prepare(item)
+        ok = prepare(item, upcoming)
 
         queue = common.load_queue()  # reload: the dashboard may have edited it
         for entry in queue["items"]:
