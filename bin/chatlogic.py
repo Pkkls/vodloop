@@ -27,7 +27,8 @@ import common
 
 # Every string returned from here can land in chat, so they are all written in
 # the channel's language rather than the one the code is discussed in.
-HELP = "!play <youtube link>  |  !vote <n>  |  !skip"
+HELP = "!vods for the list  |  !play <number or words>  |  !vote <n>  |  !skip  |  !next"
+PAGE = 6  # entries per !vods page, so one answer stays one readable line
 
 
 def new_state():
@@ -90,7 +91,7 @@ def _prune(queue):
 
 
 def handle(message, queue, state, mods=(), now=None, verdicts=None, config=None,
-           owner=None):
+           owner=None, library=()):
     """Apply one chat message. Returns (reply or None, whether state changed)."""
     now = time.time() if now is None else now
 
@@ -120,8 +121,12 @@ def handle(message, queue, state, mods=(), now=None, verdicts=None, config=None,
     argument = argument.strip()
     is_mod = user_id in mods
 
+    if command in ("!vods", "!list", "!vod"):
+        return _vods(argument, library)
+    if command in ("!next", "!queue"):
+        return _next(queue)
     if command in ("!play", "!add"):
-        return _add(argument, queue, state, user_id, message, now, is_mod, verdicts, config)
+        return _play(argument, queue, state, user_id, message, now, is_mod, config, library)
     if command in ("!vote", "!v"):
         return _vote(argument, queue, user_id)
     if command == "!skip":
@@ -207,6 +212,105 @@ def _add(argument, queue, state, user_id, message, now, is_mod, verdicts=None, c
         state["last_add"] = {k: v for k, v in state["last_add"].items() if v > cutoff}
     _prune(queue)
     return "added", True
+
+
+def _vods(argument, library):
+    """The list people read numbers from, one page at a time.
+
+    A chat line that scrolls past in one frame is not a list, so this answers a
+    handful at a time and says which page it is on.
+    """
+    if not library:
+        return "the library is empty", False
+    pages = (len(library) + PAGE - 1) // PAGE
+    page = int(argument) if argument.isdigit() and len(argument) <= 4 else 1
+    page = max(1, min(page, pages))
+    listed = "  ".join(f"{e['n']}. {e['title'][:38]}"
+                       for e in library[(page - 1) * PAGE: page * PAGE])
+    return f"[page {page}/{pages}] {listed}", False
+
+
+def _next(queue):
+    """What is queued, in the order prep will take it.
+
+    Not what is on screen. This side never sees the feeder, and answering
+    "playing" with a queue entry would be a guess dressed up as a fact.
+    """
+    live = ("pending", "preparing", "ready")
+    waiting = [i for i in queue["items"] if i["status"] in live]
+    if not waiting:
+        return "queue empty, the library keeps rotating on its own", False
+    upcoming = playback_order(queue) or waiting
+    title = common.clean_text(upcoming[0].get("title") or upcoming[0].get("url") or "?", 60)
+    return f"next up: {title}  ({len(waiting)} waiting)", False
+
+
+def _find(argument, library):
+    """An entry, None when nothing matches, or the count when several do."""
+    if argument.isdigit() and len(argument) <= 4:
+        wanted = int(argument)
+        return next((e for e in library if e["n"] == wanted), None)
+    words = [w for w in argument.lower().split() if w][:6]
+    if not words:
+        return None
+    hits = [e for e in library if all(w in e["title"].lower() for w in words)]
+    if len(hits) == 1:
+        return hits[0]
+    return len(hits) if hits else None
+
+
+def _play(argument, queue, state, user_id, message, now, is_mod, config, library):
+    """Queue something the machine can actually play.
+
+    The old command took a YouTube link and handed it to the downloader, which
+    this host is refused. It answered "added" and the video never arrived, so
+    every request was a promise the machine could not keep. Requests now name
+    something already on disk, which is also what keeps the channel to one
+    group's material: there is no way to name anything else.
+    """
+    if not library:
+        return "nothing in the library yet", False
+    if argument.startswith("http") or "youtube.com" in argument or "youtu.be" in argument:
+        return _refuse(state, user_id, now, "links are not accepted, try !vods", config)
+
+    found = _find(argument, library)
+    if found is None:
+        return _refuse(state, user_id, now, "no match, try !vods", config)
+    if isinstance(found, int):
+        return _refuse(state, user_id, now, f"{found} matches, be more precise", config)
+
+    if not is_mod:
+        waited = now - state["last_add"].get(user_id, 0)
+        if waited < setting(config, "ADD_COOLDOWN_SECONDS"):
+            return _refuse(state, user_id, now,
+                           f"wait {int(setting(config, 'ADD_COOLDOWN_SECONDS') - waited)}s", config)
+        if len(_pending_of(queue, user_id)) >= setting(config, "MAX_PENDING_PER_USER"):
+            return _refuse(state, user_id, now, "you already have enough waiting", config)
+
+    live = ("pending", "preparing", "ready")
+    if any(i.get("path") == found["path"] and i["status"] in live for i in queue["items"]):
+        return _refuse(state, user_id, now, "already in the queue", config)
+    if len([i for i in queue["items"] if i["status"] in live]) >= common.MAX_QUEUE:
+        return "the queue is full", False
+
+    queue["seq"] += 1
+    queue["items"].append({
+        "id": queue["seq"],
+        "url": found["title"],
+        "path": found["path"],
+        "status": "pending",
+        "by": user_id,
+        "by_name": common.clean_text(message.get("username"), 40),
+        "title": found["title"],
+        "votes": [],
+        "added_at": now,
+    })
+    state["last_add"][user_id] = now
+    if len(state["last_add"]) > 5000:
+        cutoff = now - setting(config, "ADD_COOLDOWN_SECONDS")
+        state["last_add"] = {k: v for k, v in state["last_add"].items() if v > cutoff}
+    _prune(queue)
+    return f"queued: {found['title'][:60]}", True
 
 
 def _vote(argument, queue, user_id):

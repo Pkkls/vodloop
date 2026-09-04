@@ -186,6 +186,21 @@ class Store:
         self.verdict_stamp = self._verdict_mtime()
         self.config = common.load_botconfig()
         self.config_stamp = self._config_mtime()
+        self.library = common.library()
+        self.library_stamp = self._library_mtime()
+
+    def _library_mtime(self):
+        """The library folder's own timestamp, which moves when a file lands.
+
+        Rescanning the folder for every message would turn a busy chat into a
+        directory scan per line, and the answer only changes when a file is
+        added or removed.
+        """
+        root = os.environ.get("VODLOOP_LIBRARY")
+        try:
+            return os.stat(root).st_mtime if root else 0.0
+        except OSError:
+            return 0.0
 
     def _mtime(self):
         try:
@@ -219,6 +234,10 @@ class Store:
         if self._config_mtime() != self.config_stamp:
             self.config = common.load_botconfig()
             self.config_stamp = self._config_mtime()
+        # a video added to the library becomes askable without a restart
+        if self._library_mtime() != self.library_stamp:
+            self.library = common.library()
+            self.library_stamp = self._library_mtime()
 
     def flush(self, now, force=False):
         if not self.dirty:
@@ -239,7 +258,8 @@ def apply(event, mods, store, replier=None, owner=None):
     now = time.time()
     store.refresh()
     reply, changed = chatlogic.handle(message, store.queue, store.state, mods, now,
-                                      store.verdicts, store.config, owner=owner)
+                                      store.verdicts, store.config, owner=owner,
+                                      library=store.library)
     if changed:
         store.dirty = True
     store.flush(now)

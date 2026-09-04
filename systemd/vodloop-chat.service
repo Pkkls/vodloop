@@ -10,6 +10,10 @@ WorkingDirectory=/home/ubuntu/vodloop
 # through its environment only: never in argv, never in a file it reads itself.
 EnvironmentFile=/home/ubuntu/vodloop/bus.env
 Environment=KICK_USER_ID=127469285
+# The same folder prep plays from, because the chat can only offer what is on
+# disk. Without it every request is answered "the library is empty", which is
+# indistinguishable from a broken bot.
+Environment=VODLOOP_LIBRARY=/home/ubuntu/videos
 ExecStart=/usr/bin/python3 /home/ubuntu/vodloop/bin/chat.py
 Restart=always
 RestartSec=5

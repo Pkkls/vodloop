@@ -220,3 +220,31 @@ def ready_segments():
     if not SEGMENTS.exists():
         return []
     return sorted(SEGMENTS.glob("*.ts"))
+
+# One definition, used by prep to decide what it may queue and by the chat to
+# decide what it may offer. Two copies would drift, and the drift shows up as a
+# file that plays but cannot be asked for, or the reverse.
+MEDIA_SUFFIXES = {".mp4", ".mkv", ".mov", ".webm", ".ts", ".m4v", ".avi"}
+
+
+def library():
+    """What the chat may ask for, numbered.
+
+    The number is the position in the sorted listing, so it is stable between
+    two messages and survives a restart. It is not an id: adding a file shifts
+    the ones after it, which is why the listing is what people read from.
+
+    Only files under VODLOOP_LIBRARY are ever offered. That is what keeps the
+    channel to one group's material: not a rule about what people may type, but
+    the absence of any way to name anything else.
+    """
+    root = os.environ.get("VODLOOP_LIBRARY")
+    if not root:
+        return []
+    folder = pathlib.Path(root)
+    if not folder.is_dir():
+        return []
+    files = sorted(p for p in folder.iterdir()
+                   if p.is_file() and p.suffix.lower() in MEDIA_SUFFIXES)
+    return [{"n": n, "title": clean_text(p.stem, 120), "path": str(p)}
+            for n, p in enumerate(files, 1)]

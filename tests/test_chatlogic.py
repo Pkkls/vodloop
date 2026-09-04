@@ -13,16 +13,22 @@ import chatlogic  # noqa: E402
 import common  # noqa: E402
 
 MODS = ("mod1",)
+# The chat can only ask for what is on disk, so every case here needs a disk to
+# ask about. Titles are distinct on purpose: the search path must be able to
+# fail to match, and to match too much.
+LIBRARY = [{"n": n, "title": f"clip {n:02d} sample", "path": f"/lib/clip{n:02d}.mp4"}
+           for n in range(1, 21)]
 
 
 def fresh():
     return {"seq": 0, "items": []}, chatlogic.new_state()
 
 
-def say(queue, state, user, text, now=1000.0, name="someone", verdicts=None, config=None):
+def say(queue, state, user, text, now=1000.0, name="someone", verdicts=None, config=None,
+        library=None):
     return chatlogic.handle(
         {"user_id": user, "username": name, "text": text}, queue, state, MODS, now,
-        verdicts, config,
+        verdicts, config, None, LIBRARY if library is None else library,
     )
 
 
@@ -71,15 +77,15 @@ def test_url_accepts_the_real_shapes_and_always_rebuilds_https():
 
 def test_one_user_cannot_flood():
     queue, state = fresh()
-    reply, changed = say(queue, state, "u1", "!play dQw4w9WgXcQ", now=1000)
-    assert changed and reply == "added"
+    reply, changed = say(queue, state, "u1", "!play 1", now=1000)
+    assert changed and reply.startswith("queued:")
     # a second add inside the cooldown is refused. A refusal now does change the
     # state, it records the rejection, so the property to assert is the one that
     # matters: nothing reached the queue.
-    reply, changed = say(queue, state, "u1", "!play AAAAAAAAAAA", now=1010)
+    reply, changed = say(queue, state, "u1", "!play 2", now=1010)
     assert "wait" in reply and len(queue["items"]) == 1
     # and is allowed once the cooldown has passed
-    reply, changed = say(queue, state, "u1", "!play AAAAAAAAAAA", now=1100)
+    reply, changed = say(queue, state, "u1", "!play 2", now=1100)
     assert changed, reply
 
 
@@ -87,23 +93,27 @@ def test_one_user_cannot_hold_the_whole_queue():
     queue, state = fresh()
     now = 1000.0
     for n in range(common.MAX_PENDING_PER_USER):
-        _, changed = say(queue, state, "u1", f"!play {'a' * 10}{n}", now=now)
+        _, changed = say(queue, state, "u1", f"!play {n + 3}", now=now)
         assert changed
         now += common.ADD_COOLDOWN_SECONDS + 1
-    reply, changed = say(queue, state, "u1", "!play bbbbbbbbbb9", now=now)
+    reply, changed = say(queue, state, "u1", "!play 9", now=now)
     assert "waiting" in reply and len(queue["items"]) == common.MAX_PENDING_PER_USER
 
 
 def test_duplicates_are_refused():
     queue, state = fresh()
-    say(queue, state, "u1", "!play dQw4w9WgXcQ", now=1000)
-    reply, changed = say(queue, state, "u2", "!play https://youtu.be/dQw4w9WgXcQ", now=1000)
+    say(queue, state, "u1", "!play 1", now=1000)
+    # a different person, so the per-user cooldown is not what refuses this one
+    reply, changed = say(queue, state, "u2", "!play 1", now=1000)
+    assert reply == "already in the queue" and len(queue["items"]) == 1
+    # and the same thing asked for by its words, not its number
+    reply, changed = say(queue, state, "u3", "!play clip 01", now=1000)
     assert reply == "already in the queue" and len(queue["items"]) == 1
 
 
 def test_a_vote_counts_once_per_user():
     queue, state = fresh()
-    say(queue, state, "u1", "!play dQw4w9WgXcQ", now=1000)
+    say(queue, state, "u1", "!play 1", now=1000)
     item = queue["items"][0]
     for _ in range(10):
         say(queue, state, "u2", f"!vote {item['id']}", now=1000)
@@ -112,7 +122,7 @@ def test_a_vote_counts_once_per_user():
 
 def test_vote_argument_is_not_trusted():
     queue, state = fresh()
-    say(queue, state, "u1", "!play dQw4w9WgXcQ", now=1000)
+    say(queue, state, "u1", "!play 1", now=1000)
     for junk in ("!vote abc", "!vote " + "9" * 40, "!vote -1", "!vote 99999", "!vote"):
         _, changed = say(queue, state, "u2", junk, now=1000)
         assert not changed, junk
@@ -160,7 +170,7 @@ def test_moderator_powers_are_not_available_to_everyone():
     reply, changed = say(queue, state, "mod1", "!ban u9", now=1000)
     assert changed and "u9" in state["banned"]
     # a banned user is then ignored entirely
-    _, changed = say(queue, state, "u9", "!play dQw4w9WgXcQ", now=1000)
+    _, changed = say(queue, state, "u9", "!play 1", now=1000)
     assert not changed
     # and a moderator skips alone
     reply, _ = say(queue, state, "mod1", "!skip", now=1000)
@@ -182,7 +192,7 @@ def test_noise_is_ignored_in_silence():
 
 def test_control_characters_never_survive():
     queue, state = fresh()
-    say(queue, state, "u1", "!play dQw4w9WgXcQ", now=1000, name="ev\x00il\x1b[31m")
+    say(queue, state, "u1", "!play 1", now=1000, name="ev\x00il\x1b[31m")
     stored = queue["items"][0]["by_name"]
     assert all(ord(c) >= 0x20 for c in stored), repr(stored)
 
@@ -192,14 +202,14 @@ def test_queue_file_stays_bounded():
     queue["items"] = [{"id": n, "status": "played", "by": "u", "url": ""}
                       for n in range(common.MAX_QUEUE + 50)]
     queue["seq"] = len(queue["items"])
-    say(queue, state, "u1", "!play dQw4w9WgXcQ", now=1000)
+    say(queue, state, "u1", "!play 1", now=1000)
     assert len(queue["items"]) <= common.MAX_QUEUE + 1, len(queue["items"])
 
 
 def test_most_voted_plays_first():
     queue, state = fresh()
-    say(queue, state, "u1", "!play dQw4w9WgXcQ", now=1000)
-    say(queue, state, "u2", "!play AAAAAAAAAAA", now=1000)
+    say(queue, state, "u1", "!play 1", now=1000)
+    say(queue, state, "u2", "!play 2", now=1000)
     second = queue["items"][1]
     say(queue, state, "u3", f"!vote {second['id']}", now=1000)
     assert chatlogic.playback_order(queue)[0]["id"] == second["id"]
@@ -289,22 +299,80 @@ def test_allowlist_ignores_malformed_entries():
         common.ALLOWLIST = real
 
 
-def test_a_video_already_refused_costs_nothing_the_second_time():
-    """The point of the cache: no queue entry, so no yt-dlp call to refuse it again."""
+def test_the_list_is_paged_and_numbered():
+    queue, state = fresh()
+    reply, changed = say(queue, state, "u1", "!vods", now=1000)
+    assert not changed and reply.startswith("[page 1/"), reply
+    assert "1. clip 01 sample" in reply, reply
+    # a page past the end lands on the last one rather than answering nothing
+    far, _ = say(queue, state, "u1", "!vods 99", now=1000)
+    assert far.startswith("[page 4/4]"), far
+    # and an empty library says so instead of pretending to be a page
+    empty, _ = say(queue, state, "u1", "!vods", now=1000, library=[])
+    assert empty == "the library is empty", empty
+
+
+def test_a_request_by_words_needs_to_be_unambiguous():
+    queue, state = fresh()
+    # every title contains "clip", so this must refuse rather than pick one
+    # a refusal records the rejection, so "changed" is true; the queue is the
+    # property that has to hold
+    reply, _ = say(queue, state, "u1", "!play clip", now=1000)
+    assert "matches, be more precise" in reply, reply
+    assert queue["items"] == []
+    # narrow it and it goes through
+    reply, changed = say(queue, state, "u2", "!play clip 07", now=1000)
+    assert changed and reply.startswith("queued: clip 07"), reply
+    # and words that match nothing are refused, not guessed at
+    reply, _ = say(queue, state, "u3", "!play zzzz", now=1000)
+    assert reply == "no match, try !vods", reply
+
+
+def test_a_number_outside_the_library_is_refused():
+    queue, state = fresh()
+    for text in ("!play 0", "!play 21", "!play 9999"):
+        reply, _ = say(queue, state, "u1", text, now=1000)
+        assert reply == "no match, try !vods", (text, reply)
+    assert queue["items"] == []
+
+
+def test_next_reports_the_queue_and_never_guesses_the_screen():
+    queue, state = fresh()
+    reply, changed = say(queue, state, "u1", "!next", now=1000)
+    assert not changed and "queue empty" in reply, reply
+    say(queue, state, "u2", "!play 3", now=1000)
+    reply, _ = say(queue, state, "u3", "!next", now=1000)
+    assert reply.startswith("next up: clip 03") and "1 waiting" in reply, reply
+
+
+def test_a_link_is_refused_instead_of_queued_to_die():
+    """The old command took a link, answered "added", and the video never came.
+
+    This host is refused the download, so a request naming a URL could only ever
+    become a queue entry that fails later. Refusing it in the answer is the whole
+    difference between a bot that works and one that lies.
+    """
+    queue, state = fresh()
+    for link in ("https://youtu.be/dQw4w9WgXcQ",
+                 "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+                 "http://example.com/clip.mp4"):
+        queue, state = fresh()
+        reply, _ = say(queue, state, "u1", f"!play {link}", now=1000)
+        assert reply == "links are not accepted, try !vods", reply
+        assert queue["items"] == [], queue["items"]
+
+
+def test_the_verdict_cache_is_unreachable_from_chat_now():
+    """It gated URLs, and chat can no longer name one, so it decides nothing here.
+
+    Kept as a control: a stale verdict must not leak into a library request and
+    refuse something that is sitting on disk.
+    """
     queue, state = fresh()
     verdicts = {"dQw4w9WgXcQ": {"ok": False, "reason": "channel not on the allowlist"}}
-    reply, _ = say(queue, state, "u1", "!play dQw4w9WgXcQ", now=1000, verdicts=verdicts)
-    assert reply == "channel not on the allowlist", reply
-    assert queue["items"] == [], queue["items"]
-    # the control: a video the cache says is fine still goes through normally
-    queue, state = fresh()
-    reply, changed = say(queue, state, "u1", "!play dQw4w9WgXcQ", now=1000,
-                         verdicts={"dQw4w9WgXcQ": {"ok": True}})
-    assert changed and reply == "added" and len(queue["items"]) == 1
-    # and an unknown video is not refused on a guess
-    queue, state = fresh()
-    reply, changed = say(queue, state, "u1", "!play dQw4w9WgXcQ", now=1000, verdicts={})
-    assert changed and reply == "added"
+    reply, changed = say(queue, state, "u1", "!play 1", now=1000, verdicts=verdicts)
+    assert changed and reply.startswith("queued:"), reply
+    assert len(queue["items"]) == 1
 
 
 def test_a_user_who_only_earns_refusals_stops_getting_answers():
@@ -318,32 +386,35 @@ def test_a_user_who_only_earns_refusals_stops_getting_answers():
     assert len(answered) == common.MAX_REJECTS_IN_WINDOW - 1, answered
     assert replies[-1] is None, replies
     # muted means muted: even a valid link gets nothing while the silence lasts
-    reply, changed = say(queue, state, "u1", "!play dQw4w9WgXcQ", now=now + 10)
+    reply, changed = say(queue, state, "u1", "!play 1", now=now + 10)
     assert reply is None and not changed and queue["items"] == []
     # and it does expire rather than being a permanent ban
-    reply, changed = say(queue, state, "u1", "!play dQw4w9WgXcQ",
+    reply, changed = say(queue, state, "u1", "!play 1",
                          now=now + common.REJECT_SILENCE_SECONDS + 20)
-    assert changed and reply == "added", reply
+    assert changed and reply.startswith("queued:"), reply
     # one loud user must not silence anybody else
-    reply, changed = say(queue, state, "u2", "!play AAAAAAAAAAA", now=now + 5)
-    assert changed and reply == "added", reply
+    reply, changed = say(queue, state, "u2", "!play 2", now=now + 5)
+    assert changed and reply.startswith("queued:"), reply
 
 
-def test_the_backlog_prep_still_owes_a_lookup_is_bounded():
+def test_the_queue_cannot_be_filled_past_its_cap():
+    """The cap that used to matter here counted items prep still owed a lookup.
+
+    A library request costs no lookup: the file is already on disk, so there is
+    nothing to bound on that side any more. What still has to hold is the total,
+    since every live entry is memory and a line in the state file.
+    """
     queue, state = fresh()
     now = 1000.0
-    for n in range(common.MAX_UNRESOLVED):
-        _, changed = say(queue, state, f"u{n}", f"!play {'b' * 10}{n % 10}", now=now)
-        assert changed
-        queue["items"][-1]["video_id"] = f"unique{n:05d}"  # keep them distinct
-    reply, changed = say(queue, state, "flood", "!play zzzzzzzzzzz", now=now)
-    assert not changed and "too many" in reply, reply
-    assert len(queue["items"]) == common.MAX_UNRESOLVED
-    # resolving the backlog reopens the door
-    for item in queue["items"]:
-        item["status"] = "ready"
-    reply, changed = say(queue, state, "flood", "!play zzzzzzzzzzz", now=now)
-    assert changed and reply == "added", reply
+    library = [{"n": n, "title": f"clip {n:03d}", "path": f"/lib/c{n:03d}.mp4"}
+               for n in range(1, common.MAX_QUEUE + 3)]
+    for n in range(common.MAX_QUEUE):
+        _, changed = say(queue, state, f"u{n}", f"!play {n + 1}", now=now, library=library)
+        assert changed, n
+    reply, changed = say(queue, state, "flood", f"!play {common.MAX_QUEUE + 1}",
+                         now=now, library=library)
+    assert not changed and reply == "the queue is full", reply
+    assert len(queue["items"]) == common.MAX_QUEUE
 
 
 def test_the_ban_list_stays_bounded():
@@ -385,8 +456,8 @@ def test_a_custom_command_answers_and_cannot_shadow_a_builtin():
 
     # the built-ins are matched first, so a custom entry with the same name is
     # dead weight rather than a takeover
-    reply, changed = say(queue, state, "u1", "!play dQw4w9WgXcQ", now=1000, config=config)
-    assert reply == "added" and len(queue["items"]) == 1, reply
+    reply, changed = say(queue, state, "u1", "!play 1", now=1000, config=config)
+    assert reply.startswith("queued:") and len(queue["items"]) == 1, reply
     reply, _ = say(queue, state, "u2", "!skip", now=1000, config=config)
     assert reply != "detourne", reply
 

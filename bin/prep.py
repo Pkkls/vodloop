@@ -230,7 +230,7 @@ def prepare(item):
     return True
 
 
-MEDIA_SUFFIXES = {".mp4", ".mkv", ".mov", ".webm", ".ts", ".m4v", ".avi"}
+MEDIA_SUFFIXES = common.MEDIA_SUFFIXES
 SETTLE_SECONDS = 30
 
 
