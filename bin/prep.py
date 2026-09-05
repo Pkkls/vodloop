@@ -16,6 +16,7 @@ import random
 import shutil
 import subprocess
 import sys
+import tempfile
 import time
 
 import chatlogic
@@ -110,6 +111,63 @@ def encode_budget(item):
     budget = length * common.ENCODE_TIMEOUT_FACTOR
     return max(common.ENCODE_TIMEOUT_FLOOR,
                min(budget, common.ENCODE_TIMEOUT_CEILING))
+
+
+# Ten seconds is enough because the defect is spread evenly through a file, one
+# packet roughly every six seconds, rather than clustered anywhere. Measured
+# 2026-09-05 over four library files: the ten second verdict agreed with the full
+# segmentation on all four, and the cost is about a second per item.
+REMUX_PROBE_SECONDS = 10
+
+
+def remux_is_safe(path):
+    """Whether copying this file's video yields chunks the pusher can send.
+
+    matches_target says the picture is already the right shape, which is what
+    makes the cheap path legal. It does not say the copy will come out playable,
+    and on 2026-09-05 that gap took the channel down for hours.
+
+    Copying the video out of some library files leaves a few dozen video packets
+    per chunk carrying no PTS at all. The transport stream holds them without
+    complaint, so nothing upstream notices, and prep reports a clean job. The flv
+    muxer at the far end refuses the first one with "Invalid argument" and the
+    pusher exits. systemd restarts it, the feeder is still holding that same
+    chunk, and it exits again: 1298 consecutive restarts, the whole time black.
+
+    Nothing on the reading side helps. Measured against a reproduced bad chunk,
+    +genpts, +igndts and +discardcorrupt all still exit 1, and dropping
+    -reset_timestamps or adding -copyts changes nothing on the writing side
+    either. Re-encoding is the only thing that produced a clean chunk, so the
+    only useful question is which files need it, and that is what this answers.
+
+    The source itself probes clean, so this has to remux to find out rather than
+    inspect the original.
+    """
+    probe = pathlib.Path(tempfile.gettempdir()) / f"remuxprobe_{os.getpid()}.ts"
+    try:
+        done = subprocess.run(
+            ["ffmpeg", "-hide_banner", "-loglevel", "error",
+             "-t", str(REMUX_PROBE_SECONDS), "-i", str(path),
+             # audio is transcoded on both paths, so it cannot be what differs;
+             # dropping it keeps the probe to about a second
+             "-c:v", "copy", "-an", "-f", "mpegts", "-y", str(probe)],
+            capture_output=True, timeout=120)
+        if done.returncode != 0 or not probe.exists():
+            # unreadable is not the same as unsafe, but the expensive path
+            # handles both and guessing the cheap one is what this exists to stop
+            return False
+        packets = subprocess.run(
+            ["ffprobe", "-v", "error", "-select_streams", "v",
+             "-show_entries", "packet=pts_time", "-of", "csv=p=0", str(probe)],
+            capture_output=True, text=True, timeout=120).stdout
+        # a probe that read nothing proves nothing, so it does not get to vote yes
+        if not packets.strip():
+            return False
+        return "N/A" not in packets
+    except (OSError, subprocess.SubprocessError):
+        return False
+    finally:
+        probe.unlink(missing_ok=True)
 
 
 def matches_target(path):
@@ -272,7 +330,7 @@ def prepare(item, upcoming=None):
             if fixed is not None:
                 item["path"] = str(fixed)
                 source = fixed
-        if matches_target(source):
+        if matches_target(source) and remux_is_safe(source):
             # nothing to redraw, so the title overlay goes with it: a caption is
             # not worth a channel that cannot keep a picture on the wire
             encode = list(common.REMUX)

@@ -105,6 +105,12 @@ check("aucune liste laissee derriere",
 calls = []
 real_norm, prep.normalise_in_place = prep.normalise_in_place, lambda p, title=None: calls.append(p)
 real_match, prep.matches_target = prep.matches_target, lambda p: False
+# Same reason as matches_target above: this probe remuxes the file for real
+# through subprocess.run, which reaches the patched Popen below and hands it a
+# path the fake encoder cannot read as a segment pattern. Whether a copy comes
+# out playable is measured in test_prep_remux_safety.py; here it only has to not
+# stand in the way of the question being asked.
+real_safe, prep.remux_is_safe = prep.remux_is_safe, lambda p: True
 real_popen, prep.subprocess.Popen = prep.subprocess.Popen, FakeEncoder
 FakeEncoder.segments = 1
 try:
@@ -149,6 +155,7 @@ try:
 finally:
     prep.normalise_in_place = real_norm
     prep.matches_target = real_match
+    prep.remux_is_safe = real_safe
     prep.subprocess.Popen = real_popen
 
 print()
