@@ -38,6 +38,12 @@ TARGET_FREE_BYTES = 8 * 1024 ** 3
 # Below this the rotation gets thin enough to be noticeable, and a disk that
 # still cannot be satisfied is a problem to report rather than to keep cutting.
 MIN_LIBRARY_FILES = 40
+# Above this, played files are retired even with disk to spare. Without it
+# nothing ever leaves: the collector stops at its own ceiling, the janitor only
+# woke on disk pressure, and the library sat at a fixed 69 files forever, which
+# is a rerun channel with no reruns to add. This is what makes room for new
+# material rather than merely surviving a full disk.
+MAX_LIBRARY_FILES = 62
 
 
 def free_bytes():
@@ -69,16 +75,18 @@ def main(argv):
     total = len([p for p in LIBRARY.iterdir()
                  if p.is_file() and p.suffix.lower() in MEDIA]) if LIBRARY.is_dir() else 0
 
+    over = max(0, total - MAX_LIBRARY_FILES)
     print(f"libre={before / 1024 ** 3:.1f}G cible={TARGET_FREE_BYTES / 1024 ** 3:.1f}G "
-          f"bibliotheque={total} fichiers plancher={MIN_LIBRARY_FILES}")
-    if before >= TARGET_FREE_BYTES:
+          f"bibliotheque={total} plafond={MAX_LIBRARY_FILES} plancher={MIN_LIBRARY_FILES}")
+    if before >= TARGET_FREE_BYTES and over == 0:
         print("rien a faire")
         return 0
 
     freed = 0
     kept = total
     for path in retirable(queue):
-        if before + freed >= TARGET_FREE_BYTES:
+        # keep going while either the disk or the ceiling asks for it
+        if before + freed >= TARGET_FREE_BYTES and kept <= MAX_LIBRARY_FILES:
             break
         if kept <= MIN_LIBRARY_FILES:
             print(f"plancher atteint a {kept} fichiers, il manque encore "
