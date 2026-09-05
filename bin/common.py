@@ -24,11 +24,25 @@ VFILTER = (
     f"scale={WIDTH}:{HEIGHT}:force_original_aspect_ratio=decrease,"
     f"pad={WIDTH}:{HEIGHT}:(ow-iw)/2:(oh-ih)/2,fps={FPS},format=yuv420p"
 )
+# What this costs is paid once and what it buys is kept forever, because
+# normalise_in_place overwrites the library file and the original is gone.
+# ultrafast disables most of what h264 compresses with, so it needed roughly
+# twice the bitrate of a normal preset to look the same, and it did not get it:
+# 47 files were written at 2500k ultrafast before this was noticed and cannot be
+# recovered without downloading them again. veryfast is the point where the
+# curve flattens on this box, and the bitrate rise matters more at 50fps than it
+# would at 30 because every frame gets half the bits.
+# The change is safe for what is already done: matches_target compares codec,
+# size and rate, never bitrate, so the 47 stay conformant and keep being
+# remuxed rather than being dragged through this again.
 ENCODE = [
     "-vf", VFILTER,
-    "-c:v", "libx264", "-preset", "ultrafast", "-b:v", "2500k",
+    "-c:v", "libx264", "-preset", "veryfast", "-b:v", "3800k",
+    # a live stream is judged on its worst moment, not its average, so the peak
+    # is capped rather than left to the bitrate target alone
+    "-maxrate", "4500k", "-bufsize", "9000k",
     "-g", str(FPS * 2), "-keyint_min", str(FPS * 2), "-sc_threshold", "0",
-    "-c:a", "aac", "-b:a", "128k", "-ar", "44100", "-ac", "2",
+    "-c:a", "aac", "-b:a", "160k", "-ar", "44100", "-ac", "2",
 ]
 # A source already in exactly that shape needs no picture work at all. Only the
 # audio is touched, because the sources carry opus and MPEG-TS will not take it,

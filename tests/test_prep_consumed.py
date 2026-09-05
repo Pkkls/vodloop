@@ -130,10 +130,20 @@ try:
                   "title": "V", "by_name": "", "duration": 60})
     check("reserve confortable: la normalisation demarre", len(calls) == 1, calls)
 
+    # Un fichier conforme est remuxe, et un remux ne peut rien dessiner. Il a
+    # donc droit a une passe, une seule, pour graver son titre. Sans la seconde
+    # verification ci-dessous cette exception se rejouerait a chaque tour et
+    # rencoderait la bibliotheque en boucle.
     prep.matches_target = lambda p: True
     prep.prepare({"id": 23, "path": str(library / "bon.mp4"), "url": "b",
                   "title": "B", "by_name": "", "duration": 60})
-    check("un fichier deja conforme n'est pas retouche", len(calls) == 1, calls)
+    check("un fichier conforme sans titre grave recoit une passe",
+          len(calls) == 2, calls)
+
+    prep.mark_captioned("bon.mp4")
+    prep.prepare({"id": 24, "path": str(library / "bon.mp4"), "url": "b",
+                  "title": "B", "by_name": "", "duration": 60})
+    check("une fois grave, il n'est plus jamais retouche", len(calls) == 2, calls)
     check("et il est remuxe, pas reencode", "copy" in FakeEncoder.last_args,
           FakeEncoder.last_args[:6])
 finally:

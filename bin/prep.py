@@ -11,6 +11,7 @@ error on the queue item rather than retried by other means.
 """
 import os
 import pathlib
+import json
 import shutil
 import subprocess
 import sys
@@ -128,6 +129,30 @@ def matches_target(path):
     return out.strip().splitlines()[:1] == [want]
 
 
+def captioned():
+    """Library files whose picture already carries their title.
+
+    A remux cannot draw, so a file in the target shape keeps whatever was burned
+    into it when it was last encoded and nothing else. Without this record the
+    47 files normalised before the caption existed would stay conformant, stay
+    remuxed, and never show a title again. Recording it by name rather than
+    probing the picture is the only cheap way to ask the question.
+    """
+    try:
+        return set(json.loads((common.STATE / "captioned.json").read_text()))
+    except (OSError, ValueError):
+        return set()
+
+
+def mark_captioned(name):
+    common.STATE.mkdir(parents=True, exist_ok=True)
+    done = captioned()
+    done.add(name)
+    tmp = common.STATE / "captioned.tmp"
+    tmp.write_text(json.dumps(sorted(done)))
+    tmp.replace(common.STATE / "captioned.json")
+
+
 def normalise_in_place(path, title_file=None):
     """Re-encode a library file into the exact shape a chunk must have, once.
 
@@ -183,6 +208,10 @@ def normalise_in_place(path, title_file=None):
             pass  # a read-only library cannot even be tidied up
         print(f"  echec: {exc}", flush=True)
         return None
+    if title_file is not None:
+        # recorded only on the path that actually drew, so a file normalised
+        # without a caption is not mistaken for one that has it
+        mark_captioned(final.name)
     print(f"  fait: {final.name}", flush=True)
     return final
 
@@ -221,7 +250,13 @@ def prepare(item, upcoming=None):
         source = pathlib.Path(item["path"])
         # a library file in the wrong shape is normalised once instead of being
         # re-encoded on every pass through the rotation
-        if (not matches_target(source) and not consumable(source)
+        # A file in the target shape still gets one pass if its picture carries
+        # no title, because a remux cannot add one later and this is the only
+        # moment the caption is free. Both cases sit behind the same buffer
+        # gate: a caption is never worth going dark for.
+        wants_caption = source.name not in captioned()
+        if ((not matches_target(source) or wants_caption)
+                and not consumable(source)
                 and seconds_on_disk() >= NORMALISE_ABOVE_SECONDS):
             fixed = normalise_in_place(source, name_file)
             if fixed is not None:
@@ -447,6 +482,42 @@ def disk_is_tight():
     return shutil.disk_usage(common.ROOT).free < common.MIN_FREE_BYTES
 
 
+# Below this much unplayed video, keeping a picture on the wire outranks
+# keeping the queue's order.
+STARVING_SECONDS = 10 * 60
+
+
+def cheapest_when_starving(pending):
+    """The item to prepare now: playback order, unless the queue is starving.
+
+    A file already in the target shape is remuxed in about a minute. One that is
+    not is re-encoded at 0.77x realtime, so a 33 minute VOD takes over two hours
+    during which the queue drains and the channel sits on the standby clip.
+    Taking the queue strictly in order means one wrong-shaped file at the head
+    blacks out the channel for as long as it takes, however much cheap material
+    is waiting behind it. Measured on 2026-09-05: 26 of 75 library files are
+    1280x718, two pixels short, and each one costs that full re-encode.
+
+    So while the queue is nearly empty the first item needing no picture work
+    wins. Above that line the normal order resumes and the expensive files are
+    prepared exactly when there is buffer to cover them, which is what
+    NORMALISE_ABOVE_SECONDS was already reaching for on the other side.
+
+    Order is bent only to keep a picture on the wire, and nothing is dropped:
+    what is skipped stays queued, ahead of whatever it was already ahead of.
+    """
+    if not pending:
+        return None
+    if seconds_on_disk() >= STARVING_SECONDS:
+        return pending[0]
+    for candidate in pending:
+        path = candidate.get("path")
+        # each probe is an ffprobe, so stop at the first that fits
+        if path and matches_target(pathlib.Path(path)):
+            return candidate
+    return pending[0]
+
+
 def main():
     first = True
     while True:
@@ -470,10 +541,10 @@ def main():
             time.sleep(POLL_SECONDS)
             continue
 
-        item = pending[0]
+        item = cheapest_when_starving(pending)
         # what the queue says follows, at encode time. A vote landing later can
         # still change it, so the overlay words it as a hint rather than a fact.
-        upcoming = pending[1] if len(pending) > 1 else None
+        upcoming = next((i for i in pending if i is not item), None)
 
         if item.get("path"):
             # handed over by the operator, not requested by a stranger: there is

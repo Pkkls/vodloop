@@ -104,6 +104,57 @@ with tempfile.TemporaryDirectory() as tmp:
         finally:
             prep.subprocess = real_sub
 
+        print("the ledger of what already carries its title")
+        real_state3, common.STATE = common.STATE, root / "capstate"
+        common.STATE.mkdir(parents=True, exist_ok=True)
+        try:
+            check("nothing is captioned before anything is recorded",
+                  prep.captioned() == set(), str(prep.captioned()))
+            prep.mark_captioned("already_done.mp4")
+            check("a recorded file is remembered",
+                  "already_done.mp4" in prep.captioned())
+            check("an unrecorded one still wants a pass",
+                  "never_touched.mp4" not in prep.captioned())
+
+            # A remux cannot draw, so a conformant file is only ever captioned
+            # during a normalisation. Marking one that was normalised without a
+            # title file would strand it: conformant, uncaptioned, never redone.
+            captured2 = {}
+
+            class _S2:
+                SubprocessError = RuntimeError
+
+                @staticmethod
+                def run(argv, **_kw):
+                    captured2["argv"] = list(argv)
+                    # a real ffmpeg leaves an output file behind, and
+                    # normalise_in_place checks for it before believing the
+                    # return code. A stub that skips this reports a failure the
+                    # code does not have.
+                    pathlib.Path(argv[-1]).write_bytes(b"encoded")
+                    return type("R", (), {"returncode": 0, "stderr": ""})()
+
+            src2 = root / "capsrc.mp4"
+            src2.write_bytes(b"x")
+            real_sub2, prep.subprocess = prep.subprocess, _S2
+            try:
+                prep.normalise_in_place(src2, now)
+                check("normalising with a title records the file",
+                      "capsrc.mp4" in prep.captioned(), str(sorted(prep.captioned())))
+
+                # the control: same call, no title file. If this also recorded,
+                # the flag would mean "normalised" rather than "captioned".
+                src3 = root / "capsrc3.mp4"
+                src3.write_bytes(b"x")
+                prep.normalise_in_place(src3, None)
+                check("normalising without a title records nothing",
+                      "capsrc3.mp4" not in prep.captioned(),
+                      str(sorted(prep.captioned())))
+            finally:
+                prep.subprocess = real_sub2
+        finally:
+            common.STATE = real_state3
+
         print("missing font")
         prep.FONT = str(root / "no-such-font.ttf")
         bare = prep.overlay_filter(now, nxt)
