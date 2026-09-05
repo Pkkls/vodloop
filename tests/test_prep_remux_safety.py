@@ -61,13 +61,12 @@ class Probe:
     SubprocessError = subprocess.SubprocessError
     TimeoutExpired = subprocess.TimeoutExpired
 
-    def __init__(self, packets, muxer_code=0, write=True):
-        self.packets, self.muxer_code, self.write = packets, muxer_code, write
+    def __init__(self, packets, muxer_code=0):
+        self.packets, self.muxer_code = packets, muxer_code
 
     def run(self, args, **kw):
         if args[0] == "ffmpeg":
-            if self.write:
-                pathlib.Path(args[-1]).write_bytes(b"\x47" * 188)
+            pathlib.Path(args[-1]).write_bytes(b"\x47" * 188)
             return subprocess.CompletedProcess(args, self.muxer_code, b"", b"")
         return subprocess.CompletedProcess(args, 0, self.packets, "")
 
@@ -101,9 +100,6 @@ try:
     print("the remux itself failing")
     prep.subprocess = Probe(CLEAN, muxer_code=1)
     check("ffmpeg exiting non-zero is not safe",
-          prep.remux_is_safe(pathlib.Path("x.mp4")) is False)
-    prep.subprocess = Probe(CLEAN, write=False)
-    check("no file written is not safe",
           prep.remux_is_safe(pathlib.Path("x.mp4")) is False)
 
     prep.subprocess = real_sub

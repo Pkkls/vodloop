@@ -10,7 +10,6 @@ SEGMENTS = ROOT / "segments"
 INCOMING = ROOT / "incoming"
 STATE = ROOT / "state"
 QUEUE = STATE / "queue.json"
-VERDICTS = STATE / "verdicts.json"
 BOTCONFIG = STATE / "botconfig.json"
 OFFSET = STATE / "offset"
 FIFO = ROOT / "pipe"
@@ -64,12 +63,10 @@ SKIP_COOLDOWN_SECONDS = 120
 # Every accepted item costs prep one yt-dlp metadata call before it can be
 # refused, and a refused item frees its pending slot at once, so the per-user
 # cap alone never runs out. These three bound the work strangers can order.
-MAX_UNRESOLVED = 12          # items still waiting for prep, caps the backlog
 REJECT_WINDOW_SECONDS = 300
 MAX_REJECTS_IN_WINDOW = 5    # past this, the user stops getting answers
 REJECT_SILENCE_SECONDS = 600
 MAX_BANNED = 500             # the ban list grows with distinct chatters
-MAX_VERDICTS = 2000
 # a burst of chat must not turn into a burst of disk writes
 FLUSH_INTERVAL_SECONDS = 1.0
 # refuse to prepare more video when the disk gets this low
@@ -189,35 +186,6 @@ def load_botconfig():
         return data if isinstance(data, dict) else {}
     except (OSError, ValueError):
         return {}
-
-
-def load_verdicts():
-    """What prep already learned about a video id: {"ok": bool, "reason": str}.
-
-    prep is the only writer, chat only reads. That way a video the allowlist
-    already refused is refused again for free, instead of buying another
-    yt-dlp call every time someone pastes it.
-    """
-    try:
-        data = json.loads(VERDICTS.read_text())
-        return data if isinstance(data, dict) else {}
-    except (OSError, ValueError):
-        return {}
-
-
-def save_verdict(video_id, ok, reason=""):
-    if not VIDEO_ID.match(video_id or ""):
-        return
-    verdicts = load_verdicts()
-    verdicts[video_id] = {"ok": bool(ok), "reason": str(reason)[:80]}
-    if len(verdicts) > MAX_VERDICTS:
-        # plain insertion order: the oldest learned verdicts go first
-        for stale in list(verdicts)[: len(verdicts) - MAX_VERDICTS]:
-            verdicts.pop(stale, None)
-    STATE.mkdir(parents=True, exist_ok=True)
-    tmp = VERDICTS.with_suffix(".tmp")
-    tmp.write_text(json.dumps(verdicts))
-    tmp.replace(VERDICTS)
 
 
 def read_offset():

@@ -40,7 +40,7 @@ try:
     # sources() normalises to dicts, so a stub has to hand back that shape
     collector.sources = lambda: [{"url": u, "match": []}
                                  for u in ("src-a", "src-b", "src-c")]
-    collector.pool = lambda refresh=True: {
+    collector.pool = lambda: {
         "src-a": {"ids": A}, "src-b": {"ids": B}, "src-c": {"ids": C}}
 
     print("rotation")
@@ -54,7 +54,7 @@ try:
     # the control: same function, one source. If this also came out interleaved
     # the check above would be measuring the fixture, not the rotation.
     collector.sources = lambda: [{"url": "src-a", "match": []}]
-    collector.pool = lambda refresh=True: {"src-a": {"ids": A}}
+    collector.pool = lambda: {"src-a": {"ids": A}}
     solo = collector.pick(4, set())
     check("with one source it simply takes them in order", solo == A[:4], str(solo))
 
@@ -62,7 +62,7 @@ try:
     # sources() normalises to dicts, so a stub has to hand back that shape
     collector.sources = lambda: [{"url": u, "match": []}
                                  for u in ("src-a", "src-b", "src-c")]
-    collector.pool = lambda refresh=True: {
+    collector.pool = lambda: {
         "src-a": {"ids": A}, "src-b": {"ids": B}, "src-c": {"ids": C}}
     known = set(A[:3]) | set(B)
     got = collector.pick(4, known)

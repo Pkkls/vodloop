@@ -24,11 +24,11 @@ def fresh():
     return {"seq": 0, "items": []}, chatlogic.new_state()
 
 
-def say(queue, state, user, text, now=1000.0, name="someone", verdicts=None, config=None,
+def say(queue, state, user, text, now=1000.0, name="someone", config=None,
         library=None):
     return chatlogic.handle(
         {"user_id": user, "username": name, "text": text}, queue, state, MODS, now,
-        verdicts, config, None, LIBRARY if library is None else library,
+        config, None, LIBRARY if library is None else library,
     )
 
 
@@ -378,19 +378,6 @@ def test_a_link_is_refused_instead_of_queued_to_die():
         reply, _ = say(queue, state, "u1", f"!play {link}", now=1000)
         assert reply == "links are not accepted, try !vods", reply
         assert queue["items"] == [], queue["items"]
-
-
-def test_the_verdict_cache_is_unreachable_from_chat_now():
-    """It gated URLs, and chat can no longer name one, so it decides nothing here.
-
-    Kept as a control: a stale verdict must not leak into a library request and
-    refuse something that is sitting on disk.
-    """
-    queue, state = fresh()
-    verdicts = {"dQw4w9WgXcQ": {"ok": False, "reason": "channel not on the allowlist"}}
-    reply, changed = say(queue, state, "u1", "!play 1", now=1000, verdicts=verdicts)
-    assert changed and reply.startswith("queued:"), reply
-    assert len(queue["items"]) == 1
 
 
 def test_a_user_who_only_earns_refusals_stops_getting_answers():

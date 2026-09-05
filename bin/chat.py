@@ -182,8 +182,6 @@ class Store:
         self.dirty = False
         self.flushed_at = 0.0
         self.stamp = self._mtime()
-        self.verdicts = common.load_verdicts()
-        self.verdict_stamp = self._verdict_mtime()
         self.config = common.load_botconfig()
         self.config_stamp = self._config_mtime()
         self.library = common.library()
@@ -208,12 +206,6 @@ class Store:
         except OSError:
             return 0.0
 
-    def _verdict_mtime(self):
-        try:
-            return common.VERDICTS.stat().st_mtime
-        except OSError:
-            return 0.0
-
     def _config_mtime(self):
         try:
             return common.BOTCONFIG.stat().st_mtime
@@ -225,10 +217,6 @@ class Store:
         if not self.dirty and self._mtime() != self.stamp:
             self.queue = common.load_queue()
             self.stamp = self._mtime()
-        # prep is the only writer of the verdicts, so this side only ever reads
-        if self._verdict_mtime() != self.verdict_stamp:
-            self.verdicts = common.load_verdicts()
-            self.verdict_stamp = self._verdict_mtime()
         # same for the panel's settings: picked up on the next message, so a
         # change from the page applies without restarting the bot
         if self._config_mtime() != self.config_stamp:
@@ -258,7 +246,7 @@ def apply(event, mods, store, replier=None, owner=None):
     now = time.time()
     store.refresh()
     reply, changed = chatlogic.handle(message, store.queue, store.state, mods, now,
-                                      store.verdicts, store.config, owner=owner,
+                                      store.config, owner=owner,
                                       library=store.library)
     if changed:
         store.dirty = True

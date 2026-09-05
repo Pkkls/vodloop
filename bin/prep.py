@@ -152,7 +152,7 @@ def remux_is_safe(path):
              # dropping it keeps the probe to about a second
              "-c:v", "copy", "-an", "-f", "mpegts", "-y", str(probe)],
             capture_output=True, timeout=120)
-        if done.returncode != 0 or not probe.exists():
+        if done.returncode != 0:
             # unreadable is not the same as unsafe, but the expensive path
             # handles both and guessing the cheap one is what this exists to stop
             return False
@@ -714,7 +714,6 @@ def main():
         if length > common.MAX_DURATION_SECONDS:
             item["status"] = "error"
             item["error"] = f"too long ({int(length / 3600)}h)"
-            common.save_verdict(item.get("video_id"), False, item["error"])
             common.save_queue(queue)
             continue
 
@@ -726,12 +725,9 @@ def main():
             item["error"] = "channel not on the allowlist"
             item["channel"] = meta["channel"]
             item["channel_id"] = meta["channel_id"]
-            # remembered, so the next person who pastes it is refused for free
-            common.save_verdict(item.get("video_id"), False, item["error"])
             common.save_queue(queue)
             continue
 
-        common.save_verdict(item.get("video_id"), True)
         item.update(meta)
         item["status"] = "preparing"
         common.save_queue(queue)

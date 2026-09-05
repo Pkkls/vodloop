@@ -46,10 +46,6 @@ MIN_LIBRARY_FILES = 40
 MAX_LIBRARY_FILES = 62
 
 
-def free_bytes():
-    return shutil.disk_usage(LIBRARY).free
-
-
 def live_paths(queue):
     """Files a queue entry still needs. Retiring one of these cuts a video off
     mid-rotation, or leaves prep pointed at a path that no longer exists."""
@@ -71,7 +67,7 @@ def retirable(queue):
 def main(argv):
     apply = "--apply" in argv
     queue = common.load_queue()
-    before = free_bytes()
+    before = shutil.disk_usage(LIBRARY).free
     total = len([p for p in LIBRARY.iterdir()
                  if p.is_file() and p.suffix.lower() in MEDIA]) if LIBRARY.is_dir() else 0
 
@@ -100,7 +96,7 @@ def main(argv):
         freed += size
         kept -= 1
 
-    after = free_bytes() if apply else before + freed
+    after = shutil.disk_usage(LIBRARY).free if apply else before + freed
     print(f"{'libere' if apply else 'liberable'}: {freed / 1024 ** 3:.2f}G, "
           f"libre {'maintenant' if apply else 'deviendrait'} {after / 1024 ** 3:.1f}G, "
           f"{kept} fichiers restants")

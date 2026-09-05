@@ -139,7 +139,7 @@ def list_source(source):
     return keep
 
 
-def pool(refresh=True):
+def pool():
     """Video ids per source, cached because listing thousands is slow."""
     cached = load(POOL_FILE, {})
     now = time.time()
@@ -147,8 +147,6 @@ def pool(refresh=True):
         key = cache_key(source)
         entry = cached.get(key)
         if entry and now - entry.get("at", 0) < POOL_TTL_SECONDS:
-            continue
-        if not refresh:
             continue
         try:
             ids = list_source(source)

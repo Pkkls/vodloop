@@ -75,11 +75,6 @@ def _pending_of(queue, user_id):
     return [i for i in queue["items"] if i.get("by") == user_id and i["status"] in live]
 
 
-def _already_queued(queue, video_id):
-    live = ("pending", "preparing", "ready")
-    return any(i.get("video_id") == video_id and i["status"] in live for i in queue["items"])
-
-
 def _prune(queue):
     """Keep the queue file bounded: drop the oldest finished entries."""
     if len(queue["items"]) <= common.MAX_QUEUE:
@@ -90,7 +85,7 @@ def _prune(queue):
     queue["items"] = [i for i in queue["items"] if id(i) not in drop]
 
 
-def handle(message, queue, state, mods=(), now=None, verdicts=None, config=None,
+def handle(message, queue, state, mods=(), now=None, config=None,
            owner=None, library=()):
     """Apply one chat message. Returns (reply or None, whether state changed)."""
     now = time.time() if now is None else now
@@ -161,57 +156,6 @@ def handle(message, queue, state, mods=(), now=None, verdicts=None, config=None,
         if isinstance(reply, str) and reply.strip():
             return common.clean_text(reply, 200), False
     return None, False
-
-
-def _add(argument, queue, state, user_id, message, now, is_mod, verdicts=None, config=None):
-    video_id, result = common.canonical_youtube_url(argument)
-    if video_id is None:
-        return _refuse(state, user_id, now, result, config)
-
-    # What prep already decided about this video, for free. Without this, a
-    # video the allowlist refuses costs another yt-dlp call every single time
-    # somebody pastes it, and the answer is still "added".
-    known = (verdicts or {}).get(video_id)
-    if isinstance(known, dict) and not known.get("ok", True):
-        return _refuse(state, user_id, now, known.get("reason") or "refused", config)
-
-    if not is_mod:
-        waited = now - state["last_add"].get(user_id, 0)
-        if waited < setting(config, "ADD_COOLDOWN_SECONDS"):
-            return _refuse(state, user_id, now,
-                           f"wait {int(setting(config, 'ADD_COOLDOWN_SECONDS') - waited)}s", config)
-        if len(_pending_of(queue, user_id)) >= setting(config, "MAX_PENDING_PER_USER"):
-            return _refuse(state, user_id, now, "you already have enough waiting", config)
-
-    if _already_queued(queue, video_id):
-        return _refuse(state, user_id, now, "already in the queue", config)
-    live = [i for i in queue["items"] if i["status"] in ("pending", "preparing", "ready")]
-    if len(live) >= common.MAX_QUEUE:
-        return "the queue is full", False
-    # unresolved items are the ones prep still owes a metadata call to. The
-    # queue cap is far too high to bound that work on its own.
-    unresolved = [i for i in queue["items"] if i["status"] == "pending"]
-    if not is_mod and len(unresolved) >= setting(config, "MAX_UNRESOLVED"):
-        return "hold on, too many waiting to be checked", False
-
-    queue["seq"] += 1
-    queue["items"].append({
-        "id": queue["seq"],
-        "url": result,
-        "video_id": video_id,
-        "status": "pending",
-        "by": user_id,
-        "by_name": common.clean_text(message.get("username"), 40),
-        "votes": [],
-        "added_at": now,
-    })
-    state["last_add"][user_id] = now
-    # the cooldown table would otherwise grow with every distinct chatter
-    if len(state["last_add"]) > 5000:
-        cutoff = now - setting(config, "ADD_COOLDOWN_SECONDS")
-        state["last_add"] = {k: v for k, v in state["last_add"].items() if v > cutoff}
-    _prune(queue)
-    return "added", True
 
 
 def _vods(argument, library):
