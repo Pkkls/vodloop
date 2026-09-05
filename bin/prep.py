@@ -499,10 +499,14 @@ def disk_is_tight():
     return shutil.disk_usage(common.ROOT).free < common.MIN_FREE_BYTES
 
 
-# This box encodes at about 0.77x realtime, so a re-encode costs more wall time
-# than the video is long. Rounded up, because being wrong the other way is what
-# empties the queue.
-ENCODE_COST_FACTOR = 1.5
+# Wall time per second of video, for a re-encode. Not the 0.77x the encoder
+# manages alone: prep shares two vCPUs with the pusher and the feeder, and the
+# jobs actually observed on 2026-09-05 ran 5586s and 8324s for VODs well under
+# an hour, which is nearer four. 1.5 was the nominal figure and it let a job
+# through on a queue that could not outlast it, twice, each time ending in a
+# grey screen. Erring high only delays an encode; erring low takes the channel
+# off the air for the length of one.
+ENCODE_COST_FACTOR = 4.0
 # What is left over after an item is prepared, so the queue is never spent to
 # the last second on a single bet.
 COST_MARGIN_SECONDS = 5 * 60

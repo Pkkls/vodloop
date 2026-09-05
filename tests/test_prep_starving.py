@@ -100,10 +100,21 @@ try:
     # the control: same list, same shapes, only the queue is longer. Without it
     # every check above would also pass on a function that always picks cheap,
     # which would reorder the queue for good and never prepare anything else.
-    prep.seconds_on_disk = lambda: 2 * HOUR
+    #
+    # Derived from the cost rather than written as a number of hours, so tuning
+    # ENCODE_COST_FACTOR retunes the test with it. Hardcoding two hours here
+    # meant raising the factor turned this check red without anything being
+    # wrong, which teaches the next person to edit the assertion.
+    enough = prep.prepare_cost(EXPENSIVE) + prep.COST_MARGIN_SECONDS + 1
+    prep.seconds_on_disk = lambda: enough
     picked = prep.cheapest_when_starving(QUEUE)
     check("a queue that outlasts the job keeps its own order",
-          picked["id"] == 1, f"id={picked['id']}")
+          picked["id"] == 1, f"id={picked['id']} at {enough:.0f}s")
+
+    prep.seconds_on_disk = lambda: enough - 2
+    picked = prep.cheapest_when_starving(QUEUE)
+    check("one second short of it does not", picked["id"] == 3,
+          f"id={picked['id']}")
 
     print("edges")
     prep.seconds_on_disk = lambda: 0
