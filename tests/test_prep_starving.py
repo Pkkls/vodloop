@@ -41,10 +41,29 @@ QUEUE = [EXPENSIVE, EXPENSIVE_B, CHEAP]
 
 real_match = prep.matches_target
 real_disk = prep.seconds_on_disk
+real_safe = prep.remux_is_safe
 prep.matches_target = lambda p: pathlib.Path(p).name == "right_shape.mp4"
+prep.remux_is_safe = lambda p: True
 try:
     print("cost")
     check("a file in the target shape costs nothing", prep.prepare_cost(CHEAP) == 0.0)
+
+    print("the right shape is not enough on its own")
+    # What actually blacked the channel out on 2026-09-05. remux_is_safe pulled
+    # ten library files out of the cheap path and this function was not told, so
+    # a file needing a full re-encode still priced itself at zero and
+    # cheapest_when_starving started it on an empty queue: 600s of output in
+    # 6889s of wall time, standby clip throughout.
+    prep.remux_is_safe = lambda p: False
+    check("a file the pusher cannot be sent is not free",
+          prep.prepare_cost(CHEAP) > CHEAP["duration"],
+          f"{prep.prepare_cost(CHEAP):.0f}s")
+    # the control: same file, same shape, only the copy verdict changes. Without
+    # it the check above would also pass on a prepare_cost that had stopped
+    # returning zero at all, which would re-encode the whole library.
+    prep.remux_is_safe = lambda p: True
+    check("and is free again once the copy is known good",
+          prep.prepare_cost(CHEAP) == 0.0)
     check("one that is not costs more than its own length",
           prep.prepare_cost(EXPENSIVE) > EXPENSIVE["duration"],
           f"{prep.prepare_cost(EXPENSIVE):.0f}s for {EXPENSIVE['duration']}s")
@@ -126,6 +145,7 @@ try:
 finally:
     prep.matches_target = real_match
     prep.seconds_on_disk = real_disk
+    prep.remux_is_safe = real_safe
 
 print()
 if failures:

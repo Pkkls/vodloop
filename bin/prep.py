@@ -170,6 +170,49 @@ def remux_is_safe(path):
         probe.unlink(missing_ok=True)
 
 
+# The backlog an encode is not allowed to eat into. Two chunks: the feeder is
+# playing one while it claims the next, so below this there is nothing left
+# between the channel and the standby clip.
+ABANDON_BELOW_SECONDS = 2 * common.CHUNK_SECONDS
+# How often the backlog is looked at while an encode runs. Short enough to
+# notice before the last chunk is gone, long enough to cost nothing.
+ENCODE_POLL_SECONDS = 20
+
+
+def wait_for_encode(encoder, budget):
+    """Wait for the encoder, watching what it is doing to the channel.
+
+    Returns (stderr, starved). starved means it was still running while the
+    backlog fell to ABANDON_BELOW_SECONDS, and the caller should abandon it.
+
+    This exists because every estimate of encode cost has been wrong, four
+    times, each one ending in the same grey screen: a flat threshold, then a
+    factor of 1.5, then 4, then a cost model that did not know remux_is_safe had
+    moved ten files onto the expensive path. Each fix made the guess better and
+    the next wrong guess cost the channel another two hours.
+
+    So this does not guess. The backlog is the one number that cannot be wrong
+    about whether the encoder is losing the race: it is measured, not predicted,
+    and it falls if and only if the channel is being consumed faster than it is
+    being fed. An encode that is winning never trips this no matter what any
+    estimate said about it, and one that is losing trips it whatever the
+    estimate said too. That is the whole point.
+
+    The item is not marked failed. It is fine, this was the wrong moment, and it
+    goes back to pending for a time when the queue can pay for it.
+    """
+    deadline = time.time() + budget
+    while True:
+        try:
+            return encoder.communicate(timeout=ENCODE_POLL_SECONDS)[1].decode(
+                errors="replace"), False
+        except subprocess.TimeoutExpired:
+            if time.time() >= deadline:
+                raise
+            if seconds_on_disk() <= ABANDON_BELOW_SECONDS:
+                return "", True
+
+
 def matches_target(path):
     """Whether a file already holds exactly the picture a chunk must carry.
 
@@ -371,7 +414,25 @@ def prepare(item, upcoming=None):
     # duration at all.
     budget = encode_budget(item)
     try:
-        enc_err = encoder.communicate(timeout=budget)[1].decode(errors="replace")
+        enc_err, starved = wait_for_encode(encoder, budget)
+        if starved:
+            for process in (encoder, puller):
+                if process is None:
+                    continue
+                process.kill()
+                try:
+                    process.communicate(timeout=30)
+                except subprocess.TimeoutExpired:
+                    pass
+            for chunk in common.SEGMENTS.glob(f"{item['id']:05d}_*.ts"):
+                chunk.unlink(missing_ok=True)
+            listing.unlink(missing_ok=True)
+            # not an error: the file is fine, this was the wrong moment for it.
+            # The caller puts it back to pending on this flag.
+            item["defer"] = "abandonne, la file allait tomber a vide"
+            print(f"abandon {item['id']}: tampon a {seconds_on_disk()}s, "
+                  f"un item moins cher passe devant", flush=True)
+            return False
         pull_err = puller.communicate(timeout=60)[1].decode(errors="replace") if puller else ""
     except subprocess.TimeoutExpired:
         for process in (encoder, puller):
@@ -564,7 +625,14 @@ def disk_is_tight():
 # through on a queue that could not outlast it, twice, each time ending in a
 # grey screen. Erring high only delays an encode; erring low takes the channel
 # off the air for the length of one.
-ENCODE_COST_FACTOR = 4.0
+#
+# Raised to 11 on 2026-09-05 after four was measured wrong the same way 1.5 was.
+# Item 140: 1674s of source, two chunks written, so 600s of output, in 6889s of
+# wall time. Four predicted 6696s for the whole job and that much had already
+# gone on a third of it. 6889/600 is 11.5, and this is one measurement, taken
+# with the pusher and the feeder on the same two vCPUs, which is the only
+# condition that matters because it is the one prep runs in.
+ENCODE_COST_FACTOR = 11.0
 # What is left over after an item is prepared, so the queue is never spent to
 # the last second on a single bet.
 COST_MARGIN_SECONDS = 5 * 60
@@ -608,11 +676,20 @@ def normalise_cost(item):
 def prepare_cost(item):
     """Roughly how many seconds of wall time preparing this item will take.
 
-    Near zero for a file already in the target shape, since only the container
-    and the audio are touched. Longer than the video itself for anything else.
+    Near zero for a file already in the target shape AND safe to copy, since
+    only the container and the audio are touched. Longer than the video itself
+    for anything else.
+
+    Both halves are load-bearing. remux_is_safe took ten files out of the cheap
+    path without this being told, so a file the pusher cannot be sent still
+    priced itself at zero, cheapest_when_starving read that as free and started
+    it on an empty queue. Measured 2026-09-05: item 140, 1674s of source, 600s
+    of output in 6889s of wall time, the channel on the standby clip throughout.
+    A cost model that does not know what the encoder decided is worse than none,
+    because it is trusted.
     """
     path = item.get("path")
-    if path and matches_target(pathlib.Path(path)):
+    if path and matches_target(pathlib.Path(path)) and remux_is_safe(pathlib.Path(path)):
         return 0.0
     return normalise_cost(item)
 
@@ -682,7 +759,8 @@ def main():
             item["status"] = "preparing"
             common.save_queue(queue)
             ok = prepare(item, upcoming)
-            if not ok:
+            if not ok and not item.get("defer"):
+                # a deferred file is not a failed one, so it stays where it is
                 if consumable(item["path"]):
                     failed = common.INCOMING / "failed"
                     failed.mkdir(exist_ok=True)
@@ -693,10 +771,15 @@ def main():
             elif consumable(item["path"]):
                 pathlib.Path(item["path"]).unlink(missing_ok=True)
             queue = common.load_queue()
+            deferred = bool(item.pop("defer", None))
             for entry in queue["items"]:
                 if entry["id"] == item["id"]:
                     entry.update(item)
-                    entry["status"] = "ready" if ok else "error"
+                    entry.pop("defer", None)
+                    # abandoned to keep a picture on the wire, not failed: it
+                    # goes back in line rather than out of the rotation
+                    entry["status"] = ("ready" if ok
+                                       else "pending" if deferred else "error")
             common.save_queue(queue)
             continue
 
