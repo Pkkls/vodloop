@@ -29,6 +29,7 @@ import sys
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 
 import common
+import prep
 
 LIBRARY = pathlib.Path("/home/ubuntu/videos")
 MEDIA = (".mp4", ".mkv")
@@ -53,15 +54,36 @@ def live_paths(queue):
             if i.get("status") in ("pending", "preparing", "ready")}
 
 
+# The channel plays only files prep can copy, so that subset is the channel.
+# Never cut it below this: emptying it is the same outage as an empty disk, and
+# it arrives without warning because the files are still there.
+MIN_PLAYABLE_FILES = 12
+
+
 def retirable(queue):
-    """Eligible files, oldest first."""
+    """Eligible files, the ones worth least to the channel first.
+
+    Order matters more than it looks. A file prep cannot copy contributes
+    nothing until normalise.py has converted it, while a copyable one is what
+    is actually on air, so the uncopyable go first and buy the same disk at no
+    cost to the rotation. Retiring by age alone deleted a playable file and left
+    four unplayable ones sitting next to it.
+
+    Within each group, oldest first, which on a rerun channel is the one seen
+    longest ago.
+    """
     if not LIBRARY.is_dir():
         return []
     busy = live_paths(queue)
     files = [p for p in LIBRARY.iterdir()
              if p.is_file() and p.suffix.lower() in MEDIA
              and str(p) not in busy]
-    return sorted(files, key=lambda p: p.stat().st_mtime)
+    playable = sorted((p for p in files if prep.remux_verdict(p)),
+                      key=lambda p: p.stat().st_mtime)
+    # the newest playable ones are off the table entirely, whatever the disk says
+    protected = set(playable[-MIN_PLAYABLE_FILES:])
+    return sorted((p for p in files if p not in protected),
+                  key=lambda p: (p in set(playable), p.stat().st_mtime))
 
 
 def main(argv):

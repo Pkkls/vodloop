@@ -71,6 +71,23 @@ def save_failed(data):
     tmp.replace(FAILED)
 
 
+def forget_gone(failed, present):
+    """Drop failures for files that are no longer here.
+
+    The janitor retires files while this runs, and one was deleted mid-list on
+    2026-09-06: it failed with "No such file" and the name stayed in the ledger.
+    The collector fetches from the same sources, so the day that video comes
+    back it would be skipped forever on the strength of a failure that was
+    really a deletion. A name that is gone has no verdict.
+    """
+    stale = [n for n in failed if n not in present]
+    for name in stale:
+        failed.pop(name, None)
+    if stale:
+        save_failed(failed)
+    return len(stale)
+
+
 def candidates():
     """Library files prep cannot copy, smallest first.
 
@@ -81,6 +98,7 @@ def candidates():
     if not LIBRARY.is_dir():
         return []
     failed = load_failed()
+    forget_gone(failed, {p.name for p in LIBRARY.iterdir() if p.is_file()})
     out = []
     for path in LIBRARY.iterdir():
         if not path.is_file() or path.suffix.lower() not in MEDIA:

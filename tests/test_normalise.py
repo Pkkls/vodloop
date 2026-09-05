@@ -130,6 +130,22 @@ check("it runs at the lowest priority",
 check("a file that fails is remembered, not retried nightly",
       "failed[path.name] = detail" in source and "if path.name in failed" in source)
 
+print("a failure on a file that no longer exists is not a verdict")
+# The janitor deletes while this runs. One file went mid-list on 2026-09-06 and
+# failed with "No such file"; the name stayed in the ledger, and the collector
+# fetches from the same sources, so the day it came back it would be skipped
+# forever on the strength of a deletion.
+ledger = {"gone.mp4": "No such file", "real.mp4": "reencode hors forme cible"}
+real_save_f, normalise.save_failed = normalise.save_failed, lambda d: None
+try:
+    dropped = normalise.forget_gone(ledger, {"real.mp4", "other.mp4"})
+    check("the vanished name is forgotten", dropped == 1 and "gone.mp4" not in ledger)
+    # the control: a genuine failure on a file still present must survive, or
+    # this would clear the ledger every run and retry broken videos nightly
+    check("a real failure on a file still there is kept", "real.mp4" in ledger)
+finally:
+    normalise.save_failed = real_save_f
+
 print("the verdict is the same pair prepare() tests")
 # Asking only remux_is_safe let 18 files at 1280x718 into the queue. Their
 # copies are valid, so the probe said yes; matches_target still refuses them and
