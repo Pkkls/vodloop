@@ -213,6 +213,53 @@ def wait_for_encode(encoder, budget):
                 return "", True
 
 
+REMUX_VERDICTS = common.STATE / "remux.json"
+
+
+def remux_verdict(path):
+    """Whether prepare() will copy this file rather than re-encode it.
+
+    Exactly the pair prepare() tests, remembered: the right picture AND a copy
+    that comes out playable. Both, or the answer is wrong in the direction that
+    costs the channel hours. Asking only remux_is_safe let 18 files at 1280x718
+    through, two pixels short: their copies are perfectly valid, matches_target
+    still refuses them, and prep re-encodes them anyway. The filter that exists
+    to keep encodes out of the queue was letting them in.
+
+    The probe costs about a second, which is nothing when prep is choosing one
+    item and far too much when the refill asks about every file in the library
+    on a loop. Keyed on size and mtime, so a file replaced by the normaliser is
+    asked again rather than answering for the file it used to be.
+    """
+    path = pathlib.Path(path)
+    try:
+        stat = path.stat()
+        key = f"{path.name}:{stat.st_size}:{int(stat.st_mtime)}"
+    except OSError:
+        return False
+    try:
+        cache = json.loads(REMUX_VERDICTS.read_text())
+        if not isinstance(cache, dict):
+            cache = {}
+    except (OSError, ValueError):
+        cache = {}
+    if key in cache:
+        return bool(cache[key])
+    verdict = matches_target(path) and remux_is_safe(path)
+    # only this file's entry survives, so the cache cannot grow with every
+    # version of every file the normaliser ever wrote
+    cache = {k: v for k, v in cache.items() if not k.startswith(path.name + ":")}
+    cache[key] = verdict
+    try:
+        common.STATE.mkdir(parents=True, exist_ok=True)
+        tmp = REMUX_VERDICTS.with_suffix(".tmp")
+        tmp.write_text(json.dumps(cache))
+        tmp.replace(REMUX_VERDICTS)
+    except OSError:
+        pass  # a cache that cannot be written is slow, not wrong
+    return verdict
+
+
 def matches_target(path):
     """Whether a file already holds exactly the picture a chunk must carry.
 
@@ -555,9 +602,22 @@ def refill_from_library(queue):
     if waiting or seconds_on_disk() >= REFILL_BELOW_SECONDS:
         return 0
 
+    # Only what can be remuxed. This is the invariant the channel lives by: the
+    # feeder consumes at 1x forever, a remux produces at about 10x and a full
+    # re-encode at 0.06x measured on this box, so one encoded file is a loss no
+    # amount of scheduling recovers from. Queueing a file prep cannot copy is
+    # queueing a grey screen, whatever the cost model then does about it.
+    #
+    # 2026-09-06: 38 of 62 library files could not be copied, so six items in
+    # ten were an encode, and refill could not even fire because it waits for an
+    # empty pending list and those items never cleared. Files that need work go
+    # to normalise.py, and rejoin here once it has done it.
     sources = sorted(p for p in LIBRARY.iterdir()
-                     if p.is_file() and p.suffix.lower() in MEDIA_SUFFIXES)
+                     if p.is_file() and p.suffix.lower() in MEDIA_SUFFIXES
+                     and remux_verdict(p))
     if not sources:
+        print("aucun fichier remuxable en bibliotheque: normalise.py a du retard",
+              flush=True)
         return 0
     # Every item below is stamped with the same added_at, and playback_order
     # breaks that tie with a stable sort, so whatever order this list is in is
@@ -586,6 +646,36 @@ def refill_from_library(queue):
         })
     print(f"bibliotheque remise en file: {len(sources)} fichier(s)", flush=True)
     return len(sources)
+
+
+def drop_unremuxable(queue):
+    """Take library files prep cannot copy back out of the queue.
+
+    This is what unsticks the deadlock, and it is worth naming precisely.
+    refill_from_library only fires when nothing is pending, so a queue holding
+    31 library items prep could not copy never refilled: it worked through them
+    one multi-hour encode at a time, on the standby clip for most of it, and no
+    amount of choosing better within that list helped because every entry in it
+    was expensive. Measured 2026-09-06.
+
+    Dropping them is safe because a library file is queued where it lives and is
+    never consumed by playing. normalise.py converts them offline and refill
+    picks them up on the next pass, so this removes an entry, never a video.
+
+    Items a person asked for are left alone. Someone waiting on a request they
+    made is owed the wait, and there is at most a handful of those.
+    """
+    victims = [i for i in queue["items"]
+               if i["status"] == "pending" and i.get("by") == "file"
+               and i.get("path") and not remux_verdict(i["path"])]
+    if not victims:
+        return 0
+    ids = {i["id"] for i in victims}
+    queue["items"] = [i for i in queue["items"] if i["id"] not in ids]
+    common.save_queue(queue)
+    print(f"retires de la file: {len(victims)} fichier(s) non remuxables, "
+          f"normalise.py s'en charge", flush=True)
+    return len(victims)
 
 
 def recover_orphans(queue):
@@ -736,6 +826,7 @@ def main():
                 common.save_queue(queue)
             first = False
         reap(queue)
+        drop_unremuxable(queue)
         # before take_dropped_files, which is what actually queues them
         refill_from_library(queue)
         take_dropped_files(queue)

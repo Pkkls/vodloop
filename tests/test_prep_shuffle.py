@@ -22,6 +22,13 @@ sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent / "bin"))
 
 import prep  # noqa: E402
 
+# The fixtures here are empty files, not videos, so the real probe answers "not
+# copyable" for all of them and the refill queues nothing. What a real ffmpeg
+# says about a real file is measured in test_normalise.py and
+# test_prep_remux_safety.py; here it only has to stay out of the way of the
+# question being asked, which is what the refill does with what it is given.
+prep.remux_verdict = lambda p: True
+
 failures = []
 
 
