@@ -12,6 +12,7 @@ error on the queue item rather than retried by other means.
 import os
 import pathlib
 import json
+import random
 import shutil
 import subprocess
 import sys
@@ -439,6 +440,13 @@ def refill_from_library(queue):
                      if p.is_file() and p.suffix.lower() in MEDIA_SUFFIXES)
     if not sources:
         return 0
+    # Every item below is stamped with the same added_at, and playback_order
+    # breaks that tie with a stable sort, so whatever order this list is in is
+    # the order the channel plays. Sorted meant the library ran alphabetically
+    # start to finish, and identically on the next pass. Shuffling here is the
+    # whole of the rotation: it leaves votes untouched, since those sort ahead
+    # of added_at and still decide what jumps the line.
+    random.shuffle(sources)
 
     # the played entries naming these same files go first, or the queue keeps a
     # dead copy of the whole library on every pass
