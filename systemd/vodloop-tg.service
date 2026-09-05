@@ -1,0 +1,22 @@
+[Unit]
+# The alarm, not a convenience. Every outage so far was found by the owner
+# looking at the channel; this watches the backlog and the playable library and
+# says so first. Deliberately independent of the pusher: a unit that dies with
+# the thing it watches reports nothing at the moment it matters.
+Description=vodloop telegram control and alarms
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=exec
+User=ubuntu
+WorkingDirectory=/home/ubuntu/vodloop
+Environment=VODLOOP_LIBRARY=/home/ubuntu/videos
+ExecStart=/usr/bin/python3 /home/ubuntu/vodloop/bin/tgbot.py
+Restart=always
+RestartSec=15
+# it long polls and probes; nothing here should ever outrank the encoder
+Nice=15
+
+[Install]
+WantedBy=multi-user.target
