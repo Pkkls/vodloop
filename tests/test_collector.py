@@ -37,7 +37,9 @@ A, B, C = ids("a", 5), ids("b", 5), ids("c", 5)
 real_sources = collector.sources
 real_pool = collector.pool
 try:
-    collector.sources = lambda: ["src-a", "src-b", "src-c"]
+    # sources() normalises to dicts, so a stub has to hand back that shape
+    collector.sources = lambda: [{"url": u, "match": []}
+                                 for u in ("src-a", "src-b", "src-c")]
     collector.pool = lambda refresh=True: {
         "src-a": {"ids": A}, "src-b": {"ids": B}, "src-c": {"ids": C}}
 
@@ -51,13 +53,15 @@ try:
     print("a single source, for comparison")
     # the control: same function, one source. If this also came out interleaved
     # the check above would be measuring the fixture, not the rotation.
-    collector.sources = lambda: ["src-a"]
+    collector.sources = lambda: [{"url": "src-a", "match": []}]
     collector.pool = lambda refresh=True: {"src-a": {"ids": A}}
     solo = collector.pick(4, set())
     check("with one source it simply takes them in order", solo == A[:4], str(solo))
 
     print("what is already known is skipped")
-    collector.sources = lambda: ["src-a", "src-b", "src-c"]
+    # sources() normalises to dicts, so a stub has to hand back that shape
+    collector.sources = lambda: [{"url": u, "match": []}
+                                 for u in ("src-a", "src-b", "src-c")]
     collector.pool = lambda refresh=True: {
         "src-a": {"ids": A}, "src-b": {"ids": B}, "src-c": {"ids": C}}
     known = set(A[:3]) | set(B)
@@ -70,6 +74,43 @@ try:
     print("running out")
     got = collector.pick(99, set(A) | set(B) | set(C))
     check("everything known yields nothing rather than looping", got == [], str(got))
+
+    print("filtering a source by title")
+    listing = ("aaaaaaaaaaa\tIce Poseidon in Tokyo\n"
+               "bbbbbbbbbbb\tSomeone else entirely\n"
+               "ccccccccccc\tCX247 highlights\n"
+               "ddddddddddd\tA cooking show\n")
+
+    class _Stub:
+        SubprocessError = RuntimeError
+
+        @staticmethod
+        def run(*_a, **_kw):
+            return type("R", (), {"stdout": listing, "returncode": 0})()
+
+    real_sub, collector.subprocess = collector.subprocess, _Stub
+    try:
+        kept = collector.list_source({"url": "u", "match": ["ice poseidon", "cx"]})
+        check("only the matching titles are kept",
+              kept == ["aaaaaaaaaaa", "ccccccccccc"], str(kept))
+        check("the match is case insensitive",
+              "ccccccccccc" in collector.list_source(
+                  {"url": "u", "match": ["cx247"]}))
+
+        # the control: the same listing with no filter must keep everything,
+        # otherwise the check above could be passing on parsing that drops rows
+        # for some reason of its own rather than on the filter
+        everything = collector.list_source({"url": "u", "match": []})
+        check("without a filter the whole source is kept",
+              len(everything) == 4, str(everything))
+    finally:
+        collector.subprocess = real_sub
+
+    check("changing the words invalidates the cached list",
+          collector.cache_key({"url": "u", "match": ["a"]})
+          != collector.cache_key({"url": "u", "match": ["b"]}))
+    check("an unfiltered source keys on its url alone",
+          collector.cache_key({"url": "u", "match": []}) == "u")
 
     print("reading ids back off filenames")
     real_lib, collector.LIBRARY = collector.LIBRARY, pathlib.Path("/nonexistent")

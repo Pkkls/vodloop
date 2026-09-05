@@ -77,7 +77,27 @@ def save(path, data):
 
 
 def sources():
-    return load(SOURCES_FILE, [])
+    """Declared sources, each a url and an optional list of title keywords.
+
+    A plain string stays a whole source. An entry with "match" takes only the
+    videos whose title contains one of the words, which is how a general
+    archive channel contributes the part of itself that belongs here without
+    dragging in everything else it holds.
+    """
+    out = []
+    for entry in load(SOURCES_FILE, []):
+        if isinstance(entry, str):
+            out.append({"url": entry, "match": []})
+        elif isinstance(entry, dict) and entry.get("url"):
+            out.append({"url": entry["url"],
+                        "match": [w.lower() for w in entry.get("match", [])]})
+    return out
+
+
+def cache_key(source):
+    # the filter is part of the identity: changing the words has to invalidate
+    # the list, or a narrowed source keeps serving what it used to match
+    return source["url"] + ("|" + ",".join(source["match"]) if source["match"] else "")
 
 
 def library_ids():
@@ -101,33 +121,44 @@ def inbox_ids():
         return set()
 
 
-def list_source(url):
+def list_source(source):
+    """Video ids for one source, keeping only titles that match when asked."""
     out = subprocess.run(
-        [YTDLP, "--flat-playlist", "--no-warnings", "--print", "%(id)s", url],
-        capture_output=True, text=True, timeout=600)
-    return [line.strip() for line in out.stdout.splitlines()
-            if len(line.strip()) == 11]
+        [YTDLP, "--flat-playlist", "--no-warnings", "--print",
+         "%(id)s	%(title)s", source["url"]],
+        capture_output=True, text=True, timeout=900)
+    keep = []
+    for line in out.stdout.splitlines():
+        vid, _, title = line.partition("	")
+        vid = vid.strip()
+        if len(vid) != 11:
+            continue
+        if source["match"] and not any(w in title.lower() for w in source["match"]):
+            continue
+        keep.append(vid)
+    return keep
 
 
 def pool(refresh=True):
     """Video ids per source, cached because listing thousands is slow."""
     cached = load(POOL_FILE, {})
     now = time.time()
-    for url in sources():
-        entry = cached.get(url)
+    for source in sources():
+        key = cache_key(source)
+        entry = cached.get(key)
         if entry and now - entry.get("at", 0) < POOL_TTL_SECONDS:
             continue
         if not refresh:
             continue
         try:
-            ids = list_source(url)
+            ids = list_source(source)
         except (OSError, subprocess.SubprocessError):
             continue
         # an empty listing is a failed listing, not an empty source: keeping the
         # previous one is better than forgetting a source because YouTube
         # hiccuped once
         if ids:
-            cached[url] = {"at": now, "ids": ids}
+            cached[key] = {"at": now, "ids": ids}
     save(POOL_FILE, cached)
     return cached
 
@@ -140,7 +171,7 @@ def pick(count, known):
     another, which reads as a much smaller library than it is.
     """
     cached = pool()
-    lists = [list(cached.get(url, {}).get("ids", [])) for url in sources()]
+    lists = [list(cached.get(cache_key(s), {}).get("ids", [])) for s in sources()]
     cursors = [0] * len(lists)
     chosen = []
     while len(chosen) < count:

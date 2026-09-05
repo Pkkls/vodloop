@@ -1,0 +1,12 @@
+[
+ "https://www.youtube.com/playlist?list=PLzhVds4scMG5ffnnZBK1rX8EsajG3xi7c",
+ "https://www.youtube.com/playlist?list=PLzhVds4scMG5eqhR-zTBy6dlx4cDkIZ_U",
+ "https://www.youtube.com/playlist?list=PLzhVds4scMG4muxVdP5FVcc0_8o9KvS4T",
+ "https://www.youtube.com/@LifeStreamArchive/videos",
+ "https://www.youtube.com/watch?v=SPbIFtfeBnc",
+ "https://www.youtube.com/watch?v=XDTDA3jyus8",
+ {
+  "url": "https://www.youtube.com/@KickFlixVODS/videos",
+  "match": ["ice poseidon", "iceposeidon", "cx"]
+ }
+]
