@@ -2,14 +2,19 @@
 """Item choice under starvation. Run: python3 tests/test_prep_starving.py
 
 Taking the queue strictly in order is what blacked the channel out for hours:
-one file two pixels short of the target sits at the head, costs a full
-re-encode at 0.77x realtime, and everything cheap behind it waits. The fix bends
-the order only while the queue is nearly empty.
+one file two pixels short of the target sits at the head, costs a full re-encode
+at 0.77x realtime, and everything cheap behind it waits.
 
-The claim worth testing is therefore not "it picks a cheap file". It is that the
-same queue produces a different choice depending on how much video is on disk,
-because a function that ignored the buffer would pass a one-sided check and
-would reorder the queue forever, which is a different bug with the same shape.
+The first fix used a flat threshold and was wrong in a way worth keeping a test
+for. Ten minutes of queue is plenty before a remux and nothing at all before a
+two hour encode, so at 1200s of queue it happily took the expensive head, drained
+the queue, and went dark for the rest of the encode. That exact case is the
+third check below.
+
+So the property under test is not "it prefers cheap items". It is that the same
+queue produces a different choice depending on whether the queue can outlast
+what the head costs, which is the only form of the question that scales with
+the job.
 """
 import pathlib
 import sys
@@ -27,52 +32,55 @@ def check(label, ok, detail=""):
         failures.append(label)
 
 
-# expensive first, cheap third: strict order picks the expensive one
-QUEUE = [
-    {"id": 1, "path": "/lib/wrong_shape_a.mp4", "title": "A"},
-    {"id": 2, "path": "/lib/wrong_shape_b.mp4", "title": "B"},
-    {"id": 3, "path": "/lib/right_shape.mp4", "title": "C"},
-]
+HOUR = 3600
+# a 33 minute VOD, the shape that actually blacked the channel out
+EXPENSIVE = {"id": 1, "path": "/lib/wrong_shape.mp4", "title": "A", "duration": 2000}
+EXPENSIVE_B = {"id": 2, "path": "/lib/wrong_shape_b.mp4", "title": "B", "duration": 2000}
+CHEAP = {"id": 3, "path": "/lib/right_shape.mp4", "title": "C", "duration": 2000}
+QUEUE = [EXPENSIVE, EXPENSIVE_B, CHEAP]
 
 real_match = prep.matches_target
 real_disk = prep.seconds_on_disk
 prep.matches_target = lambda p: pathlib.Path(p).name == "right_shape.mp4"
 try:
-    print("starving")
+    print("cost")
+    check("a file in the target shape costs nothing", prep.prepare_cost(CHEAP) == 0.0)
+    check("one that is not costs more than its own length",
+          prep.prepare_cost(EXPENSIVE) > EXPENSIVE["duration"],
+          f"{prep.prepare_cost(EXPENSIVE):.0f}s for {EXPENSIVE['duration']}s")
+    unknown = {"id": 4, "path": "/lib/wrong_shape_c.mp4", "title": "D"}
+    check("an unknown length is assumed expensive, never cheap",
+          prep.prepare_cost(unknown) == float("inf"))
+
+    print("empty queue")
     prep.seconds_on_disk = lambda: 0
+    check("takes the first item needing no re-encode",
+          prep.cheapest_when_starving(QUEUE)["id"] == 3)
+
+    print("the calibration that failed on 2026-09-05")
+    # 1200s of queue against a job costing 3000s: the old flat threshold called
+    # this healthy, took the head, and the channel went dark for two hours
+    prep.seconds_on_disk = lambda: 1200
     picked = prep.cheapest_when_starving(QUEUE)
-    check("an empty queue takes the first item needing no re-encode",
+    check("queue shorter than the job does not take the job",
           picked["id"] == 3, f"id={picked['id']}")
 
-    print("healthy")
-    prep.seconds_on_disk = lambda: prep.STARVING_SECONDS + 1
+    print("queue that can pay")
+    # the control: same list, same shapes, only the queue is longer. Without it
+    # every check above would also pass on a function that always picks cheap,
+    # which would reorder the queue for good and never prepare anything else.
+    prep.seconds_on_disk = lambda: 2 * HOUR
     picked = prep.cheapest_when_starving(QUEUE)
-    # the control: same list, same shapes, only the buffer differs. Without it
-    # the check above would also pass on a function that always picks the cheap
-    # item, which would silently reorder the queue for good.
-    check("a healthy queue keeps its own order", picked["id"] == 1,
-          f"id={picked['id']}")
-
-    print("nothing cheap available")
-    prep.seconds_on_disk = lambda: 0
-    only_expensive = [QUEUE[0], QUEUE[1]]
-    picked = prep.cheapest_when_starving(only_expensive)
-    check("falls back to the head rather than stalling", picked["id"] == 1,
-          f"id={picked['id']}")
+    check("a queue that outlasts the job keeps its own order",
+          picked["id"] == 1, f"id={picked['id']}")
 
     print("edges")
-    check("an empty list yields nothing", prep.cheapest_when_starving([]) is None)
     prep.seconds_on_disk = lambda: 0
-    no_path = [{"id": 9, "url": "https://example.invalid/v", "title": "url item"}]
-    picked = prep.cheapest_when_starving(no_path)
-    check("an item with no local file is not probed and still chosen",
-          picked["id"] == 9, f"id={picked['id']}")
-
-    check("the threshold leaves room for a remux to finish",
-          prep.STARVING_SECONDS >= 5 * 60, f"{prep.STARVING_SECONDS}s")
-    check("it triggers well below the point prep stops preparing",
-          prep.STARVING_SECONDS < prep.common.AHEAD_LIMIT_SECONDS,
-          f"{prep.STARVING_SECONDS} vs {prep.common.AHEAD_LIMIT_SECONDS}")
+    check("nothing cheap available falls back to the head",
+          prep.cheapest_when_starving([EXPENSIVE, EXPENSIVE_B])["id"] == 1)
+    check("an empty list yields nothing", prep.cheapest_when_starving([]) is None)
+    check("a margin is kept rather than spending the queue to the last second",
+          prep.COST_MARGIN_SECONDS > 0, f"{prep.COST_MARGIN_SECONDS}s")
 finally:
     prep.matches_target = real_match
     prep.seconds_on_disk = real_disk

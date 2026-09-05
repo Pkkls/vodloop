@@ -482,38 +482,59 @@ def disk_is_tight():
     return shutil.disk_usage(common.ROOT).free < common.MIN_FREE_BYTES
 
 
-# Below this much unplayed video, keeping a picture on the wire outranks
-# keeping the queue's order.
-STARVING_SECONDS = 10 * 60
+# This box encodes at about 0.77x realtime, so a re-encode costs more wall time
+# than the video is long. Rounded up, because being wrong the other way is what
+# empties the queue.
+ENCODE_COST_FACTOR = 1.5
+# What is left over after an item is prepared, so the queue is never spent to
+# the last second on a single bet.
+COST_MARGIN_SECONDS = 5 * 60
+
+
+def prepare_cost(item):
+    """Roughly how many seconds of wall time preparing this item will take.
+
+    Near zero for a file already in the target shape, since only the container
+    and the audio are touched. Longer than the video itself for anything else.
+    """
+    path = item.get("path")
+    if path and matches_target(pathlib.Path(path)):
+        return 0.0
+    duration = float(item.get("duration") or 0)
+    if duration <= 0:
+        # an unknown length is assumed expensive: guessing cheap here is what
+        # spends a queue that cannot afford it
+        return float("inf")
+    return duration * ENCODE_COST_FACTOR
 
 
 def cheapest_when_starving(pending):
-    """The item to prepare now: playback order, unless the queue is starving.
+    """The item to prepare now: playback order, unless the queue cannot pay.
 
     A file already in the target shape is remuxed in about a minute. One that is
     not is re-encoded at 0.77x realtime, so a 33 minute VOD takes over two hours
     during which the queue drains and the channel sits on the standby clip.
-    Taking the queue strictly in order means one wrong-shaped file at the head
-    blacks out the channel for as long as it takes, however much cheap material
-    is waiting behind it. Measured on 2026-09-05: 26 of 75 library files are
-    1280x718, two pixels short, and each one costs that full re-encode.
+    Measured on 2026-09-05: 26 of 75 library files are 1280x718, two pixels
+    short, and each costs that full re-encode.
 
-    So while the queue is nearly empty the first item needing no picture work
-    wins. Above that line the normal order resumes and the expensive files are
-    prepared exactly when there is buffer to cover them, which is what
-    NORMALISE_ABOVE_SECONDS was already reaching for on the other side.
+    A fixed threshold cannot express this. Ten minutes of queue is plenty before
+    a remux and nothing at all before a two hour encode, and the first version
+    of this used ten minutes for both: at 1200s of queue it took the expensive
+    head, drained, and the channel went dark for the rest of the encode. So the
+    question asked here is not "is the queue low" but "can the queue outlast
+    what this item costs", which is the only form that scales with the job.
 
     Order is bent only to keep a picture on the wire, and nothing is dropped:
     what is skipped stays queued, ahead of whatever it was already ahead of.
     """
     if not pending:
         return None
-    if seconds_on_disk() >= STARVING_SECONDS:
+    buffered = seconds_on_disk()
+    if buffered >= prepare_cost(pending[0]) + COST_MARGIN_SECONDS:
         return pending[0]
     for candidate in pending:
-        path = candidate.get("path")
-        # each probe is an ffprobe, so stop at the first that fits
-        if path and matches_target(pathlib.Path(path)):
+        # each probe is an ffprobe, so stop at the first that costs nothing
+        if prepare_cost(candidate) == 0.0:
             return candidate
     return pending[0]
 
