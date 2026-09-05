@@ -52,6 +52,37 @@ try:
     check("an unknown length is assumed expensive, never cheap",
           prep.prepare_cost(unknown) == float("inf"))
 
+    print("normalising is never free, even for a conformant file")
+    # prepare_cost asks "what does playing this cost", normalise_cost asks "what
+    # does redrawing it cost", and for a file already in the target shape those
+    # two differ: nothing, and a full re-encode. Collapsing them back into one
+    # function would make a caption pass look free and let it start on a queue
+    # that cannot outlast it, which is the gap this pair exists to close.
+    check("preparing a conformant file costs nothing",
+          prep.prepare_cost(CHEAP) == 0.0)
+    check("normalising the same file costs a full encode",
+          prep.normalise_cost(CHEAP) > CHEAP["duration"],
+          f"{prep.normalise_cost(CHEAP):.0f}s")
+    # Library items carry no duration. Writing them off as infinite would be a
+    # quiet, total failure: every one would fail the affordability test forever
+    # and never get its caption, with nothing in any log to say so. The file is
+    # probed instead.
+    real_dur = prep.duration_of
+    prep.duration_of = lambda p: 1800.0
+    try:
+        cost = prep.normalise_cost({"id": 5, "path": "/lib/no_duration.mp4"})
+        check("an item with no duration is probed, not written off",
+              cost == 1800.0 * prep.ENCODE_COST_FACTOR, f"{cost}")
+        # the control: nothing readable at all must still be treated as costly,
+        # otherwise the probe failing would look like a free job
+        prep.duration_of = lambda p: 0.0
+        check("an unreadable file stays expensive",
+              prep.normalise_cost({"id": 6, "path": "/lib/broken.mp4"}) == float("inf"))
+        check("no path and no duration stays expensive",
+              prep.normalise_cost({"id": 7}) == float("inf"))
+    finally:
+        prep.duration_of = real_dur
+
     print("empty queue")
     prep.seconds_on_disk = lambda: 0
     check("takes the first item needing no re-encode",

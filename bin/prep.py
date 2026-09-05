@@ -248,16 +248,25 @@ def prepare(item, upcoming=None):
     encode[encode.index("-vf") + 1] = overlay_filter(title_file, next_file)
     if item.get("path"):
         source = pathlib.Path(item["path"])
-        # a library file in the wrong shape is normalised once instead of being
-        # re-encoded on every pass through the rotation
-        # A file in the target shape still gets one pass if its picture carries
-        # no title, because a remux cannot add one later and this is the only
-        # moment the caption is free. Both cases sit behind the same buffer
-        # gate: a caption is never worth going dark for.
+        # A library file in the wrong shape is normalised once instead of being
+        # re-encoded on every pass through the rotation, and one already in the
+        # target shape still gets a single pass if its picture carries no title,
+        # because a remux cannot add one later and this is the only moment the
+        # caption is free.
+        #
+        # Both wait until the queue can outlast the encode rather than until it
+        # passes a fixed 45 minutes. Once this function commits to normalising,
+        # it stays there for the whole job and cheapest_when_starving cannot
+        # help: the choice has already been made. Measured 2026-09-05, the flat
+        # gate let a two hour encode start on 7200s of queue that drained at
+        # 1.1x, which runs dry before the encode ends. A gate that does not know
+        # what it is admitting is the same bug this file already fixed one level
+        # up, left in place one level down.
         wants_caption = source.name not in captioned()
+        affordable = seconds_on_disk() >= normalise_cost(item) + COST_MARGIN_SECONDS
         if ((not matches_target(source) or wants_caption)
                 and not consumable(source)
-                and seconds_on_disk() >= NORMALISE_ABOVE_SECONDS):
+                and affordable):
             fixed = normalise_in_place(source, name_file)
             if fixed is not None:
                 item["path"] = str(fixed)
@@ -491,6 +500,41 @@ ENCODE_COST_FACTOR = 1.5
 COST_MARGIN_SECONDS = 5 * 60
 
 
+def duration_of(path):
+    """Length of a file in seconds, or 0 when it cannot be read."""
+    try:
+        out = subprocess.run(
+            ["ffprobe", "-v", "error", "-show_entries", "format=duration",
+             "-of", "csv=p=0", str(path)],
+            capture_output=True, text=True, timeout=60).stdout
+        return float(out.strip() or 0)
+    except (OSError, ValueError, subprocess.SubprocessError):
+        return 0.0
+
+
+def normalise_cost(item):
+    """Wall time a normalisation of this item will take.
+
+    Always a full re-encode, even for a file already in the target shape, since
+    the reason to normalise one of those is to burn a caption into it and that
+    means redrawing every frame.
+
+    Items queued from the library carry no duration, so the file is probed
+    rather than written off. Treating unknown as infinite here would be quiet
+    and total: every such file would fail the affordability test forever and
+    silently never get its caption, which is the failure this whole path exists
+    to produce rather than prevent.
+    """
+    duration = float(item.get("duration") or 0)
+    if duration <= 0 and item.get("path"):
+        duration = duration_of(item["path"])
+    if duration <= 0:
+        # nothing readable to go on: assume expensive rather than spend a queue
+        # that cannot afford it
+        return float("inf")
+    return duration * ENCODE_COST_FACTOR
+
+
 def prepare_cost(item):
     """Roughly how many seconds of wall time preparing this item will take.
 
@@ -500,12 +544,7 @@ def prepare_cost(item):
     path = item.get("path")
     if path and matches_target(pathlib.Path(path)):
         return 0.0
-    duration = float(item.get("duration") or 0)
-    if duration <= 0:
-        # an unknown length is assumed expensive: guessing cheap here is what
-        # spends a queue that cannot afford it
-        return float("inf")
-    return duration * ENCODE_COST_FACTOR
+    return normalise_cost(item)
 
 
 def cheapest_when_starving(pending):
