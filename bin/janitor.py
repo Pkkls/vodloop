@@ -34,11 +34,20 @@ import prep
 LIBRARY = pathlib.Path("/home/ubuntu/videos")
 MEDIA = (".mp4", ".mkv")
 # Comfortably above prep's MIN_FREE_BYTES: reaching prep's floor is the failure,
-# so the janitor has to act well before it.
-TARGET_FREE_BYTES = 8 * 1024 ** 3
+# so the janitor has to act well before it. Lowered from 8G when the channel
+# went to 1080p: the backlog alone is 4.5G at this bitrate, and a target the
+# disk cannot reach makes this refuse to act at all, which is worse than a
+# smaller margin.
+TARGET_FREE_BYTES = 5 * 1024 ** 3
 # Below this the rotation gets thin enough to be noticeable, and a disk that
 # still cannot be satisfied is a problem to report rather than to keep cutting.
-MIN_LIBRARY_FILES = 40
+#
+# A count, not hours, but it has to be a count that means something at the
+# current bitrate. 40 was right when a file was 400 Mo and the library held 62;
+# at 1080p the whole rotation is 33 files and 13.3h, so the old floor sat above
+# the entire library and this refused every pass. A floor nothing can satisfy
+# protects nothing.
+MIN_LIBRARY_FILES = 18
 # Above this, played files are retired even with disk to spare. Without it
 # nothing ever leaves: the collector stops at its own ceiling, the janitor only
 # woke on disk pressure, and the library sat at a fixed 69 files forever, which
