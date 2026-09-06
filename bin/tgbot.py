@@ -169,6 +169,59 @@ def emitting():
     return None if second is None else max(0, second - first)
 
 
+def viewer_frame():
+    """Pull the stream a viewer actually receives and measure one frame.
+
+    Everything else here reports on our side of the wire. That answers "are we
+    sending", not "is the picture black", and on 2026-09-06 those two came apart:
+    the chunks held real video, the pusher was emitting 3390 kbps, Kick said
+    live, and a black screen was reported anyway. The only way to settle it was
+    to fetch what the player fetches, which is what this does.
+
+    Returns (verdict, detail). A frame that cannot be fetched is unknown, not
+    black: calling those the same is how a probe invents an outage.
+    """
+    try:
+        from curl_cffi import requests
+    except ImportError:
+        return None, "curl_cffi absent"
+    try:
+        r = requests.get(
+            f"https://kick.com/api/v2/channels/{common.channel_slug()}",
+            impersonate="chrome", timeout=25)
+        if r.status_code != 200:
+            return None, f"API {r.status_code}"
+        data = r.json() or {}
+        url = data.get("playback_url") or (data.get("livestream") or {}).get("playback_url")
+        if not url:
+            return None, "pas d'url de lecture (hors ligne ?)"
+    except Exception as exc:                                   # noqa: BLE001
+        return None, type(exc).__name__
+
+    raw = pathlib.Path("/tmp/vodloop_viewer.gray")
+    raw.unlink(missing_ok=True)
+    try:
+        subprocess.run(
+            ["ffmpeg", "-hide_banner", "-loglevel", "error", "-i", url,
+             "-frames:v", "1", "-vf", "scale=48:27", "-f", "rawvideo",
+             "-pix_fmt", "gray", "-y", str(raw)],
+            capture_output=True, timeout=90)
+        pixels = raw.read_bytes()
+    except (OSError, subprocess.SubprocessError):
+        return None, "frame non recuperee"
+    finally:
+        raw.unlink(missing_ok=True)
+    if not pixels:
+        return None, "frame vide"
+    lo, hi = min(pixels), max(pixels)
+    avg = sum(pixels) / len(pixels)
+    # the standby clip is a flat 0x101014 fill, so its pixels are all but
+    # identical; a real picture spreads. Brightness alone would call a dark
+    # scene an outage.
+    flat = hi - lo < 6
+    return (not flat), f"min={lo} max={hi} moy={avg:.0f}"
+
+
 def status_text():
     backlog = prep.seconds_on_disk()
     total, playable = library()
@@ -247,6 +300,7 @@ HELP = """commandes
 /lib     etat de la bibliotheque jouable
 /conv    ce qu'il reste a convertir
 /log     les lignes anormales des journaux
+/black   l'image est-elle vraiment noire, vue d'un spectateur
 /skip    couper la video en cours
 /mute    couper les alertes 8h
 /help    ceci
@@ -270,6 +324,22 @@ def handle(text):
         return conv_text()
     if cmd == "/log":
         return log_text()
+    if cmd in ("/black", "/noir"):
+        ok, detail = viewer_frame()
+        if ok is None:
+            # unknown is not black, and saying so is the whole point
+            return f"indetermine: {detail}\n(indetermine n'est pas 'noir')"
+        since = sh(["systemctl", "show", "-p", "ActiveEnterTimestamp",
+                    "--value", "vodloop-push"])
+        verdict = ("l'image que recoit un spectateur est REELLE" if ok
+                   else "l'image que recoit un spectateur est NOIRE")
+        tail = ("si ton lecteur est noir, il tient une session morte: recharge"
+                if ok else "c'est une vraie panne")
+        lines = [verdict, detail]
+        if since:
+            lines.append(f"pusher connecte depuis {since}")
+        lines.append(tail)
+        return "\n".join(lines)
     if cmd == "/skip":
         return skip()
     if cmd == "/mute":

@@ -118,6 +118,33 @@ finally:
     tgbot.prep.seconds_on_disk, tgbot.library = real_disk, real_lib
     tgbot.free_bytes, tgbot.emitting, tgbot.restarts = real_free, real_emit, real_restarts
 
+print("black on the viewer's side, told apart from unknown")
+# The question that cost the most time today. Our side said healthy on every
+# count, and a black screen was reported anyway; only fetching what the player
+# fetches settled it. Three outcomes, and the third is what makes it honest.
+real_vf = tgbot.viewer_frame
+try:
+    tgbot.viewer_frame = lambda: (True, "min=0 max=244 moy=61")
+    out = tgbot.handle("/black")
+    check("a real picture is reported as real", "REELLE" in out, out[:60])
+    check("and it points at the stale player", "recharge" in out)
+
+    # the control: same command, opposite measurement
+    tgbot.viewer_frame = lambda: (False, "min=16 max=20 moy=17")
+    out = tgbot.handle("/black")
+    check("a flat frame is reported as black", "NOIRE" in out, out[:60])
+    check("and called a real fault", "vraie panne" in out)
+
+    # the one that matters. A probe that could not measure must not be allowed
+    # to say "black": mine did exactly that this morning and sent me hunting an
+    # outage that was not there.
+    tgbot.viewer_frame = lambda: (None, "API 404")
+    out = tgbot.handle("/black")
+    check("no measurement is neither real nor black",
+          "indetermine" in out and "NOIRE" not in out, out[:60])
+finally:
+    tgbot.viewer_frame = real_vf
+
 print("only the bound chat is obeyed")
 source = (pathlib.Path(__file__).resolve().parent.parent
           / "bin" / "tgbot.py").read_text(encoding="utf-8")
