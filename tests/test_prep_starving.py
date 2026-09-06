@@ -42,8 +42,13 @@ QUEUE = [EXPENSIVE, EXPENSIVE_B, CHEAP]
 real_match = prep.matches_target
 real_disk = prep.seconds_on_disk
 real_safe = prep.remux_is_safe
+real_verdict = prep.remux_verdict
 prep.matches_target = lambda p: pathlib.Path(p).name == "right_shape.mp4"
 prep.remux_is_safe = lambda p: True
+# prepare_cost asks the cached verdict, which stats the file; these paths are
+# fixtures that do not exist, so it has to be stubbed alongside the two probes
+# it caches. What the real one does is measured in test_normalise.py.
+prep.remux_verdict = lambda p: (prep.matches_target(p) and prep.remux_is_safe(p))
 try:
     print("cost")
     check("a file in the target shape costs nothing", prep.prepare_cost(CHEAP) == 0.0)
@@ -146,6 +151,7 @@ finally:
     prep.matches_target = real_match
     prep.seconds_on_disk = real_disk
     prep.remux_is_safe = real_safe
+    prep.remux_verdict = real_verdict
 
 print()
 if failures:

@@ -170,6 +170,12 @@ def remux_is_safe(path):
         probe.unlink(missing_ok=True)
 
 
+# Items this run has already abandoned once. Abandoning is only ever worth it
+# if something else can run instead, and if the same item comes straight back
+# then nothing else could: abandoning it again just spins. Cleared whenever a
+# job actually produces chunks, because that proves the queue moved on.
+ABANDONED = set()
+
 # The backlog an encode is not allowed to eat into. Two chunks: the feeder is
 # playing one while it claims the next, so below this there is nothing left
 # between the channel and the standby clip.
@@ -179,11 +185,20 @@ ABANDON_BELOW_SECONDS = 2 * common.CHUNK_SECONDS
 ENCODE_POLL_SECONDS = 20
 
 
-def wait_for_encode(encoder, budget):
+def wait_for_encode(encoder, budget, armed=True):
     """Wait for the encoder, watching what it is doing to the channel.
 
     Returns (stderr, starved). starved means it was still running while the
     backlog fell to ABANDON_BELOW_SECONDS, and the caller should abandon it.
+
+    armed is what stops this eating itself. Abandoning is only useful if there
+    is something cheaper to run instead; with nothing else to pick,
+    cheapest_when_starving hands the same item straight back, this abandons it
+    again, and the pair spin forever producing nothing. Measured 2026-09-06:
+    item 144 abandoned every ninety seconds for eight minutes, backlog stuck at
+    zero, the channel on the standby clip the whole time. A slow encode that
+    finishes beats a fast decision that never does, so with no alternative the
+    watchdog stands down and lets the job run.
 
     This exists because every estimate of encode cost has been wrong, four
     times, each one ending in the same grey screen: a flat threshold, then a
@@ -209,7 +224,7 @@ def wait_for_encode(encoder, budget):
         except subprocess.TimeoutExpired:
             if time.time() >= deadline:
                 raise
-            if seconds_on_disk() <= ABANDON_BELOW_SECONDS:
+            if armed and seconds_on_disk() <= ABANDON_BELOW_SECONDS:
                 return "", True
 
 
@@ -365,8 +380,12 @@ def normalise_in_place(path, title_file=None):
     return final
 
 
-def prepare(item, upcoming=None):
-    """Stream one URL through ffmpeg into numbered chunks. True on success."""
+def prepare(item, upcoming=None, watchdog=True):
+    """Stream one URL through ffmpeg into numbered chunks. True on success.
+
+    watchdog=False when nothing cheaper is waiting: abandoning then only
+    hands the same item back and the pair spin producing nothing.
+    """
     common.SEGMENTS.mkdir(parents=True, exist_ok=True)
     pattern = str(common.SEGMENTS / f"{item['id']:05d}_%05d.ts")
 
@@ -461,8 +480,16 @@ def prepare(item, upcoming=None):
     # duration at all.
     budget = encode_budget(item)
     try:
-        enc_err, starved = wait_for_encode(encoder, budget)
+        enc_err, starved = wait_for_encode(
+            encoder, budget,
+            armed=watchdog and item["id"] not in ABANDONED)
         if starved:
+            # Once per item, ever. The armed flag is computed from the queue and
+            # was wrong for one of the two call sites on 2026-09-06: item 144
+            # was abandoned every twenty-five seconds for six minutes, backlog
+            # pinned at zero, the channel black throughout. This does not depend
+            # on getting that calculation right anywhere.
+            ABANDONED.add(item["id"])
             for process in (encoder, puller):
                 if process is None:
                     continue
@@ -503,6 +530,8 @@ def prepare(item, upcoming=None):
         item["error"] = (message.splitlines() or ["failed"])[-1][:200]
         return False
     item["chunks"] = len(produced)
+    # something got made, so the standoff is over
+    ABANDONED.clear()
     return True
 
 
@@ -778,8 +807,11 @@ def prepare_cost(item):
     A cost model that does not know what the encoder decided is worse than none,
     because it is trusted.
     """
+    # the cached verdict, not the two probes: this is asked about every pending
+    # item on every pass, and two ffprobes each turns choosing an item into
+    # minutes of work on a box that has none to spare
     path = item.get("path")
-    if path and matches_target(pathlib.Path(path)) and remux_is_safe(pathlib.Path(path)):
+    if path and remux_verdict(path):
         return 0.0
     return normalise_cost(item)
 
@@ -840,6 +872,11 @@ def main():
             continue
 
         item = cheapest_when_starving(pending)
+        # Arm the abandon watchdog only if there is something cheaper to switch
+        # to. Without this it abandons, gets handed the same item back, and
+        # loops forever with the backlog at zero.
+        alternative = any(prepare_cost(other) == 0.0
+                          for other in pending if other is not item)
         # what the queue says follows, at encode time. A vote landing later can
         # still change it, so the overlay words it as a hint rather than a fact.
         upcoming = next((i for i in pending if i is not item), None)
@@ -849,7 +886,7 @@ def main():
             # no publisher to check and no downloader to ask
             item["status"] = "preparing"
             common.save_queue(queue)
-            ok = prepare(item, upcoming)
+            ok = prepare(item, upcoming, watchdog=alternative)
             if not ok and not item.get("defer"):
                 # a deferred file is not a failed one, so it stays where it is
                 if consumable(item["path"]):
@@ -906,7 +943,7 @@ def main():
         item["status"] = "preparing"
         common.save_queue(queue)
 
-        ok = prepare(item, upcoming)
+        ok = prepare(item, upcoming, watchdog=alternative)
 
         queue = common.load_queue()  # reload: the dashboard may have edited it
         for entry in queue["items"]:

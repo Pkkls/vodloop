@@ -161,6 +161,20 @@ def env(filename=".env"):
     return out
 
 
+def channel_slug():
+    """The channel's name in a Kick URL, which is not a constant.
+
+    It was cx247-cx and became cx247vods on 2026-09-06. Everything that asked
+    Kick anything kept asking about the old name and got 404 back, which the
+    probes reported as "no answer" for hours while the channel was live and
+    fine. Hardcoding this once was the mistake; hardcoding it in three files
+    would have been three.
+    """
+    return (os.environ.get("KICK_SLUG")
+            or env().get("KICK_SLUG")
+            or "cx247vods")
+
+
 def load_queue():
     if QUEUE.exists():
         return json.loads(QUEUE.read_text())

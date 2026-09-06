@@ -32,6 +32,7 @@ Three things keep it honest:
     every night on the same broken video
 """
 import json
+import signal
 import pathlib
 import subprocess
 import sys
@@ -54,6 +55,38 @@ MIN_BACKLOG_SECONDS = 40 * 60
 # realtime, so a run is hours. The ceiling stops one pathological file holding
 # the slot for a day.
 PER_FILE_TIMEOUT = 6 * 3600
+
+
+RUNNING = []
+
+
+def stop(child=None):
+    """Kill the encoder we started, if any. Called on the way out of every path.
+
+    An ffmpeg that outlives this process is not a tidiness problem: it keeps a
+    core busy on a box with two of them, and the encoder it starves is the one
+    keeping a picture on the wire.
+    """
+    for process in ([child] if child else list(RUNNING)):
+        if process is None or process.poll() is not None:
+            continue
+        process.kill()
+        try:
+            process.wait(timeout=15)
+        except subprocess.TimeoutExpired:
+            pass
+
+
+def _bye(*_):
+    stop()
+    sys.exit(143)
+
+
+for _sig in (signal.SIGTERM, signal.SIGINT):
+    try:
+        signal.signal(_sig, _bye)
+    except (ValueError, OSError):
+        pass  # not the main thread, or a platform without it
 
 
 def load_failed():
@@ -121,14 +154,27 @@ def convert(path):
     target = path.with_suffix(".norm.mp4")
     target.unlink(missing_ok=True)
     started = time.time()
+    # Popen and not run(), so a signal reaching this process can take the
+    # encoder with it. Killing the parent alone leaves ffmpeg reparented to init
+    # and still burning a core: two of them survived a stop on 2026-09-06 and
+    # sat at 84% and 71% for two hours on a two vCPU box, which starved the
+    # remuxes and blacked the channel out. The thing this exists to prevent.
+    child = None
     try:
-        done = subprocess.run(
+        child = subprocess.Popen(
             ["nice", "-n", "19", "ffmpeg", "-v", "error", "-y", "-i", str(path)]
             + list(common.ENCODE) + ["-f", "mp4", str(target)],
-            capture_output=True, text=True, timeout=PER_FILE_TIMEOUT)
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        RUNNING.append(child)
+        out, err = child.communicate(timeout=PER_FILE_TIMEOUT)
+        done = subprocess.CompletedProcess(child.args, child.returncode, out, err)
     except (OSError, subprocess.SubprocessError) as exc:
+        stop(child)
         target.unlink(missing_ok=True)
         return False, f"{type(exc).__name__}: {exc}"[:120]
+    finally:
+        if child in RUNNING:
+            RUNNING.remove(child)
     took = time.time() - started
     if done.returncode != 0 or not target.exists() or target.stat().st_size == 0:
         target.unlink(missing_ok=True)

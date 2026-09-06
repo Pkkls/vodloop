@@ -15,9 +15,14 @@ The second signal is here for the same reason. When the API will not answer,
 whether bytes are leaving the pusher still can, and it is the more direct
 question anyway: Kick's opinion is downstream of the socket.
 """
+import pathlib
 import subprocess
 import sys
 import time
+
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
+
+import common
 
 
 def api():
@@ -26,7 +31,8 @@ def api():
     except ImportError:
         return 2, "curl_cffi absent"
     try:
-        r = requests.get("https://kick.com/api/v2/channels/cx247-cx",
+        r = requests.get(
+            f"https://kick.com/api/v2/channels/{common.channel_slug()}",
                          impersonate="chrome", timeout=25)
     except Exception as exc:                                  # noqa: BLE001
         return 2, f"{type(exc).__name__}"

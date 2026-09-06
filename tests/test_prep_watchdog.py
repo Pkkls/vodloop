@@ -90,6 +90,35 @@ try:
     _, starved = prep.wait_for_encode(encoder, budget=9999)
     check("it is caught on the way down, not only at zero", starved is True)
 
+    print("abandoning is only worth it if something else can run")
+    # The livelock this cost. With nothing cheaper waiting, abandoning hands the
+    # same item straight back, this abandons it again, and the pair spin
+    # producing nothing: item 144, every twenty-five seconds, backlog pinned at
+    # zero, the channel black. A slow encode that finishes beats a fast decision
+    # that never does.
+    prep.seconds_on_disk = lambda: 0
+    encoder = Encoder(finishes_after=2)
+    _, starved = prep.wait_for_encode(encoder, budget=9999, armed=False)
+    check("with nothing to switch to it lets the job run", starved is False)
+    check("and the job really ran", encoder.calls == 2, f"{encoder.calls} tours")
+    # the control: identical starvation, but armed. Without this the check above
+    # would also pass on a watchdog that had stopped firing at all.
+    _, starved = prep.wait_for_encode(Encoder(), budget=9999, armed=True)
+    check("with an alternative it still abandons", starved is True)
+
+    print("an item is abandoned once, never twice")
+    # The armed flag is computed from the queue and was wrong for one of two
+    # call sites, so the loop survived the first fix. This does not depend on
+    # that calculation being right anywhere.
+    check("the module keeps a record of what it gave up on",
+          isinstance(prep.ABANDONED, set))
+    source = (pathlib.Path(__file__).resolve().parent.parent
+              / "bin" / "prep.py").read_text(encoding="utf-8")
+    check("an already abandoned item is not armed again",
+          'item["id"] not in ABANDONED' in source)
+    check("and the record is cleared once something is produced",
+          "ABANDONED.clear()" in source)
+
     print("the wall clock still applies")
     prep.seconds_on_disk = lambda: FLOOR + 10000
     try:
