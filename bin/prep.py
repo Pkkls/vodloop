@@ -153,19 +153,22 @@ def remux_is_safe(path):
              "-c:v", "copy", "-an", "-f", "mpegts", "-y", str(probe)],
             capture_output=True, timeout=120)
         if done.returncode != 0:
-            # unreadable is not the same as unsafe, but the expensive path
-            # handles both and guessing the cheap one is what this exists to stop
-            return False
+            # None, not False: this is "could not measure", and the caller that
+            # remembers verdicts must not write it down. Caching it made 22 good
+            # files invisible on 2026-09-06, because the probes were losing to a
+            # busy box and every loss was recorded as a permanent refusal.
+            return None
         packets = subprocess.run(
             ["ffprobe", "-v", "error", "-select_streams", "v",
              "-show_entries", "packet=pts_time", "-of", "csv=p=0", str(probe)],
             capture_output=True, text=True, timeout=120).stdout
-        # a probe that read nothing proves nothing, so it does not get to vote yes
+        # a probe that read nothing proves nothing, so it does not get to vote
+        # yes, and it does not get to vote no either
         if not packets.strip():
-            return False
+            return None
         return "N/A" not in packets
     except (OSError, subprocess.SubprocessError):
-        return False
+        return None
     finally:
         probe.unlink(missing_ok=True)
 
@@ -260,7 +263,15 @@ def remux_verdict(path):
         cache = {}
     if key in cache:
         return bool(cache[key])
-    verdict = matches_target(path) and remux_is_safe(path)
+    if not matches_target(path):
+        verdict = False
+    else:
+        answer = remux_is_safe(path)
+        if answer is None:
+            # no measurement: refuse for now, remember nothing. Writing this
+            # down is what hid 22 conformant files behind a busy afternoon.
+            return False
+        verdict = bool(answer)
     # only this file's entry survives, so the cache cannot grow with every
     # version of every file the normaliser ever wrote
     cache = {k: v for k, v in cache.items() if not k.startswith(path.name + ":")}

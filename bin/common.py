@@ -18,7 +18,17 @@ ALLOWLIST = ROOT / "allowed_channels.json"
 # every segment must share these exactly, or concatenation breaks at the junction.
 # 50 is not a taste: it is what the library already is, and this box encodes at
 # 0.77x realtime, so anything that forces a re-encode loses to the clock forever.
-WIDTH, HEIGHT, FPS = 1280, 720, 50
+# 1080p since 2026-09-06. The sources are 1920x1080 at 2400-5400 kbps and were
+# being reduced to 720p, which threw the resolution away and under-filled Kick's
+# own 720p rendition: it advertises 3423 kbps and was being fed 1425, while the
+# 480p rendition next to it advertises 1428, so a player choosing by bandwidth
+# had every reason to pick 480p. The whole library was rebuilt from the sources
+# on a machine that can encode, because the files here had already been reduced
+# and re-encoding those would have been upscaling.
+#
+# 45 Go of disk does not hold 25.6h at this bitrate, so the rotation is shorter
+# on purpose: 37 files, about 14h, at a median 4890 kbps against 1800 before.
+WIDTH, HEIGHT, FPS = 1920, 1080, 50
 VFILTER = (
     f"scale={WIDTH}:{HEIGHT}:force_original_aspect_ratio=decrease,"
     f"pad={WIDTH}:{HEIGHT}:(ow-iw)/2:(oh-ih)/2,fps={FPS},format=yuv420p"
@@ -36,10 +46,16 @@ VFILTER = (
 # remuxed rather than being dragged through this again.
 ENCODE = [
     "-vf", VFILTER,
-    "-c:v", "libx264", "-preset", "veryfast", "-b:v", "3800k",
+    # Quality-targeted, not bitrate-targeted, and that distinction cost a day.
+    # A fixed 3800k on sources that are themselves 670-2400 kbps produced files
+    # 4.11x the size of what they came from, inventing weight where there was no
+    # detail to keep: 14 Go of library would have become 58 on a 45 Go disk. CRF
+    # spends what the picture needs and no more. 21 measured at 0.9935 SSIM
+    # against the source, which is as close to transparent as matters.
+    "-c:v", "libx264", "-preset", "veryfast", "-crf", "21",
     # a live stream is judged on its worst moment, not its average, so the peak
-    # is capped rather than left to the bitrate target alone
-    "-maxrate", "4500k", "-bufsize", "9000k",
+    # is capped rather than left to the quality target alone
+    "-maxrate", "9000k", "-bufsize", "18000k",
     "-g", str(FPS * 2), "-keyint_min", str(FPS * 2), "-sc_threshold", "0",
     "-c:a", "aac", "-b:a", "160k", "-ar", "44100", "-ac", "2",
 ]

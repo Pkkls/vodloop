@@ -89,17 +89,27 @@ try:
     check("timestamps all present keeps it",
           prep.remux_is_safe(pathlib.Path("x.mp4")) is True)
 
-    print("a probe that measured nothing does not get to vote")
+    print("a probe that measured nothing says so, and nothing more")
+    # None, not False, and the difference is the whole point. remux_verdict
+    # writes down what it is told, so a probe that lost to a busy box and said
+    # False got that remembered as a permanent refusal: 22 conformant files went
+    # invisible on 2026-09-06 and the rotation fell from 14h to 4.5h while the
+    # files sat there, perfect, on the disk.
     prep.subprocess = Probe("")
-    check("no packets read is not a clean bill of health",
-          prep.remux_is_safe(pathlib.Path("x.mp4")) is False)
+    check("no packets read is not a verdict",
+          prep.remux_is_safe(pathlib.Path("x.mp4")) is None)
     prep.subprocess = Probe("   \n")
-    check("nor is whitespace",
-          prep.remux_is_safe(pathlib.Path("x.mp4")) is False)
+    check("nor is whitespace", prep.remux_is_safe(pathlib.Path("x.mp4")) is None)
 
     print("the remux itself failing")
     prep.subprocess = Probe(CLEAN, muxer_code=1)
-    check("ffmpeg exiting non-zero is not safe",
+    check("ffmpeg exiting non-zero is not a verdict either",
+          prep.remux_is_safe(pathlib.Path("x.mp4")) is None)
+    # The control for all three. A probe that DID run and DID see the defect has
+    # to answer False, or the checks above would pass just as well on a function
+    # that had stopped answering at all.
+    prep.subprocess = Probe(DIRTY)
+    check("a probe that ran and saw the defect still says no",
           prep.remux_is_safe(pathlib.Path("x.mp4")) is False)
 
     prep.subprocess = real_sub
@@ -119,10 +129,11 @@ try:
         # returning one answer whatever it is handed.
         junk = pathlib.Path(tmp) / "junk.mp4"
         junk.write_bytes(b"this is not a video" * 400)
-        check("a file that is not video is refused it",
-              prep.remux_is_safe(junk) is False)
-        check("a path that does not exist is refused it",
-              prep.remux_is_safe(pathlib.Path(tmp) / "absent.mp4") is False)
+        # ffmpeg cannot open it at all, so there is no measurement to report
+        check("a file that is not video yields no verdict",
+              prep.remux_is_safe(junk) is None)
+        check("a path that does not exist yields no verdict",
+              prep.remux_is_safe(pathlib.Path(tmp) / "absent.mp4") is None)
 
         check("the probe leaves nothing behind",
               not list(pathlib.Path(tempfile.gettempdir()).glob("remuxprobe_*.ts")))
