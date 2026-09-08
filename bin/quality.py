@@ -105,7 +105,79 @@ def kick():
         return {"kick_http": status, "kick_error": "unexpected body"}
     stream = data.get("livestream")
     return {"kick_http": status, "is_live": bool(stream),
-            "viewer_count": (stream or {}).get("viewer_count")}
+            "viewer_count": (stream or {}).get("viewer_count"),
+            "playback_url": data.get("playback_url")}
+
+
+STREAM_INF = re.compile(r"^#EXT-X-STREAM-INF:(.*)$")
+
+
+def rungs(playback_url):
+    """Every rung Kick advertises, from the master playlist.
+
+    The source rung is the one carrying VIDEO="chunked": that is the name Kick
+    gives the passthrough, the copy of what was pushed to it. The others are its
+    own encodes, made from that one.
+
+    The order of the rungs in the playlist is not stable, so the source is found
+    by its VIDEO group and never by position. Reading the first entry instead is
+    a mistake already made once here, and it measured the 360p rung.
+    """
+    lines = []
+    request = urllib.request.Request(playback_url, headers={"User-Agent": UA})
+    try:
+        with urllib.request.urlopen(request, timeout=20) as answer:
+            if answer.status != 200:
+                return None
+            text = answer.read(1 << 20).decode("utf-8", "replace")
+    except (OSError, ValueError):
+        return None
+    for line in text.splitlines():
+        match = STREAM_INF.match(line.strip())
+        if not match:
+            continue
+        attrs = dict(re.findall(r'([A-Z-]+)=("[^"]*"|[^,]*)', match.group(1)))
+        size = attrs.get("RESOLUTION", "").split("x")
+        lines.append({
+            "video": attrs.get("VIDEO", "").strip('"'),
+            "bps": whole(attrs.get("BANDWIDTH")),
+            "fps": number(attrs.get("FRAME-RATE")),
+            "width": whole(size[0]) if len(size) == 2 else None,
+            "height": whole(size[1]) if len(size) == 2 else None,
+        })
+    return lines or None
+
+
+def whole(raw):
+    try:
+        return int(str(raw).strip('"'))
+    except (TypeError, ValueError):
+        return None
+
+
+def ladder(playback_url):
+    """What Kick advertises for the source rung, and whether it leads.
+
+    A player choosing by bandwidth takes the fattest rung it can afford. The
+    source is the only rung that was not re-encoded, so it has to be the fattest
+    one or every player picks an encode of itself and upscales it. On
+    2026-09-08, fed 50 fps, the source advertised 3 070 272 while Kick's own
+    720p60 advertised 3 422 999, and that is what "fausse 1080p, plein de
+    tearing" was. It is a two line arithmetic check and it has a witness.
+    """
+    if not playback_url:
+        return {}
+    found = rungs(playback_url)
+    if not found:
+        return {"ladder_error": "playlist illisible"}
+    source = next((r for r in found if r["video"] == "chunked"), None)
+    if source is None:
+        return {"ladder_error": "aucun rung chunked"}
+    others = [r["bps"] for r in found if r is not source and r["bps"]]
+    return {"rung_width": source["width"], "rung_height": source["height"],
+            "rung_fps": source["fps"], "rung_bps": source["bps"],
+            "rung_count": len(found),
+            "rung_best_other_bps": max(others) if others else None}
 
 
 # --- what the machine is doing --------------------------------------------
@@ -343,6 +415,11 @@ def sample():
                 row.update(compare(info, streams(source) or {}))
     row.update(cpu())
     row.update(kick())
+    if row.get("is_live"):
+        row.update(ladder(row.get("playback_url")))
+    # the url is a signed handle that changes every sample and is worth nothing
+    # once read, so it is not kept in a log that lives for six weeks
+    row.pop("playback_url", None)
     return row
 
 
@@ -407,6 +484,23 @@ def faults(row):
                             f"debit {kind} a {int(ratio * 100)}% de la source")
     if row.get("kick_http") == 200 and row.get("is_live") is False:
         found.append("la chaine n'est pas en ligne")
+    # What Kick hands a player, as opposed to what was handed to Kick. The
+    # source rung is the only one nothing re-encoded, so it has to be the
+    # fattest one on the ladder; when it is not, every player choosing by
+    # bandwidth takes one of Kick's own encodes and upscales it, which looks
+    # like a bad 1080p rather than like an outage and so is never reported.
+    source_bps = row.get("rung_bps")
+    other_bps = row.get("rung_best_other_bps")
+    if source_bps and other_bps and other_bps > source_bps:
+        # deliberately without the two numbers in it. The alert de-dupes on the
+        # text of the fault, and this one stands for hours at a time while both
+        # numbers move every sample, so spelling them out here would send a
+        # message every five minutes instead of one every thirty. They are in
+        # the rung line of the detail block that goes out with the alert.
+        found.append("RUNG: un encodage de Kick est annonce plus gros que la "
+                     "source, les lecteurs le prendront et l'upscaleront")
+    if row.get("ladder_error"):
+        found.append(f"ladder: {row['ladder_error']}")
     return found
 
 
@@ -477,6 +571,16 @@ def detail(row):
         f"tampon {row.get('buffer_s')}s",
         f"  kick     http={row.get('kick_http')} live={row.get('is_live')} "
         f"spectateurs={row.get('viewer_count')}",
+        # Recorded rather than compared. The buffer runs up to half an hour, so
+        # the chunk measured above is not the one on air yet, and asserting the
+        # two agree would fire on every change of source rather than on a fault.
+        # What this is for is the day a 720p file follows a 1080p one: if Kick
+        # keeps advertising the old shape, it is in this line that it shows.
+        f"  rung     source {row.get('rung_width')}x{row.get('rung_height')}"
+        f"@{row.get('rung_fps')} {kbps(row.get('rung_bps'))} sur "
+        f"{row.get('rung_count')} rungs, meilleur autre "
+        f"{kbps(row.get('rung_best_other_bps'))}"
+        f"{'  ' + row['ladder_error'] if row.get('ladder_error') else ''}",
     ]
     return "\n".join(lines)
 
