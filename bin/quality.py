@@ -178,6 +178,10 @@ def faults(row):
     found = []
     if not row.get("chunk"):
         found.append("aucun chunk sur le disque")
+    elif row.get("chunk_error"):
+        # a chunk ffprobe cannot read is the shape of the fault that took the
+        # channel down on 2026-09-05, so it counts as one rather than as a gap
+        found.append(f"chunk illisible ({row['chunk_error']})")
     else:
         video = row.get("video_bps")
         # a partial chunk is the tail of a video and measures light through no
