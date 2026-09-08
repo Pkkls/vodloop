@@ -76,10 +76,10 @@ try:
     check("everything known yields nothing rather than looping", got == [], str(got))
 
     print("filtering a source by title")
-    listing = ("aaaaaaaaaaa\tIce Poseidon in Tokyo\n"
-               "bbbbbbbbbbb\tSomeone else entirely\n"
-               "ccccccccccc\tCX247 highlights\n"
-               "ddddddddddd\tA cooking show\n")
+    listing = ("aaaaaaaaaaa\t1800\tIce Poseidon in Tokyo\n"
+               "bbbbbbbbbbb\t600\tSomeone else entirely\n"
+               "ccccccccccc\t43000\tCX247 highlights\n"
+               "ddddddddddd\tNA\tA cooking show\n")
 
     class _Stub:
         SubprocessError = RuntimeError
@@ -90,19 +90,31 @@ try:
 
     real_sub, collector.subprocess = collector.subprocess, _Stub
     try:
-        kept = collector.list_source({"url": "u", "match": ["ice poseidon", "cx"]})
+        kept, secs = collector.list_source(
+            {"url": "u", "match": ["ice poseidon", "cx"]})
         check("only the matching titles are kept",
               kept == ["aaaaaaaaaaa", "ccccccccccc"], str(kept))
         check("the match is case insensitive",
               "ccccccccccc" in collector.list_source(
-                  {"url": "u", "match": ["cx247"]}))
+                  {"url": "u", "match": ["cx247"]})[0])
 
         # the control: the same listing with no filter must keep everything,
         # otherwise the check above could be passing on parsing that drops rows
         # for some reason of its own rather than on the filter
-        everything = collector.list_source({"url": "u", "match": []})
+        everything, all_secs = collector.list_source({"url": "u", "match": []})
         check("without a filter the whole source is kept",
               len(everything) == 4, str(everything))
+
+        print("durations come off the same listing")
+        check("a duration is read alongside the id",
+              secs.get("aaaaaaaaaaa") == 1800 and secs.get("ccccccccccc") == 43000,
+              str(secs))
+        # NA is what yt-dlp prints for a live or hidden entry. Stored as zero it
+        # would sort ahead of every real video and be fetched first, which is the
+        # opposite of what asking for the shortest one means
+        check("an unreadable duration is left out, not stored as zero",
+              "ddddddddddd" in everything and "ddddddddddd" not in all_secs,
+              str(all_secs))
     finally:
         collector.subprocess = real_sub
 
@@ -124,6 +136,60 @@ try:
           == "abcDEF12345")
     check("a name without an id is not mistaken for one",
           collector.VIDEO_ID.search("no_id_here.mp4") is None)
+
+    print("choosing by duration when the runway is short")
+    # b is the shortest, then a, then c. In source order it is a, b, c: if the
+    # picker were ignoring the durations it would hand back a first, so the
+    # order below is what proves the duration is being read.
+    collector.sources = lambda: [{"url": u, "match": []}
+                                 for u in ("src-a", "src-b", "src-c")]
+    collector.pool = lambda: {
+        "src-a": {"ids": A, "dur": {v: 3600 for v in A}},
+        "src-b": {"ids": B, "dur": {v: 600 for v in B}},
+        "src-c": {"ids": C, "dur": {v: 43000 for v in C}}}
+    urgent = collector.pick(3, set(), shortest=True)
+    check("the shortest videos are taken first",
+          [v[0] for v in urgent] == list("bbb"), str(urgent))
+
+    # the control: the same pool, same call, without the flag. If this also came
+    # out shortest first the check above would be measuring the fixture.
+    calm = collector.pick(3, set())
+    check("without the flag it still rotates the sources",
+          [v[0] for v in calm] == list("abc"), str(calm))
+
+    collector.pool = lambda: {
+        "src-a": {"ids": A, "dur": {A[0]: 900}},
+        "src-b": {"ids": B, "dur": {}}, "src-c": {"ids": C, "dur": {}}}
+    partial = collector.pick(3, set(), shortest=True)
+    check("an unmeasured video is not offered as a short one",
+          partial == [A[0]], str(partial))
+
+    collector.pool = lambda: {"src-a": {"ids": A}, "src-b": {"ids": B},
+                              "src-c": {"ids": C}}
+    blind = collector.pick(3, set(), shortest=True)
+    check("with no duration anywhere it queues something rather than nothing",
+          len(blind) == 3, str(blind))
+
+    print("reading the board's own report")
+    real_status, collector.STATUS_FILE = collector.STATUS_FILE, pathlib.Path("/nonexistent")
+    try:
+        check("no report at all is unknown, not zero",
+              collector.board_queue() is None)
+    finally:
+        collector.STATUS_FILE = real_status
+
+    fresh = {"queue": 7, "at": 1000}
+    real_load, collector.load = collector.load, lambda *_a, **_k: fresh
+    try:
+        check("a fresh report is believed", collector.board_queue(now=1060) == 7)
+        # the board publishes every five minutes. Past the staleness window the
+        # file records the last time it could be reached, not what it holds now,
+        # and a count read off it would be a guess presented as a measurement
+        check("a stale report is unknown, not the number it last said",
+              collector.board_queue(
+                  now=1000 + collector.STATUS_STALE_SECONDS + 1) is None)
+    finally:
+        collector.load = real_load
 finally:
     collector.sources = real_sources
     collector.pool = real_pool
