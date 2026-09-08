@@ -97,7 +97,7 @@ files=$(find "$WORK" -maxdepth 1 -type f \( -name '*.mp4' -o -name '*.mkv' -o -n
 # Un temp laisse par un merge tue nest jamais passe par sweep, et il est
 # parfaitement lisible: un merge coupe a 3 h sur 11 h ne se voit nulle part
 # en aval. Sans cette ligne le run suivant le televerse comme la video.
-files=$(printf %s\n "$files" | sed "/[.]temp[.]/d")
+files=$(echo "$files" | sed "/[.]temp[.]/d")
 [ -n "$files" ] || die "rien telecharge (trop long, ou pas d'avc1 disponible)"
 
 need_kb=$(du -sk $files | awk '{s+=$1} END {print s}')
