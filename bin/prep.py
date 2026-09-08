@@ -789,7 +789,11 @@ def library_size():
 
 def runway_seconds(history=None, ignoring=None):
     """Video the channel can still play, in seconds: chunks already cut plus
-    every library file that has plays left in it.
+    every library file that has plays left in it AND that prep can copy.
+
+    Both halves of that matter. A file prep refuses is not runway however long
+    it is, and counting it let the rotation be deleted down to one unplayable
+    video with the floor reporting an hour in hand.
 
     This is the number that decides whether anything may be deleted. A file
     count cannot: three files might be twenty minutes or six hours, and the
@@ -814,6 +818,18 @@ def runway_seconds(history=None, ignoring=None):
         entry = history.setdefault(str(path), {"at": 0.0, "plays": 0})
         if entry.get("plays", 0) >= common.MAX_PLAYS:
             continue  # spent: it is not runway, it is what is about to go
+        # A file prep cannot copy is not air time, whatever its duration says.
+        # This counted them, so the floor that is supposed to stop the library
+        # being eaten was happy to protect one: on 2026-09-08 the rotation was
+        # deleted down to a single file whose video packets carry no PTS, which
+        # prep refuses on purpose because it takes the pusher down. The floor
+        # held, there was an hour of "runway" on disk, and the channel showed
+        # the standby clip because none of it could be played.
+        #
+        # An unmeasured file counts as unusable here on purpose: reading the
+        # runway low only ever refuses a deletion, which is the safe direction.
+        if not remux_verdict(path):
+            continue
         if not entry.get("secs"):
             entry["secs"] = duration_of(path)
         total += (entry["secs"] or 0) * (common.MAX_PLAYS - entry.get("plays", 0))
