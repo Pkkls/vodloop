@@ -102,6 +102,15 @@ URGENT_RUNWAY_SECONDS = 4 * 3600
 
 VIDEO_ID = re.compile(r"-([A-Za-z0-9_-]{11})\.(?:mp4|mkv)$")
 
+# prep reads its library out of VODLOOP_LIBRARY, which the unit file sets and
+# this module's crontab line does not. Left alone, runway_seconds() then counts
+# only the chunks already cut and misses every unplayed file: measured
+# 2026-09-08, 1500 s against the true 3097 s, so every run read as urgent and the
+# unhurried branch below could never be reached. Pointing prep at the directory
+# this module already knows about is one line, and unlike a third copy of the
+# path in a crontab it cannot drift out of step with the two above it.
+prep.LIBRARY = LIBRARY
+
 
 def load(path, default):
     try:

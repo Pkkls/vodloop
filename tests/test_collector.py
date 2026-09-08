@@ -170,6 +170,15 @@ try:
     check("with no duration anywhere it queues something rather than nothing",
           len(blind) == 3, str(blind))
 
+    print("the runway it reads")
+    # prep takes its library from VODLOOP_LIBRARY, which the unit sets and this
+    # module's crontab line does not. Unwired, runway_seconds() counts only the
+    # chunks already cut: 1500 s against a true 3097 s when this was measured,
+    # so every run read as urgent and the unhurried branch was unreachable.
+    check("prep is pointed at the same library this module uses",
+          collector.prep.LIBRARY == collector.LIBRARY,
+          f"{collector.prep.LIBRARY} vs {collector.LIBRARY}")
+
     print("reading the board's own report")
     real_status, collector.STATUS_FILE = collector.STATUS_FILE, pathlib.Path("/nonexistent")
     try:
