@@ -618,6 +618,8 @@ def reap(queue):
             continue
         if not list(common.SEGMENTS.glob(f"{item['id']:05d}_*.ts")):
             item["status"] = "played"
+            if item.get("path"):
+                record_play(item["path"])
             (common.STATE / f"title_{item['id']:05d}.txt").unlink(missing_ok=True)
 
     # Chunks whose item no longer exists would otherwise sit there forever and,
@@ -663,7 +665,12 @@ REPLAY_GAP_SECONDS = 7 * 86400
 
 
 def load_history():
-    """When each library file was last put in the queue, as {path: epoch}."""
+    """What each library file has done, as {path: {"at": epoch, "plays": n}}.
+
+    A bare number is read as the "at" of an entry with no plays yet, because
+    that is the shape this file had for the few hours between the rotation
+    memory landing and the play count landing on top of it.
+    """
     try:
         data = json.loads(HISTORY.read_text())
     except (OSError, ValueError):
@@ -671,12 +678,24 @@ def load_history():
     if not isinstance(data, dict):
         return {}
     out = {}
-    for path, when in data.items():
+    for path, entry in data.items():
+        if isinstance(entry, dict):
+            at, plays = entry.get("at"), entry.get("plays")
+        else:
+            at, plays = entry, 0
         try:
-            out[str(path)] = float(when)
+            out[str(path)] = {"at": float(at), "plays": max(0, int(plays or 0))}
         except (TypeError, ValueError):
             continue  # an unreadable entry means "never played", not a crash
     return out
+
+
+def played_count(history, path):
+    return history.get(str(path), {}).get("plays", 0)
+
+
+def last_queued(history, path):
+    return history.get(str(path), {}).get("at", 0.0)
 
 
 def save_history(history):
@@ -688,6 +707,61 @@ def save_history(history):
         tmp.replace(HISTORY)
     except OSError:
         pass  # a history that cannot be written repeats itself, it does not stop
+
+
+def library_size():
+    """How many videos the rotation still has to draw from."""
+    if LIBRARY is None or not LIBRARY.is_dir():
+        return 0
+    return sum(1 for p in LIBRARY.iterdir()
+               if p.is_file() and p.suffix.lower() in MEDIA_SUFFIXES)
+
+
+def record_play(path):
+    """Count one play of a library file, and retire it once it has had its two.
+
+    Counted here, where an item has just been observed to finish, rather than
+    where it was queued: a file that failed to encode was never on air and has
+    no business being retired for it.
+
+    Retiring means deleting, for the same reason the janitor deletes: moving a
+    file frees nothing when it is all one filesystem, and the collector can
+    fetch it again from the source. The floor is the whole safety of it. With
+    nothing arriving to replace what goes, this would otherwise cut the rotation
+    down one video at a time, and a channel with nothing left to play is a worse
+    answer to "I keep seeing the same video" than the repeat was.
+    """
+    if LIBRARY is None:
+        return
+    path = pathlib.Path(path)
+    try:
+        if path.parent != LIBRARY or not path.is_file():
+            return
+    except OSError:
+        return
+    history = load_history()
+    entry = history.setdefault(str(path), {"at": 0.0, "plays": 0})
+    entry["plays"] += 1
+    if entry["plays"] < common.MAX_PLAYS:
+        save_history(history)
+        return
+    if library_size() <= common.MIN_LIBRARY_FILES:
+        # said on every pass rather than once, because a rotation sitting on the
+        # floor is the state where nothing is arriving to replace what plays
+        print(f"plancher a {common.MIN_LIBRARY_FILES} fichiers: {path.name} garde "
+              f"malgre ses {entry['plays']} passages, rien a mettre a la place",
+              flush=True)
+        save_history(history)
+        return
+    try:
+        path.unlink()
+    except OSError as exc:
+        print(f"  retrait impossible ({path.name}): {exc}", flush=True)
+        save_history(history)
+        return
+    history.pop(str(path), None)
+    save_history(history)
+    print(f"retire apres {common.MAX_PLAYS} passages: {path.name}", flush=True)
 
 
 def refill_from_library(queue):
@@ -729,7 +803,7 @@ def refill_from_library(queue):
     # the janitor deletes library files, and a deleted file keeps no place in
     # the rotation: the same name arriving again is a new file, not a replay
     known = {str(p) for p in media}
-    history = {path: when for path, when in load_history().items() if path in known}
+    history = {path: entry for path, entry in load_history().items() if path in known}
     # The video on air right now is not a candidate for the pass that follows
     # it. Its entry is still "ready" and its chunks are still on the disk, and
     # without this it went back in the draw it is currently the answer to and
@@ -738,25 +812,23 @@ def refill_from_library(queue):
               if i.get("path") and list(common.SEGMENTS.glob(f"{i['id']:05d}_*.ts"))}
     pool = [p for p in sources if str(p) not in on_air] or sources
 
+    # A file that has had its plays should already be gone, retired by
+    # record_play as it finished. One still here is one the floor refused to
+    # delete, and it goes back in the draw only when there is nothing else.
+    fresh_enough = [p for p in pool if played_count(history, p) < common.MAX_PLAYS]
+    pool = fresh_enough or pool
+
     # Nothing recorded what had already played, so the rotation was a fresh
     # shuffle with no memory: the last video of one pass could be the first of
-    # the next. A file that has been on air within the week now stands aside
-    # while anything else is available.
-    picks = [p for p in pool if now - history.get(str(p), 0.0) > REPLAY_GAP_SECONDS]
-    if picks:
-        random.shuffle(picks)
-    else:
-        # ponytail: with a 21.3h library this is the ordinary branch, not the
-        # exception, and it is what actually prevents a repeat: refill queues the
-        # whole library at once and only fires again when that is spent, so a
-        # file cannot come back before every other one has played. The shuffle
-        # before the sort breaks the ties a pass stamping every file with the
-        # same second creates, or the order would settle to alphabetical and
-        # stay there. Per-file stamps at play time are the upgrade if the
-        # rotation ever needs to be finer than one pass.
-        picks = list(pool)
-        random.shuffle(picks)
-        picks.sort(key=lambda p: history.get(str(p), 0.0))
+    # the next. A file that has been on air within the week stands aside while
+    # anything else is available.
+    picks = [p for p in pool
+             if now - last_queued(history, p) > REPLAY_GAP_SECONDS] or list(pool)
+    # Random every pass, never an order. The order is not what stops a repeat
+    # anyway: refill queues the whole pool at once and only fires again once
+    # that is spent, so a file cannot come back before every other one has
+    # played, whichever order they play in.
+    random.shuffle(picks)
 
     # The played entries naming these same files go first, or the queue keeps a
     # dead copy of the whole library on every pass. An item still holding chunks
@@ -774,7 +846,7 @@ def refill_from_library(queue):
     # the channel plays. Votes are untouched: they sort ahead of added_at and
     # still decide what jumps the line.
     for src in picks:
-        history[str(src)] = now
+        history.setdefault(str(src), {"at": 0.0, "plays": 0})["at"] = now
         queue["seq"] += 1
         queue["items"].append({
             "id": queue["seq"],

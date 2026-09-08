@@ -1,20 +1,22 @@
 #!/usr/bin/env python3
 """Rotation memory. Run: python3 tests/test_prep_history.py
 
-Two faults, one function. Nothing recorded what had already been on air, so
+Three faults, one function. Nothing recorded what had already been on air, so
 every refill was a fresh shuffle of the whole library and the last video of one
-pass could be the first of the next. And the refill dropped every queue entry
-naming a library file, including the one being played: reap() then deleted the
-chunks that entry owned, the video was cut off mid-play, and the file went
-straight back in the draw. That is how the same video came round twice.
+pass could be the first of the next. The refill dropped every queue entry naming
+a library file, including the one being played: reap() then deleted the chunks
+that entry owned, the video was cut off mid-play, and the file went straight back
+in the draw. And a file stayed in the rotation for ever, so a library that stops
+growing is a library the viewer has seen end to end, twice, and then again.
 
-So the questions here are: does a file that has just been on air stand aside,
-does one that has not come back, is the queue ever left empty by the rule, and
-does the entry that is currently feeding the channel survive a refill.
+So the questions here are: does a file that has just been on air stand aside, is
+the queue ever left empty by that rule, does the entry feeding the channel
+survive a refill, and is a file that has had its two plays actually gone.
 
 Each check has its control. "Excluded after a day" would pass on a function that
 excluded everything, so the same library is asked again with only the dates
-moved and has to answer differently.
+moved and has to answer differently. "Deleted after two plays" would pass on a
+function that deleted on the first, so one play is asked for too.
 """
 import importlib
 import json
@@ -30,9 +32,17 @@ root = pathlib.Path(tempfile.mkdtemp(prefix="prep-history-"))
 (root / "state").mkdir()
 library = root / "videos"
 library.mkdir()
-NAMES = ["a.mp4", "b.mp4", "c.mp4"]
-for name in NAMES:
-    (library / name).write_text("video")
+NAMES = ["a.mp4", "b.mp4", "c.mp4", "d.mp4", "e.mp4"]
+
+
+def rebuild_library():
+    for old in library.iterdir():
+        old.unlink()
+    for name in NAMES:
+        (library / name).write_text("video")
+
+
+rebuild_library()
 
 os.environ["VODLOOP_ROOT"] = str(root)
 os.environ["VODLOOP_LIBRARY"] = str(library)
@@ -50,6 +60,9 @@ importlib.reload(prep)
 # real file is measured in test_prep_remux_safety.py; here it only has to stay
 # out of the way of the question being asked.
 prep.remux_verdict = lambda p: True
+# Four, so one deletion out of five files reaches it and the floor can be seen
+# to hold. The real one is 18 against a 38 file library.
+common.MIN_LIBRARY_FILES = 4
 
 DAY = 86400
 NOW = time.time()
@@ -68,9 +81,13 @@ def check(label, ok, detail=""):
         print(f"RATE {label} {detail}")
 
 
-def set_history(ages_in_days):
-    prep.HISTORY.write_text(json.dumps(
-        {str(library / name): NOW - days * DAY for name, days in ages_in_days.items()}))
+def set_history(entries):
+    """{name: days_since_last_queued} or {name: (days, plays)}."""
+    out = {}
+    for name, value in entries.items():
+        days, plays = value if isinstance(value, tuple) else (value, 0)
+        out[str(library / name)] = {"at": NOW - days * DAY, "plays": plays}
+    prep.HISTORY.write_text(json.dumps(out))
 
 
 def refill(items=None):
@@ -84,37 +101,47 @@ def refill(items=None):
 
 
 # --- a file on air this week stands aside, one from last week comes back ---
-set_history({"a.mp4": 1, "b.mp4": 8, "c.mp4": 8})
+set_history({"a.mp4": 1, "b.mp4": 8, "c.mp4": 8, "d.mp4": 8, "e.mp4": 8})
 queue, queued = refill()
 check("un fichier passe il y a 1 jour est ecarte", "a.mp4" not in queued, queued)
 check("ceux passes il y a 8 jours reviennent",
-      sorted(queued) == ["b.mp4", "c.mp4"], queued)
+      sorted(queued) == ["b.mp4", "c.mp4", "d.mp4", "e.mp4"], queued)
 
 # the control: only the dates move, and the same library answers differently.
 # Without this the check above would pass on a function that excluded a.mp4 for
 # any other reason, its name included.
-set_history({"a.mp4": 8, "b.mp4": 8, "c.mp4": 8})
+set_history({name: 8 for name in NAMES})
 queue, queued = refill()
 check("temoin: passe il y a 8 jours, le meme fichier revient",
       sorted(queued) == sorted(NAMES), queued)
 
 # --- the window is a preference, not a lock -------------------------------
 # Every file inside the week and none outside it. A rule that emptied the queue
-# here would be a grey screen, so the fallback has to fire and it has to order
-# by what has waited longest.
-set_history({"a.mp4": 1, "b.mp4": 2, "c.mp4": 3})
+# here would be a grey screen, so the whole pool has to come back anyway.
+set_history({"a.mp4": 1, "b.mp4": 2, "c.mp4": 3, "d.mp4": 4, "e.mp4": 5})
 queue, queued = refill()
 check("tout dans la fenetre: la file n'est pas vide",
       sorted(queued) == sorted(NAMES), queued)
-check("et le plus ancien passe en premier", queued == ["c.mp4", "b.mp4", "a.mp4"],
-      queued)
+check("et personne n'y est deux fois", len(queued) == len(set(queued)), queued)
 
-# the control: reverse the ages and the order reverses with them, so the check
-# above measured the dates and not the alphabet
-set_history({"a.mp4": 3, "b.mp4": 2, "c.mp4": 1})
-queue, queued = refill()
-check("temoin: dates inversees, ordre inverse",
-      queued == ["a.mp4", "b.mp4", "c.mp4"], queued)
+# --- the order is drawn, not computed -------------------------------------
+# Same history, same library, ten passes: an order that is decided by anything
+# but chance gives the same answer every time.
+orders = set()
+for _ in range(10):
+    orders.add(tuple(refill()[1]))
+check("l'ordre change d'une passe a l'autre", len(orders) > 1, f"{len(orders)} ordres")
+
+# the control: neutralise the shuffle and the same code has to fall back to the
+# listing order, which proves the check above measured the shuffle and not some
+# other reordering
+real_shuffle, prep.random.shuffle = prep.random.shuffle, lambda seq: None
+try:
+    queue, queued = refill()
+    check("temoin: sans le tirage, c'est l'ordre du repertoire",
+          queued == sorted(NAMES), queued)
+finally:
+    prep.random.shuffle = real_shuffle
 
 # --- what refill queues is what it writes down ----------------------------
 prep.HISTORY.unlink(missing_ok=True)
@@ -124,15 +151,25 @@ check("un historique absent laisse tout passer", sorted(queued) == sorted(NAMES)
 check("et refill estampille ce qu'il met en file",
       sorted(pathlib.Path(p).name for p in written) == sorted(NAMES), written)
 check("avec une date d'aujourd'hui",
-      all(abs(v - time.time()) < 300 for v in written.values()), written)
+      all(abs(e["at"] - time.time()) < 300 for e in written.values()), written)
+
+# an entry written before the play count existed is a date, not a record
+prep.HISTORY.write_text(json.dumps({str(library / "a.mp4"): NOW - 8 * DAY}))
+history = prep.load_history()
+check("un ancien historique plat est relu sans casser",
+      prep.played_count(history, library / "a.mp4") == 0
+      and abs(prep.last_queued(history, library / "a.mp4") - (NOW - 8 * DAY)) < 1,
+      history)
 
 # a file the janitor deleted keeps no place in the rotation
-prep.HISTORY.write_text(json.dumps(
-    {str(library / "a.mp4"): NOW, str(library / "disparu.mp4"): NOW}))
+set_history({"a.mp4": 0})
+entries = json.loads(prep.HISTORY.read_text())
+entries[str(library / "disparu.mp4")] = {"at": NOW, "plays": 1}
+prep.HISTORY.write_text(json.dumps(entries))
 queue, queued = refill()
 check("une entree pour un fichier disparu est oubliee",
       "disparu.mp4" not in json.loads(prep.HISTORY.read_text()),
-      json.loads(prep.HISTORY.read_text()))
+      list(json.loads(prep.HISTORY.read_text())))
 
 # --- the entry feeding the channel survives the refill --------------------
 # This is the doubling itself. The item is "ready" and its chunks are on the
@@ -143,7 +180,7 @@ chunk = common.SEGMENTS / "00007_00000.ts"
 chunk.write_text("chunk")
 playing = {"id": 7, "status": "ready", "url": "a.mp4",
            "path": str(library / "a.mp4"), "votes": [], "added_at": 1.0}
-set_history({"a.mp4": 1, "b.mp4": 1, "c.mp4": 1})
+set_history({name: 1 for name in NAMES})
 queue, queued = refill([playing])
 check("l'item dont les chunks jouent encore reste en file",
       any(i["id"] == 7 and i["status"] == "ready" for i in queue["items"]),
@@ -160,6 +197,55 @@ check("temoin: sans chunks, l'ancienne entree est retiree",
       all(i["id"] != 7 for i in queue["items"]),
       [(i["id"], i["status"]) for i in queue["items"]])
 check("temoin: et son fichier revient dans le tirage", "a.mp4" in queued, queued)
+
+# --- two passages and the file goes ---------------------------------------
+rebuild_library()
+prep.HISTORY.unlink(missing_ok=True)
+prep.record_play(library / "a.mp4")
+check("un premier passage ne supprime rien", (library / "a.mp4").is_file())
+check("mais il est compte",
+      prep.played_count(prep.load_history(), library / "a.mp4") == 1,
+      prep.load_history())
+
+prep.record_play(library / "a.mp4")
+check("le deuxieme passage retire le fichier", not (library / "a.mp4").exists())
+check("et son entree part avec lui",
+      str(library / "a.mp4") not in prep.load_history(), prep.load_history())
+check("le reste de la bibliotheque est intact", prep.library_size() == 4,
+      sorted(p.name for p in library.iterdir()))
+
+# a file handed over for one play is not the library's to retire
+dropped = common.INCOMING / "depose.mp4"
+dropped.write_text("video")
+prep.record_play(dropped)
+prep.record_play(dropped)
+check("un fichier depose dans incoming n'est jamais retire ici",
+      dropped.is_file() and str(dropped) not in prep.load_history())
+
+# --- the floor is what stops this emptying the channel ---------------------
+# The library is at four now, which is the floor set at the top of this file, so
+# the next file to finish its two passages has to be kept.
+check("temoin: on est bien au plancher",
+      prep.library_size() == common.MIN_LIBRARY_FILES, prep.library_size())
+prep.record_play(library / "b.mp4")
+prep.record_play(library / "b.mp4")
+check("au plancher, un fichier use est garde", (library / "b.mp4").is_file())
+check("et ses passages continuent d'etre comptes",
+      prep.played_count(prep.load_history(), library / "b.mp4") == 2,
+      prep.load_history())
+
+# --- and a kept-but-spent file is drawn last ------------------------------
+queue, queued = refill()
+check("un fichier use n'est pas retire au tirage tant qu'il en reste d'autres",
+      "b.mp4" not in queued and len(queued) == 3, queued)
+
+# the control: when every file is spent the draw takes them anyway, because an
+# empty queue is the one outcome worse than a repeat
+set_history({name: (1, common.MAX_PLAYS) for name in
+             sorted(p.name for p in library.iterdir())})
+queue, queued = refill()
+check("temoin: tous uses, la file n'est quand meme pas vide",
+      sorted(queued) == sorted(p.name for p in library.iterdir()), queued)
 
 print()
 print(f"{passed}/{passed + failed} passent")

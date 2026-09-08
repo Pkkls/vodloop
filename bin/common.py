@@ -99,6 +99,19 @@ MAX_BANNED = 500             # the ban list grows with distinct chatters
 FLUSH_INTERVAL_SECONDS = 1.0
 # refuse to prepare more video when the disk gets this low
 MIN_FREE_BYTES = 4 * 1024 ** 3
+# The rotation never falls below this many files, whatever else asks for one to
+# go. The janitor retires on disk pressure and prep retires on play count, and
+# either of them left alone would happily empty the channel it exists to keep
+# on air. A count, not hours, but a count that has to mean something at the
+# current bitrate: 40 was right when a file was 400 Mo and the library held 62;
+# at 1080p the whole rotation is 38 files, so a higher floor would sit above the
+# library and stop both of them acting at all.
+MIN_LIBRARY_FILES = 18
+# How many times a library file is played before it is retired to make room for
+# something else. Deleting it is what "retired" means: moving it frees nothing,
+# it is all one filesystem, and the collector can fetch it again from the
+# source, so this costs download time rather than material.
+MAX_PLAYS = 2
 # a wall clock on one encode, so a single hostile input cannot pin the machine
 # and stall everything behind it. Scaled by the video's own length.
 ENCODE_TIMEOUT_FACTOR = 4
