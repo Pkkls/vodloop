@@ -86,8 +86,13 @@ sweep() {
   # le 2026-09-08 un merge de 4 Go tue par lOOM en a laisse 1,5 Go en
   # travers, et rien ne les ramassait.
   rm -f "$WORK"/*.part "$WORK"/*.ytdl "$WORK"/*.temp.* 2>/dev/null || true
-  rm -f "$WORK"/*.f[0-9][0-9][0-9].mp4 "$WORK"/*.f[0-9][0-9][0-9].webm \
-        "$WORK"/*.f[0-9][0-9][0-9].m4a 2>/dev/null || true
+  # Le suffixe de format n'est pas toujours ".fNNN.": yt-dlp ecrit aussi
+  # ".f140-12.m4a" quand il numerote plusieurs pistes d'un meme format, et un
+  # de ceux-la est reste 12 heures sur la carte parce que les motifs ci-dessous
+  # exigeaient un point juste apres les trois chiffres.
+  rm -f "$WORK"/*.f[0-9][0-9][0-9]*.mp4 "$WORK"/*.f[0-9][0-9][0-9]*.webm \
+        "$WORK"/*.f[0-9][0-9][0-9]*.m4a "$WORK"/*.f[0-9][0-9][0-9]*.mkv \
+        2>/dev/null || true
 }
 
 die() { sweep; log "ECHEC: $*"; exit 1; }
@@ -150,7 +155,7 @@ fetch() {
     --max-filesize "$MAX_FILESIZE" \
     -f "$QUALITY" \
     --match-filter "duration < $MAX_DURATION" \
-    --merge-output-format mp4 \
+    --merge-output-format mkv \
     -P "$WORK" \
     -o '%(title).120B-%(id)s.%(ext)s' \
     "$@" >>"$LOG" 2>&1
