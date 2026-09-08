@@ -76,9 +76,26 @@ check("its frame rate is read as a number",
       broken.get("rung_fps") == 50.0, str(broken.get("rung_fps")))
 check("every rung is counted", broken.get("rung_count") == 3,
       str(broken.get("rung_count")))
-check("the fattest rung that is not the source is what it is measured against",
-      broken.get("rung_best_other_bps") == 3422999,
-      str(broken.get("rung_best_other_bps")))
+check("the fattest SMALLER rung is what it is measured against",
+      broken.get("rung_best_smaller_bps") == 3422999,
+      str(broken.get("rung_best_smaller_bps")))
+
+# Kick also publishes an encode at the source's own resolution. Outbid by that
+# one a viewer loses a generation and not a pixel, and for a 690 kbps 720p30
+# source, which is what YouTube serves for the long IRL VODs in this pool, it
+# would be true on every sample of every one of its eleven hours.
+SAME_SIZE = """#EXTM3U
+#EXT-X-STREAM-INF:BANDWIDTH=3422999,RESOLUTION=1280x720,FRAME-RATE=60.000,VIDEO="720p60"
+https://example.invalid/720p60.m3u8
+#EXT-X-STREAM-INF:BANDWIDTH=760000,RESOLUTION=1280x720,FRAME-RATE=30.000,VIDEO="chunked"
+https://example.invalid/chunked.m3u8
+"""
+thin_720 = served(SAME_SIZE)
+check("a rung at the source's own size does not count as outbidding it",
+      thin_720.get("rung_best_smaller_bps") is None, str(thin_720))
+check("and so it is not reported",
+      not any("RUNG" in f for f in quality.faults(
+          {"chunk": "x.ts", "duration": 0, **thin_720})))
 
 print("the fault it exists for")
 found = quality.faults({"chunk": "x.ts", "duration": 0, **broken})
@@ -86,7 +103,7 @@ check("a source outbid by one of Kick's encodes is reported",
       any("RUNG" in f for f in found), str(found))
 # the alert de-dupes on the text, so a fault that stands for hours has to read
 # the same on every sample or it becomes a message every five minutes
-worse = dict(broken, rung_bps=3000000, rung_best_other_bps=3422999)
+worse = dict(broken, rung_bps=3000000, rung_best_smaller_bps=3422999)
 check("the message does not move with the numbers",
       [f for f in found if "RUNG" in f]
       == [f for f in quality.faults({"chunk": "x.ts", "duration": 0, **worse})
@@ -95,8 +112,8 @@ check("the message does not move with the numbers",
 print("the control: the same ladder once the source led it")
 healthy = served(HEALTHY)
 check("the healthy source rung is the fattest",
-      healthy["rung_bps"] > healthy["rung_best_other_bps"],
-      f"{healthy['rung_bps']} vs {healthy['rung_best_other_bps']}")
+      healthy["rung_bps"] > healthy["rung_best_smaller_bps"],
+      f"{healthy['rung_bps']} vs {healthy['rung_best_smaller_bps']}")
 quiet = quality.faults({"chunk": "x.ts", "duration": 0, **healthy})
 check("and it says nothing", not any("RUNG" in f for f in quiet), str(quiet))
 
@@ -134,6 +151,27 @@ unreadable = quality.faults({"chunk": "x.ts", "duration": 0,
                              "ladder_error": "playlist illisible"})
 check("a ladder that could not be read is a fault, not a silence",
       any("ladder" in f for f in unreadable), str(unreadable))
+
+print("how loudly it says it")
+# A source too thin to lead the ladder stays too thin for as long as it is on
+# air, up to eleven hours in this pool. At the ordinary cooldown that is a
+# message every half hour about something nobody can act on.
+rung_only = [f for f in quality.faults({"chunk": "x.ts", "duration": 0, **broken})
+             if "RUNG" in f]
+check("the standing fault is the whole of what would be sent",
+      rung_only == quality.faults({"chunk": "x.ts", "duration": 0, **broken}),
+      str(rung_only))
+check("and it is marked so the alert can slow it down",
+      all(f.startswith(quality.STANDING_PREFIX) for f in rung_only))
+check("a standing fault waits far longer than an ordinary one",
+      quality.STANDING_COOLDOWN_SECONDS > quality.ALERT_COOLDOWN_SECONDS,
+      f"{quality.STANDING_COOLDOWN_SECONDS} > {quality.ALERT_COOLDOWN_SECONDS}")
+# the control: a breakage alongside it is a new situation and must not inherit
+# the slow cadence
+mixed = quality.faults({"chunk": "x.ts", "duration": 0, "chunk_error": "illisible",
+                        **broken})
+check("mixed with a real breakage it is not a standing fault any more",
+      not all(f.startswith(quality.STANDING_PREFIX) for f in mixed), str(mixed))
 
 print()
 if failures:

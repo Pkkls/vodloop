@@ -55,6 +55,14 @@ MAX_LOG_BYTES = 4 * 1024 ** 2
 # The same fault every five minutes is not monitoring, it is noise someone
 # learns to ignore. One message per distinct fault per this long.
 ALERT_COOLDOWN_SECONDS = 30 * 60
+# Some faults describe the video rather than a breakage, and nothing anyone does
+# in the next half hour changes them: a source too thin to lead Kick's ladder
+# stays too thin for as long as it is on air, which for this pool can be eleven
+# hours. Saying it once a shift is telling; saying it twenty times is noise.
+STANDING_COOLDOWN_SECONDS = 6 * 3600
+# What marks one. Kept as a prefix on the fault text so there is one place to
+# read it from and nothing to keep in step.
+STANDING_PREFIX = "RUNG:"
 
 # A catastrophe net, and deliberately nothing finer than that. The real question
 # is asked against the source a few functions down; these two only catch the
@@ -156,14 +164,21 @@ def whole(raw):
 
 
 def ladder(playback_url):
-    """What Kick advertises for the source rung, and whether it leads.
+    """What Kick advertises for the source rung, and what can outbid it.
 
-    A player choosing by bandwidth takes the fattest rung it can afford. The
-    source is the only rung that was not re-encoded, so it has to be the fattest
-    one or every player picks an encode of itself and upscales it. On
-    2026-09-08, fed 50 fps, the source advertised 3 070 272 while Kick's own
-    720p60 advertised 3 422 999, and that is what "fausse 1080p, plein de
-    tearing" was. It is a two line arithmetic check and it has a witness.
+    A player choosing by bandwidth takes the fattest rung it can afford, so the
+    thing that costs a viewer picture is a rung with FEWER pixels than the
+    source advertising MORE bandwidth than it: the player takes that one and
+    blows it back up. On 2026-09-08, fed 50 fps, the 1080p source advertised
+    3 070 272 while Kick's own 720p60 advertised 3 422 999, and that is what
+    "fausse 1080p, plein de tearing" was.
+
+    Only smaller rungs count. Kick also publishes an encode at the source's own
+    resolution, and when a thin source is outbid by that one the viewer loses a
+    generation but not a single pixel, which is not worth waking anyone for. A
+    720p30 stream at 690 kbps, which is what YouTube serves for the long IRL
+    VODs in this pool, is outbid by Kick's 720p60 rung on every sample of every
+    one of its eleven hours.
     """
     if not playback_url:
         return {}
@@ -173,11 +188,14 @@ def ladder(playback_url):
     source = next((r for r in found if r["video"] == "chunked"), None)
     if source is None:
         return {"ladder_error": "aucun rung chunked"}
-    others = [r["bps"] for r in found if r is not source and r["bps"]]
+    pixels = (source["width"] or 0) * (source["height"] or 0)
+    smaller = [r["bps"] for r in found
+               if r is not source and r["bps"]
+               and 0 < (r["width"] or 0) * (r["height"] or 0) < pixels]
     return {"rung_width": source["width"], "rung_height": source["height"],
             "rung_fps": source["fps"], "rung_bps": source["bps"],
             "rung_count": len(found),
-            "rung_best_other_bps": max(others) if others else None}
+            "rung_best_smaller_bps": max(smaller) if smaller else None}
 
 
 # --- what the machine is doing --------------------------------------------
@@ -501,7 +519,7 @@ def faults(row):
     # bandwidth takes one of Kick's own encodes and upscales it, which looks
     # like a bad 1080p rather than like an outage and so is never reported.
     source_bps = row.get("rung_bps")
-    other_bps = row.get("rung_best_other_bps")
+    other_bps = row.get("rung_best_smaller_bps")
     if source_bps and other_bps and other_bps > source_bps:
         # deliberately without the two numbers in it. The alert de-dupes on the
         # text of the fault, and this one stands for hours at a time while both
@@ -589,8 +607,8 @@ def detail(row):
         # keeps advertising the old shape, it is in this line that it shows.
         f"  rung     source {row.get('rung_width')}x{row.get('rung_height')}"
         f"@{row.get('rung_fps')} {kbps(row.get('rung_bps'))} sur "
-        f"{row.get('rung_count')} rungs, meilleur autre "
-        f"{kbps(row.get('rung_best_other_bps'))}"
+        f"{row.get('rung_count')} rungs, meilleur plus petit "
+        f"{kbps(row.get('rung_best_smaller_bps'))}"
         f"{'  ' + row['ladder_error'] if row.get('ladder_error') else ''}",
     ]
     return "\n".join(lines)
@@ -622,13 +640,19 @@ def alert(row):
     if not found:
         return
     key = " | ".join(found)
+    # a fault nothing can repair in the next half hour does not get to say so
+    # every half hour. Mixed with anything else it is a new situation and pages
+    # at the normal rate.
+    cooldown = (STANDING_COOLDOWN_SECONDS
+                if all(f.startswith(STANDING_PREFIX) for f in found)
+                else ALERT_COOLDOWN_SECONDS)
     now = time.time()
     try:
         seen = json.loads(ALERTS.read_text())
         seen = seen if isinstance(seen, dict) else {}
     except (OSError, ValueError):
         seen = {}
-    if now - float(seen.get(key, 0) or 0) < ALERT_COOLDOWN_SECONDS:
+    if now - float(seen.get(key, 0) or 0) < cooldown:
         return
     if not tgbot.say("qualite: " + key + "\n\n" + detail(row)):
         return  # unsent, so unrecorded: the next pass has to try again
