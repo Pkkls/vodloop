@@ -15,7 +15,13 @@ OFFSET = STATE / "offset"
 FIFO = ROOT / "pipe"
 ALLOWLIST = ROOT / "allowed_channels.json"
 
-# every segment must share these exactly, or concatenation breaks at the junction.
+# Every segment must share the codec and the size exactly, or concatenation
+# breaks at the junction: the resolution lives in the sequence header the ingest
+# reads once. The frame rate is not part of that promise, and matches_target
+# stopped asking for it on 2026-09-08 after a 50fps chunk followed by a 30fps
+# one was measured going through the real feeder and pusher chain cleanly. FPS
+# below is what an encode produces when there is no way around one, not what a
+# file has to prove before it can be copied.
 # 50 is not a taste: it is what the library already is, and this box encodes at
 # 0.77x realtime, so anything that forces a re-encode loses to the clock forever.
 # 1080p since 2026-09-06. The sources are 1920x1080 at 2400-5400 kbps and were

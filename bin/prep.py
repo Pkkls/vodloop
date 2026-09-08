@@ -287,20 +287,32 @@ def remux_verdict(path):
 
 
 def matches_target(path):
-    """Whether a file already holds exactly the picture a chunk must carry.
+    """Whether a file already holds a picture a chunk can carry as it is.
 
-    Only the video is judged. The audio is transcoded either way, so letting it
-    differ costs nothing, while a single re-encoded picture costs more wall time
-    than the video it produces buys back.
+    Codec and size, and deliberately not the frame rate. That pin is what made
+    every arriving video expensive: YouTube serves h264 1080p at 30 or at 60 and
+    never at 50, so a file downloaded in exactly the right codec and exactly the
+    right size still failed this test on its frame rate alone and was re-encoded
+    in full, at 0.06x realtime, to change nothing a viewer can see.
+
+    Dropping it is safe because of what the frame rate is not. The resolution
+    lives in the sequence header the ingest reads once, which is why that stays
+    pinned; the frame rate lives in timestamps the muxer already carries per
+    packet. Measured 2026-09-08 through the real feeder and pusher commands: a
+    50fps chunk followed by a 30fps one at the same size goes through the flv
+    muxer with exit 0 and nothing on stderr, and random bytes in the same chain
+    exit 1, so the check can fail.
+
+    Only the video is judged here. audio_matches_target answers for the sound.
     """
     try:
         out = subprocess.run(
             ["ffprobe", "-v", "error", "-select_streams", "v:0", "-show_entries",
-             "stream=codec_name,width,height,r_frame_rate", "-of", "csv=p=0", str(path)],
+             "stream=codec_name,width,height", "-of", "csv=p=0", str(path)],
             capture_output=True, text=True, timeout=60).stdout
     except (OSError, subprocess.SubprocessError):
         return False
-    want = f"h264,{common.WIDTH},{common.HEIGHT},{common.FPS}/1"
+    want = f"h264,{common.WIDTH},{common.HEIGHT}"
     return out.strip().splitlines()[:1] == [want]
 
 
