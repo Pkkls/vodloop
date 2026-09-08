@@ -126,21 +126,52 @@ if [ -s "$COOKIES_FILE" ]; then
 fi
 
 log "download: $*"
+# Le mur anti-bot de YouTube est intermittent, pas absolu: le 2026-09-08 la meme
+# video est passee puis s'est fait refuser sept minutes plus tard, 12 reussites
+# contre 42 refus sur la journee. Attendre le tick suivant coute cinq minutes
+# pour un seul essai; reessayer tout de suite dans le meme run, a une chance sur
+# cinq par essai, en donne pres de trois sur quatre. Un refus coute quarante
+# secondes, donc quatre essais tiennent largement dans un tick.
+#
+# sweep entre deux essais: un refus arrive parfois apres le debut du telechargement
+# et laisse des morceaux, que l'essai suivant prendrait pour les siens.
+TRIES=4
+RETRY_SLEEP=20
+
 # --restrict-filenames : noms reduits a [A-Za-z0-9._-], donc plus aucun probleme de
 # quoting quand les noms repassent par scp et ssh plus bas.
-yt-dlp \
-  ${PROXY:+--proxy "$PROXY"} \
-  ${COOKIES:+--cookies "$COOKIES"} \
-  --no-playlist \
-  --restrict-filenames \
-  --no-progress \
-  --max-filesize "$MAX_FILESIZE" \
-  -f "$QUALITY" \
-  --match-filter "duration < $MAX_DURATION" \
-  --merge-output-format mp4 \
-  -P "$WORK" \
-  -o '%(title).120B-%(id)s.%(ext)s' \
-  "$@" >>"$LOG" 2>&1 || die "yt-dlp a rendu $? (voir $LOG)"
+fetch() {
+  yt-dlp \
+    ${PROXY:+--proxy "$PROXY"} \
+    ${COOKIES:+--cookies "$COOKIES"} \
+    --no-playlist \
+    --restrict-filenames \
+    --no-progress \
+    --max-filesize "$MAX_FILESIZE" \
+    -f "$QUALITY" \
+    --match-filter "duration < $MAX_DURATION" \
+    --merge-output-format mp4 \
+    -P "$WORK" \
+    -o '%(title).120B-%(id)s.%(ext)s' \
+    "$@" >>"$LOG" 2>&1
+}
+
+attempt=1
+while : ; do
+  if fetch "$@"; then break; fi
+  if [ "$attempt" -ge "$TRIES" ]; then
+    die "yt-dlp refuse apres $attempt essai(s) (voir $LOG)"
+  fi
+  log "essai $attempt/$TRIES refuse, nouvel essai dans ${RETRY_SLEEP}s"
+  sweep
+  attempt=$((attempt + 1))
+  sleep "$RETRY_SLEEP"
+done
+# pas de "[ ... ] && log" ici: sous set -e, un test faux au premier essai tuerait
+# le script juste apres un telechargement reussi.
+if [ "$attempt" -gt 1 ]; then
+  log "passe au ${attempt}e essai"
+fi
 
 # On ne pousse que ce qui vient d'etre produit, pas un residu d'un run precedent.
 files=$(find "$WORK" -maxdepth 1 -type f \( -name '*.mp4' -o -name '*.mkv' -o -name '*.webm' \))
