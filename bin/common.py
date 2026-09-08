@@ -139,19 +139,32 @@ MAX_BANNED = 500             # the ban list grows with distinct chatters
 FLUSH_INTERVAL_SECONDS = 1.0
 # refuse to prepare more video when the disk gets this low
 MIN_FREE_BYTES = 4 * 1024 ** 3
-# The rotation never falls below this many files, whatever else asks for one to
-# go. The janitor retires on disk pressure and prep retires on play count, and
-# either of them left alone would happily empty the channel it exists to keep
-# on air. A count, not hours, but a count that has to mean something at the
-# current bitrate: 40 was right when a file was 400 Mo and the library held 62;
-# at 1080p the whole rotation is 38 files, so a higher floor would sit above the
-# library and stop both of them acting at all.
-MIN_LIBRARY_FILES = 18
+# How much unplayed video must remain after anything deletes anything. This is
+# the only thing standing between a self-emptying library and dead air, and it
+# is measured in time because time is what the channel actually consumes: one
+# second of video per second, forever, whatever the file count says.
+#
+# A count was the wrong instrument and it froze the rotation. The floor was 18
+# files, so a library of fewer than 18 could never retire anything at all: every
+# file stayed for ever and the channel replayed the same handful. Measured
+# 2026-09-08 with one file left after the 50fps purge, that one file was pinned
+# in place by a floor meant to protect it.
+#
+# An hour, because acquiring a replacement takes about ten to fifteen minutes:
+# the board fetches one video per five minute tick and moves it to Oracle at the
+# 32 Mbps measured between them. An hour is three or four times what the slowest
+# replacement needs, which is the margin a 24/7 channel is worth.
+MIN_RUNWAY_SECONDS = 60 * 60
 # How many times a library file is played before it is retired to make room for
-# something else. Deleting it is what "retired" means: moving it frees nothing,
-# it is all one filesystem, and the collector can fetch it again from the
+# something else. One, since 2026-09-08: it plays, it goes, something else comes
+# down. Deleting is what "retired" means, because moving frees nothing when it
+# is all one filesystem, and the collector can fetch the video again from the
 # source, so this costs download time rather than material.
-MAX_PLAYS = 2
+#
+# The disk is a working set, not an archive. 45 Go cannot hold a rerun channel;
+# it can hold the next few hours of one, and MIN_RUNWAY_SECONDS is what keeps
+# those hours there.
+MAX_PLAYS = 1
 # a wall clock on one encode, so a single hostile input cannot pin the machine
 # and stall everything behind it. Scaled by the video's own length.
 ENCODE_TIMEOUT_FACTOR = 4

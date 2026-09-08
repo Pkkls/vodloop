@@ -60,9 +60,12 @@ importlib.reload(prep)
 # real file is measured in test_prep_remux_safety.py; here it only has to stay
 # out of the way of the question being asked.
 prep.remux_verdict = lambda p: True
-# Four, so one deletion out of five files reaches it and the floor can be seen
-# to hold. The real one is 18 against a 38 file library.
-common.MIN_LIBRARY_FILES = 4
+# The fixtures are empty files, so the real probe reads no duration from them
+# and every one would look like nothing left to play. Half an hour each, against
+# a floor of an hour, makes five files two and a half hours of runway and puts
+# the floor where it can be watched biting.
+prep.duration_of = lambda p: 1800.0
+common.MIN_RUNWAY_SECONDS = 3600
 
 DAY = 86400
 NOW = time.time()
@@ -198,54 +201,59 @@ check("temoin: sans chunks, l'ancienne entree est retiree",
       [(i["id"], i["status"]) for i in queue["items"]])
 check("temoin: et son fichier revient dans le tirage", "a.mp4" in queued, queued)
 
-# --- two passages and the file goes ---------------------------------------
+# --- it plays, it goes -----------------------------------------------------
 rebuild_library()
 prep.HISTORY.unlink(missing_ok=True)
-prep.record_play(library / "a.mp4")
-check("un premier passage ne supprime rien", (library / "a.mp4").is_file())
-check("mais il est compte",
-      prep.played_count(prep.load_history(), library / "a.mp4") == 1,
-      prep.load_history())
+for chunk in common.SEGMENTS.glob("*.ts"):
+    chunk.unlink()
+check("cinq fichiers font 150 min de reserve",
+      prep.runway_seconds() == 5 * 1800, prep.runway_seconds())
 
 prep.record_play(library / "a.mp4")
-check("le deuxieme passage retire le fichier", not (library / "a.mp4").exists())
+check("un seul passage suffit a retirer le fichier",
+      not (library / "a.mp4").exists())
 check("et son entree part avec lui",
-      str(library / "a.mp4") not in prep.load_history(), prep.load_history())
-check("le reste de la bibliotheque est intact", prep.library_size() == 4,
-      sorted(p.name for p in library.iterdir()))
+      str(library / "a.mp4") not in prep.load_history())
+check("la reserve tombe d'autant", prep.runway_seconds() == 4 * 1800,
+      prep.runway_seconds())
+# the control: nothing else moved, so the check above measured the play rather
+# than the function merely having run
+check("temoin: les autres sont intacts", prep.library_size() == 4,
+      sorted(q.name for q in library.iterdir()))
 
-# a file handed over for one play is not the library's to retire
+# a file handed over for a single play is not the library's to retire
 dropped = common.INCOMING / "depose.mp4"
 dropped.write_text("video")
-prep.record_play(dropped)
 prep.record_play(dropped)
 check("un fichier depose dans incoming n'est jamais retire ici",
       dropped.is_file() and str(dropped) not in prep.load_history())
 
-# --- the floor is what stops this emptying the channel ---------------------
-# The library is at four now, which is the floor set at the top of this file, so
-# the next file to finish its two passages has to be kept.
-check("temoin: on est bien au plancher",
-      prep.library_size() == common.MIN_LIBRARY_FILES, prep.library_size())
+# --- the floor is time, and it is what stops this emptying the channel ------
 prep.record_play(library / "b.mp4")
-prep.record_play(library / "b.mp4")
-check("au plancher, un fichier use est garde", (library / "b.mp4").is_file())
-check("et ses passages continuent d'etre comptes",
-      prep.played_count(prep.load_history(), library / "b.mp4") == 2,
-      prep.load_history())
+prep.record_play(library / "c.mp4")
+check("on retire tant qu'il reste de quoi diffuser", prep.library_size() == 2,
+      sorted(q.name for q in library.iterdir()))
+check("il reste 60 min, soit le plancher pile",
+      prep.runway_seconds() == 2 * 1800, prep.runway_seconds())
 
-# --- and a kept-but-spent file is drawn last ------------------------------
-queue, queued = refill()
-check("un fichier use n'est pas retire au tirage tant qu'il en reste d'autres",
-      "b.mp4" not in queued and len(queued) == 3, queued)
+prep.record_play(library / "d.mp4")
+check("au plancher, le fichier joue est garde", (library / "d.mp4").is_file())
+check("la bibliotheque ne descend pas plus bas", prep.library_size() == 2,
+      sorted(q.name for q in library.iterdir()))
 
-# the control: when every file is spent the draw takes them anyway, because an
-# empty queue is the one outcome worse than a repeat
-set_history({name: (1, common.MAX_PLAYS) for name in
-             sorted(p.name for p in library.iterdir())})
-queue, queued = refill()
-check("temoin: tous uses, la file n'est quand meme pas vide",
-      sorted(queued) == sorted(p.name for p in library.iterdir()), queued)
+# the control: give the channel more runway and the same file goes. Without it,
+# "kept" could be passing on a function that had simply stopped deleting.
+# d has had its play, so it is no longer runway itself: what has to come back
+# above the floor is everything else, which is e plus whatever is cut on disk.
+for n in range(6):
+    (common.SEGMENTS / f"00042_{n:05d}.ts").write_text("chunk")
+check("temoin: du tampon en plus remonte la reserve",
+      prep.runway_seconds() == 1800 + 6 * common.CHUNK_SECONDS,
+      prep.runway_seconds())
+prep.record_play(library / "d.mp4")
+check("temoin: et le meme fichier est alors retire",
+      not (library / "d.mp4").exists(),
+      sorted(q.name for q in library.iterdir()))
 
 print()
 print(f"{passed}/{passed + failed} passent")

@@ -767,6 +767,39 @@ def library_size():
                if p.is_file() and p.suffix.lower() in MEDIA_SUFFIXES)
 
 
+def runway_seconds(history=None, ignoring=None):
+    """Video the channel can still play, in seconds: chunks already cut plus
+    every library file that has plays left in it.
+
+    This is the number that decides whether anything may be deleted. A file
+    count cannot: three files might be twenty minutes or six hours, and the
+    channel does not consume files, it consumes time.
+
+    Durations are remembered in the history entry the first time they are
+    probed, because this is asked on every finished video and ffprobe on a
+    multi-gigabyte file is not free.
+
+    `ignoring` is the file being considered for deletion, so the caller can ask
+    what the runway would be once it is gone rather than what it is now.
+    """
+    total = seconds_on_disk()
+    if LIBRARY is None or not LIBRARY.is_dir():
+        return total
+    history = load_history() if history is None else history
+    for path in LIBRARY.iterdir():
+        if not path.is_file() or path.suffix.lower() not in MEDIA_SUFFIXES:
+            continue
+        if ignoring is not None and path == pathlib.Path(ignoring):
+            continue
+        entry = history.setdefault(str(path), {"at": 0.0, "plays": 0})
+        if entry.get("plays", 0) >= common.MAX_PLAYS:
+            continue  # spent: it is not runway, it is what is about to go
+        if not entry.get("secs"):
+            entry["secs"] = duration_of(path)
+        total += (entry["secs"] or 0) * (common.MAX_PLAYS - entry.get("plays", 0))
+    return total
+
+
 def record_play(path):
     """Count one play of a library file, and retire it once it has had its two.
 
@@ -795,11 +828,13 @@ def record_play(path):
     if entry["plays"] < common.MAX_PLAYS:
         save_history(history)
         return
-    if library_size() <= common.MIN_LIBRARY_FILES:
-        # said on every pass rather than once, because a rotation sitting on the
-        # floor is the state where nothing is arriving to replace what plays
-        print(f"plancher a {common.MIN_LIBRARY_FILES} fichiers: {path.name} garde "
-              f"malgre ses {entry['plays']} passages, rien a mettre a la place",
+    left = runway_seconds(history, ignoring=path)
+    if left < common.MIN_RUNWAY_SECONDS:
+        # Said on every pass rather than once. A rotation sitting on the floor is
+        # the state where nothing is arriving to replace what plays, and that is
+        # worth repeating until someone or something fixes the supply.
+        print(f"garde {path.name}: sans lui il resterait {int(left / 60)} min "
+              f"a diffuser, plancher {common.MIN_RUNWAY_SECONDS // 60} min",
               flush=True)
         save_history(history)
         return
@@ -811,7 +846,8 @@ def record_play(path):
         return
     history.pop(str(path), None)
     save_history(history)
-    print(f"retire apres {common.MAX_PLAYS} passages: {path.name}", flush=True)
+    print(f"retire apres {common.MAX_PLAYS} passages: {path.name} "
+          f"({int(left / 60)} min encore en reserve)", flush=True)
 
 
 def refill_from_library(queue):

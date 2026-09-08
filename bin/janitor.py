@@ -44,12 +44,12 @@ MEDIA = (".mp4", ".mkv")
 # what this was until 2026-09-08, free space settled just under the collector's
 # threshold and no video was ever fetched again.
 TARGET_FREE_BYTES = 10 * 1024 ** 3
-# Below this the rotation gets thin enough to be noticeable, and a disk that
-# still cannot be satisfied is a problem to report rather than to keep cutting.
-# Shared with prep, which retires files for a different reason and would empty
-# the same library through the same door: two copies of this number would drift
-# and the drift is a channel with nothing left to play.
-MIN_LIBRARY_FILES = common.MIN_LIBRARY_FILES
+# Below this much unplayed video, nothing more is retired whatever the disk
+# says: a full disk is a problem, dead air is the problem. Shared with prep,
+# which retires for a different reason and would empty the same library through
+# the same door. It used to be a file count here, and a count froze the rotation
+# outright once the library fell below it.
+MIN_RUNWAY_SECONDS = common.MIN_RUNWAY_SECONDS
 # Above this, played files are retired even with disk to spare. Without it
 # nothing ever leaves: the collector stops at its own ceiling, the janitor only
 # woke on disk pressure, and the library sat at a fixed 69 files forever, which
@@ -106,7 +106,9 @@ def main(argv):
 
     over = max(0, total - MAX_LIBRARY_FILES)
     print(f"libre={before / 1024 ** 3:.1f}G cible={TARGET_FREE_BYTES / 1024 ** 3:.1f}G "
-          f"bibliotheque={total} plafond={MAX_LIBRARY_FILES} plancher={MIN_LIBRARY_FILES}")
+          f"bibliotheque={total} plafond={MAX_LIBRARY_FILES} "
+          f"reserve={int(prep.runway_seconds() / 60)}min "
+          f"plancher={MIN_RUNWAY_SECONDS // 60}min")
     if before >= TARGET_FREE_BYTES and over == 0:
         print("rien a faire")
         return 0
@@ -117,8 +119,10 @@ def main(argv):
         # keep going while either the disk or the ceiling asks for it
         if before + freed >= TARGET_FREE_BYTES and kept <= MAX_LIBRARY_FILES:
             break
-        if kept <= MIN_LIBRARY_FILES:
-            print(f"plancher atteint a {kept} fichiers, il manque encore "
+        left = prep.runway_seconds(ignoring=path)
+        if left < MIN_RUNWAY_SECONDS:
+            print(f"plancher atteint: sans {path.name[:40]} il resterait "
+                  f"{int(left / 60)} min a diffuser, il manque encore "
                   f"{(TARGET_FREE_BYTES - before - freed) / 1024 ** 3:.1f}G")
             print("-> le disque ne peut pas etre tenu en retirant des VOD seuls")
             return 1
