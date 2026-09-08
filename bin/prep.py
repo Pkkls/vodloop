@@ -13,6 +13,7 @@ import os
 import pathlib
 import json
 import random
+import re
 import shutil
 import subprocess
 import sys
@@ -850,6 +851,44 @@ def record_play(path):
           f"({int(left / 60)} min encore en reserve)", flush=True)
 
 
+# A stream longer than the board's card can hold whole arrives in pieces, named
+# by the video they came from and their place in it: <title>-<id>.p02of04.mp4.
+# Everything downstream treats them as ordinary library files, which is the
+# point; the only thing that has to know is the draw.
+PART = re.compile(r"-([A-Za-z0-9_-]{11})\.p(\d+)of\d+\.[A-Za-z0-9]+$")
+
+
+def video_of(path):
+    """The video a file belongs to, and its place in it.
+
+    A file that is not a part is its own video at position zero, so a library
+    with no parts in it behaves exactly as it did before there were any.
+    """
+    found = PART.search(path.name)
+    if found:
+        return found.group(1), int(found.group(2))
+    return str(path), 0
+
+
+def shuffled_by_video(paths):
+    """Shuffle whole videos, never the pieces inside one.
+
+    random.shuffle over the files would scatter the parts of an eleven hour
+    stream through the rotation and play them out of order. Grouping first
+    means the draw picks videos and each one is emitted whole, in order.
+    """
+    groups = {}
+    for path in paths:
+        video, index = video_of(path)
+        groups.setdefault(video, []).append((index, path))
+    order = list(groups)
+    random.shuffle(order)
+    picked = []
+    for video in order:
+        picked.extend(path for _, path in sorted(groups[video], key=lambda x: x[0]))
+    return picked
+
+
 def refill_from_library(queue):
     """Put the library back in the queue once it has been played through.
 
@@ -914,7 +953,12 @@ def refill_from_library(queue):
     # anyway: refill queues the whole pool at once and only fires again once
     # that is spent, so a file cannot come back before every other one has
     # played, whichever order they play in.
-    random.shuffle(picks)
+    #
+    # The draw is over videos, not over files. A stream too long to fit on the
+    # board's card whole arrives as several files that are one video, and a
+    # plain shuffle would interleave them with another's and air hour nine
+    # before hour one.
+    picks = shuffled_by_video(picks)
 
     # The played entries naming these same files go first, or the queue keeps a
     # dead copy of the whole library on every pass. An item still holding chunks

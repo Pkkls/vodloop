@@ -100,7 +100,12 @@ STATUS_STALE_SECONDS = 45 * 60
 # full library that this is not permanently in a hurry.
 URGENT_RUNWAY_SECONDS = 4 * 3600
 
-VIDEO_ID = re.compile(r"-([A-Za-z0-9_-]{11})\.(?:mp4|mkv)$")
+# The optional part suffix is not decoration. A stream too long for the board's
+# card arrives as <title>-<id>.p02of04.mp4, and without this the id is not read
+# back off those names at all: library_ids() would come back empty, every video
+# already downloaded would look absent, and this would queue the whole pool
+# again on every run while the disk filled.
+VIDEO_ID = re.compile(r"-([A-Za-z0-9_-]{11})(?:\.p\d+of\d+)?\.(?:mp4|mkv)$")
 
 # prep reads its library out of VODLOOP_LIBRARY, which the unit file sets and
 # this module's crontab line does not. Left alone, runway_seconds() then counts
