@@ -272,7 +272,10 @@ def remux_verdict(path, unmeasured=False):
     if key in cache:
         return bool(cache[key])
     if not matches_target(path):
-        verdict = False
+        # The picture is a property of the file and of nothing else, so this one
+        # answer is safe to keep: it will say the same thing on an idle box and
+        # on a thrashing one.
+        verdict, remember = False, True
     else:
         answer = remux_is_safe(path)
         if answer is None:
@@ -280,7 +283,15 @@ def remux_verdict(path, unmeasured=False):
             # hid 22 conformant files behind a busy afternoon. What is returned
             # is the caller's to choose, because "I could not look" is not "no".
             return unmeasured
-        verdict = bool(answer)
+        # A trial remux that succeeded proves the file; one that failed proves
+        # nothing, because it competes for the same two vCPU as the push and the
+        # cut. Measured 2026-09-08: two files whose three probes all pass on an
+        # idle box were each carrying a False taken during a busy minute, and
+        # the channel looped one video with three usable ones in the library.
+        # So a yes is remembered and a no is asked again, which costs a second.
+        verdict, remember = bool(answer), bool(answer)
+    if not remember:
+        return verdict
     # only this file's entry survives, so the cache cannot grow with every
     # version of every file the normaliser ever wrote
     cache = {k: v for k, v in cache.items() if not k.startswith(path.name + ":")}

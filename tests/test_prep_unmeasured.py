@@ -78,6 +78,33 @@ try:
     dropped = prep.drop_unremuxable(queue)
     check("a measured refusal is still removed",
           dropped == 2 and queue["items"] == [], f"{dropped} retire(s)")
+
+    print("a failed trial remux is not remembered")
+    # It competes for the same two vCPU as the push and the cut, so a failure
+    # proves the minute, not the file. Measured 2026-09-08: two files whose
+    # three probes all pass on an idle box each carried a False taken during a
+    # busy one, and the channel looped a single video with three usable ones in
+    # the library.
+    (common.STATE / "remux.json").unlink(missing_ok=True)
+    prep.remux_is_safe = lambda _p: False
+    check("the refusal is answered", prep.remux_verdict(video) is False)
+    prep.remux_is_safe = lambda _p: True
+    check("and asking again on a quiet box gets the true answer",
+          prep.remux_verdict(video) is True)
+
+    # the control: a yes IS remembered, or the cache would be pointless and the
+    # probe would run on every file of every refill pass
+    prep.remux_is_safe = lambda _p: False
+    check("a yes, once taken, is not re-asked",
+          prep.remux_verdict(video) is True)
+
+    # and a picture that does not match is a property of the file, so it stays
+    (common.STATE / "remux.json").unlink(missing_ok=True)
+    prep.matches_target = lambda _p: False
+    check("a wrong picture is refused", prep.remux_verdict(video) is False)
+    prep.matches_target = lambda _p: True
+    check("and that refusal is remembered", prep.remux_verdict(video) is False)
+    prep.matches_target = lambda _p: True
 finally:
     prep.matches_target, prep.remux_is_safe = real_matches, real_safe
 
