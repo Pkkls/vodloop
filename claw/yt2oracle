@@ -188,7 +188,16 @@ files=$(echo "$files" | sed "/[.]temp[.]/d")
 
 need_kb=$(du -sk $files | awk '{s+=$1} END {print s}')
 
-$SSH "$DEST_HOST" "mkdir -p '$DEST_DIR'" || die "ssh vers Oracle impossible (cle autorisee ?)"
+# On depose d'abord dans un sous-dossier, et on ne renomme qu'apres verification.
+# prep balaie la bibliotheque en boucle et sonde chaque fichier qu'il y trouve;
+# un fichier encore en cours d'arrivee est illisible, le verdict "incopiable"
+# est mis en cache sous sa taille du moment, et plus rien ne le reexamine. Ca
+# s'est produit trois fois le 2026-09-08, dont une sous la taille FINALE parce
+# que scp avait fini d'ecrire les octets sans que le fichier soit complet.
+# Un mv sur le meme systeme de fichiers est atomique: prep voit le fichier
+# entier ou ne le voit pas.
+STAGE="$DEST_DIR/.arrivee"
+$SSH "$DEST_HOST" "mkdir -p '$DEST_DIR' '$STAGE'" || die "ssh vers Oracle impossible (cle autorisee ?)"
 
 # Oracle heberge aussi la prod kicknosub sur 45 Go. Remplir ce disque casserait
 # le service, donc on verifie avant de copier, pas apres.
@@ -197,21 +206,28 @@ margin_kb=$((KEEP_FREE_MB * 1024))
 [ $((remote_free_kb - need_kb)) -gt "$margin_kb" ] \
   || die "place Oracle: besoin $((need_kb/1024)) Mo, libre $((remote_free_kb/1024)) Mo, marge $KEEP_FREE_MB Mo"
 
-log "upload: $((need_kb/1024)) Mo vers $DEST_HOST:$DEST_DIR"
-scp -i "$KEY" -o BatchMode=yes -o StrictHostKeyChecking=accept-new $files "$DEST_HOST:$DEST_DIR/" >>"$LOG" 2>&1 \
+log "upload: $((need_kb/1024)) Mo vers $DEST_HOST:$STAGE"
+scp -i "$KEY" -o BatchMode=yes -o StrictHostKeyChecking=accept-new $files "$DEST_HOST:$STAGE/" >>"$LOG" 2>&1 \
   || die "scp a rendu $?"
 
 # Verification fichier par fichier : sans ca un scp tronque passerait pour un succes,
-# et on supprimerait la seule copie locale juste apres.
+# et on supprimerait la seule copie locale juste apres. Le fichier n'entre dans
+# la bibliotheque qu'une fois sa taille confirmee, et il y entre d'un seul coup.
 rc=0
 for f in $files; do
   name=$(basename "$f")
   local_size=$(wc -c < "$f")
-  remote_size=$($SSH "$DEST_HOST" "wc -c < '$DEST_DIR/$name'" 2>/dev/null || echo -1)
+  remote_size=$($SSH "$DEST_HOST" "wc -c < '$STAGE/$name'" 2>/dev/null || echo -1)
   if [ "$local_size" = "$remote_size" ]; then
+    if ! $SSH "$DEST_HOST" "mv -f '$STAGE/$name' '$DEST_DIR/$name'"; then
+      log "MISMATCH publication impossible pour $name (copie locale gardee)"
+      rc=1
+      continue
+    fi
     log "OK $local_size o $name"
     rm -f "$f"
   else
+    $SSH "$DEST_HOST" "rm -f '$STAGE/$name'" 2>/dev/null || true
     log "MISMATCH local=$local_size distant=$remote_size $name (copie locale gardee)"
     rc=1
   fi
