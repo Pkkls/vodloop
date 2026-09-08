@@ -209,51 +209,55 @@ for chunk in common.SEGMENTS.glob("*.ts"):
 check("cinq fichiers font 150 min de reserve",
       prep.runway_seconds() == 5 * 1800, prep.runway_seconds())
 
+# Playing a file used to retire it, and that is what made the channel fragile:
+# a rerun channel that eats its own library depends on the supply never
+# stopping. On 2026-09-08 YouTube closed its player API at 08:41, every fetch
+# failed for the rest of the day, and the library was deleted one video at a
+# time until a single unplayable file was left and the channel sat on the
+# standby clip. Deletion now belongs to the janitor and to the disk pressure it
+# answers to, which is the only real limit.
 prep.record_play(library / "a.mp4")
-check("un seul passage suffit a retirer le fichier",
-      not (library / "a.mp4").exists())
-check("et son entree part avec lui",
-      str(library / "a.mp4") not in prep.load_history())
-check("la reserve tombe d'autant", prep.runway_seconds() == 4 * 1800,
-      prep.runway_seconds())
-# the control: nothing else moved, so the check above measured the play rather
-# than the function merely having run
-check("temoin: les autres sont intacts", prep.library_size() == 4,
+check("un passage ne supprime rien", (library / "a.mp4").is_file())
+check("mais il est compte",
+      prep.load_history()[str(library / "a.mp4")]["plays"] == 1,
+      prep.load_history().get(str(library / "a.mp4")))
+check("et la reserve ne bouge pas: le fichier est toujours diffusable",
+      prep.runway_seconds() == 5 * 1800, prep.runway_seconds())
+
+prep.record_play(library / "a.mp4")
+prep.record_play(library / "a.mp4")
+check("rejoue trois fois, il est toujours la",
+      (library / "a.mp4").is_file()
+      and prep.load_history()[str(library / "a.mp4")]["plays"] == 3)
+check("et il compte encore une fois, pas trois",
+      prep.runway_seconds() == 5 * 1800, prep.runway_seconds())
+
+# the control: the counter is what moves, so the checks above are measuring the
+# play and not a function that simply does nothing at all
+check("temoin: un autre fichier n'a pas ete compte",
+      prep.load_history().get(str(library / "b.mp4"), {}).get("plays", 0) == 0)
+check("temoin: la bibliotheque est intacte", prep.library_size() == 5,
       sorted(q.name for q in library.iterdir()))
 
-# a file handed over for a single play is not the library's to retire
+# a file handed over for a single play is not the library's business either
 dropped = common.INCOMING / "depose.mp4"
 dropped.write_text("video")
 prep.record_play(dropped)
-check("un fichier depose dans incoming n'est jamais retire ici",
+check("un fichier depose dans incoming n'entre pas dans l'historique",
       dropped.is_file() and str(dropped) not in prep.load_history())
 
-# --- the floor is time, and it is what stops this emptying the channel ------
-prep.record_play(library / "b.mp4")
-prep.record_play(library / "c.mp4")
-check("on retire tant qu'il reste de quoi diffuser", prep.library_size() == 2,
-      sorted(q.name for q in library.iterdir()))
-check("il reste 60 min, soit le plancher pile",
-      prep.runway_seconds() == 2 * 1800, prep.runway_seconds())
-
-prep.record_play(library / "d.mp4")
-check("au plancher, le fichier joue est garde", (library / "d.mp4").is_file())
-check("la bibliotheque ne descend pas plus bas", prep.library_size() == 2,
-      sorted(q.name for q in library.iterdir()))
-
-# the control: give the channel more runway and the same file goes. Without it,
-# "kept" could be passing on a function that had simply stopped deleting.
-# d has had its play, so it is no longer runway itself: what has to come back
-# above the floor is everything else, which is e plus whatever is cut on disk.
-for n in range(6):
-    (common.SEGMENTS / f"00042_{n:05d}.ts").write_text("chunk")
-check("temoin: du tampon en plus remonte la reserve",
-      prep.runway_seconds() == 1800 + 6 * common.CHUNK_SECONDS,
-      prep.runway_seconds())
-prep.record_play(library / "d.mp4")
-check("temoin: et le meme fichier est alors retire",
-      not (library / "d.mp4").exists(),
-      sorted(q.name for q in library.iterdir()))
+# --- everything can play, and playing everything empties nothing ------------
+for name in ("b.mp4", "c.mp4", "d.mp4", "e.mp4"):
+    prep.record_play(library / name)
+check("toute la bibliotheque passee une fois, rien n'a disparu",
+      prep.library_size() == 5, sorted(q.name for q in library.iterdir()))
+check("et la reserve tient toujours ses 150 min",
+      prep.runway_seconds() == 5 * 1800, prep.runway_seconds())
+# This is the property the channel lives by now: a supply outage costs repeats,
+# never silence. Before this change the same six calls left an empty library.
+check("donc une coupure d'approvisionnement coute des repetitions, pas du vide",
+      prep.runway_seconds() >= common.MIN_RUNWAY_SECONDS,
+      f"{prep.runway_seconds()} >= {common.MIN_RUNWAY_SECONDS}")
 
 print()
 print(f"{passed}/{passed + failed} passent")

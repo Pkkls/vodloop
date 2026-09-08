@@ -816,8 +816,11 @@ def runway_seconds(history=None, ignoring=None):
         if ignoring is not None and path == pathlib.Path(ignoring):
             continue
         entry = history.setdefault(str(path), {"at": 0.0, "plays": 0})
-        if entry.get("plays", 0) >= common.MAX_PLAYS:
-            continue  # spent: it is not runway, it is what is about to go
+        # A file that has already played is not spent. Nothing deletes on play
+        # count any more, so it can go back on air whenever the rotation comes
+        # round, and counting it as zero made the runway collapse to the chunks
+        # on disk as soon as every file had been through once, which read as an
+        # emergency forever after.
         # A file prep cannot copy is not air time, whatever its duration says.
         # This counted them, so the floor that is supposed to stop the library
         # being eaten was happy to protect one: on 2026-09-08 the rotation was
@@ -832,23 +835,37 @@ def runway_seconds(history=None, ignoring=None):
             continue
         if not entry.get("secs"):
             entry["secs"] = duration_of(path)
-        total += (entry["secs"] or 0) * (common.MAX_PLAYS - entry.get("plays", 0))
+        # Counted once, not once per remaining play. The question this answers
+        # is "how much video could go on the wire", and a file answers it with
+        # its own length however many times it has already been round.
+        total += entry["secs"] or 0
     return total
 
 
 def record_play(path):
-    """Count one play of a library file, and retire it once it has had its two.
+    """Count one play of a library file. Nothing is deleted here, ever.
 
-    Counted here, where an item has just been observed to finish, rather than
-    where it was queued: a file that failed to encode was never on air and has
-    no business being retired for it.
+    Counted where an item has just been observed to finish rather than where it
+    was queued, so a file that never reached the wire is not marked as played.
 
-    Retiring means deleting, for the same reason the janitor deletes: moving a
-    file frees nothing when it is all one filesystem, and the collector can
-    fetch it again from the source. The floor is the whole safety of it. With
-    nothing arriving to replace what goes, this would otherwise cut the rotation
-    down one video at a time, and a channel with nothing left to play is a worse
-    answer to "I keep seeing the same video" than the repeat was.
+    This used to retire a file once it had had its plays, and that is what made
+    the channel fragile. A rerun channel that consumes its own library depends
+    on the supply never stopping, and on 2026-09-08 the supply stopped: YouTube
+    closed its player API at 08:41, every fetch failed for the rest of the day,
+    and the library was deleted one video at a time until a single unplayable
+    file was left and the channel sat on the standby clip. The runway floor did
+    not save it, because a floor measured in hours cannot help once every file
+    has been spent.
+
+    Deletion belongs to the janitor and to nothing else. It evicts on disk
+    pressure, which is the only real limit, and it already refuses to go below
+    MIN_PLAYABLE_FILES. That separation is what lets the library survive a
+    supply outage: at roughly 450 Mo an hour of 720p, the disk the janitor keeps
+    holds tens of hours of rotation, so days without a single download are a
+    channel that repeats rather than a channel that stops.
+
+    Repeats are the cost, and they are the right cost. "I keep seeing the same
+    video" is a complaint about a library of two, not about a library of forty.
     """
     if LIBRARY is None:
         return
@@ -861,29 +878,7 @@ def record_play(path):
     history = load_history()
     entry = history.setdefault(str(path), {"at": 0.0, "plays": 0})
     entry["plays"] += 1
-    if entry["plays"] < common.MAX_PLAYS:
-        save_history(history)
-        return
-    left = runway_seconds(history, ignoring=path)
-    if left < common.MIN_RUNWAY_SECONDS:
-        # Said on every pass rather than once. A rotation sitting on the floor is
-        # the state where nothing is arriving to replace what plays, and that is
-        # worth repeating until someone or something fixes the supply.
-        print(f"garde {path.name}: sans lui il resterait {int(left / 60)} min "
-              f"a diffuser, plancher {common.MIN_RUNWAY_SECONDS // 60} min",
-              flush=True)
-        save_history(history)
-        return
-    try:
-        path.unlink()
-    except OSError as exc:
-        print(f"  retrait impossible ({path.name}): {exc}", flush=True)
-        save_history(history)
-        return
-    history.pop(str(path), None)
     save_history(history)
-    print(f"retire apres {common.MAX_PLAYS} passages: {path.name} "
-          f"({int(left / 60)} min encore en reserve)", flush=True)
 
 
 # A stream longer than the board's card can hold whole arrives in pieces, named
