@@ -155,16 +155,23 @@ MIN_FREE_BYTES = 4 * 1024 ** 3
 # 32 Mbps measured between them. An hour is three or four times what the slowest
 # replacement needs, which is the margin a 24/7 channel is worth.
 MIN_RUNWAY_SECONDS = 60 * 60
-# How many times a library file is played before it is retired to make room for
-# something else. One, since 2026-09-08: it plays, it goes, something else comes
-# down. Deleting is what "retired" means, because moving frees nothing when it
-# is all one filesystem, and the collector can fetch the video again from the
-# source, so this costs download time rather than material.
+# How many plays a library file gets before the rotation stops preferring it.
+# This no longer deletes anything: playing a file counts the play and nothing
+# else, and eviction belongs to the janitor, which answers to disk pressure and
+# refuses to go below MIN_PLAYABLE_FILES.
 #
-# The disk is a working set, not an archive. 45 Go cannot hold a rerun channel;
-# it can hold the next few hours of one, and MIN_RUNWAY_SECONDS is what keeps
-# those hours there.
-MAX_PLAYS = 1
+# It was 1 for a day, and that day is why the split exists. A rerun channel that
+# retires each video after one play only works while the supply never stops, and
+# on 2026-09-08 YouTube closed its player API at 08:41: every fetch failed for
+# the rest of the day, the library was deleted one file at a time until a single
+# unplayable one was left, and the channel sat on the standby clip. Nothing here
+# was wrong except the assumption that something would always arrive.
+#
+# The disk is a working set, but a working set of tens of hours: at about
+# 450 Mo an hour of 720p, what the janitor keeps is a day or two of rotation.
+# That is the difference between a supply outage costing repeats and costing
+# silence.
+MAX_PLAYS = 2
 # a wall clock on one encode, so a single hostile input cannot pin the machine
 # and stall everything behind it. Scaled by the video's own length.
 ENCODE_TIMEOUT_FACTOR = 4
