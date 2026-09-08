@@ -6,6 +6,7 @@ cookies*.txt
 
 # operational notes: server address, key paths, channel ids
 PROMPT.md
+HANDOFF.md
 
 # runtime state
 segments/
