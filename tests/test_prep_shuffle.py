@@ -13,11 +13,16 @@ unintended way. So the pair below runs the same code twice, once with the
 shuffle neutralised, and asserts the order is alphabetical exactly when the
 shuffle is absent.
 """
+import os
 import pathlib
 import random
 import sys
 import tempfile
 
+# refill_from_library writes state/history.json, and without this that is the
+# real one: this file would run against the live rotation and hand it a history
+# full of fixtures.
+os.environ["VODLOOP_ROOT"] = tempfile.mkdtemp(prefix="prep-shuffle-")
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent / "bin"))
 
 import prep  # noqa: E402

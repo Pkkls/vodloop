@@ -27,7 +27,12 @@ ALLOWLIST = ROOT / "allowed_channels.json"
 # and re-encoding those would have been upscaling.
 #
 # 45 Go of disk does not hold 25.6h at this bitrate, so the rotation is shorter
-# on purpose: 37 files, about 14h, at a median 4890 kbps against 1800 before.
+# on purpose. Measured 2026-09-08: 38 files, 28.1 Go, 21.3h, all of them h264
+# 1920x1080 at 50, video 2661 to 2819 kbps with a median of 2778, audio aac LC
+# 44100 stereo at 141 to 160 kbps. The "median 4890 kbps, 37 files, about 14h"
+# this used to claim was what the rebuild aimed at and never what landed on the
+# disk, so every later reading of the library looked like a regression against
+# a number that had never been true.
 WIDTH, HEIGHT, FPS = 1920, 1080, 50
 VFILTER = (
     f"scale={WIDTH}:{HEIGHT}:force_original_aspect_ratio=decrease,"
@@ -62,7 +67,14 @@ ENCODE = [
 # A source already in exactly that shape needs no picture work at all. Only the
 # audio is touched, because the sources carry opus and MPEG-TS will not take it,
 # and transcoding sound costs almost nothing next to transcoding a picture.
-REMUX = ["-c:v", "copy", "-c:a", "aac", "-b:a", "128k", "-ar", "44100", "-ac", "2"]
+#
+# 160k, not the 128k this said until 2026-09-08. A library file already carries
+# 160k aac, so every pass through the rotation transcoded it down to 128 and the
+# loss stacked: segments/00360_00002.ts probed at 131025 while its own source
+# probed at 159507. prepare() now copies aac outright and this is only reached
+# by a source carrying something else, where matching ENCODE is what stops one
+# file sounding different depending on which path prepared it.
+REMUX = ["-c:v", "copy", "-c:a", "aac", "-b:a", "160k", "-ar", "44100", "-ac", "2"]
 CHUNK_SECONDS = 300
 # stop preparing once this much unplayed video is on disk
 AHEAD_LIMIT_SECONDS = 2 * 3600

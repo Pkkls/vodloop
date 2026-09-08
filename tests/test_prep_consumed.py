@@ -111,6 +111,10 @@ real_match, prep.matches_target = prep.matches_target, lambda p: False
 # out playable is measured in test_prep_remux_safety.py; here it only has to not
 # stand in the way of the question being asked.
 real_safe, prep.remux_is_safe = prep.remux_is_safe, lambda p: True
+# and the same again for the sound: it is an ffprobe on a fixture that is not a
+# video. What it answers on a real file is what decides between copying the
+# audio and transcoding it, and neither is the question here.
+real_audio, prep.audio_matches_target = prep.audio_matches_target, lambda p: False
 real_popen, prep.subprocess.Popen = prep.subprocess.Popen, FakeEncoder
 FakeEncoder.segments = 1
 try:
@@ -156,6 +160,7 @@ finally:
     prep.normalise_in_place = real_norm
     prep.matches_target = real_match
     prep.remux_is_safe = real_safe
+    prep.audio_matches_target = real_audio
     prep.subprocess.Popen = real_popen
 
 print()

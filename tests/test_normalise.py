@@ -87,6 +87,13 @@ try:
         prep.remux_verdict = lambda p: pathlib.Path(p).name == "good.mp4"
         real_lib, prep.LIBRARY = prep.LIBRARY, lib
         real_disk, prep.seconds_on_disk = prep.seconds_on_disk, lambda: 0
+        # The refill remembers what it queued and keeps it out of the draw for a
+        # week, which is its own property and is measured in
+        # test_prep_history.py. Here the same two files are asked for three
+        # times in a row, so the memory is switched off: what is being measured
+        # is the copyable filter, not the rotation.
+        real_load, prep.load_history = prep.load_history, lambda: {}
+        real_save_hist, prep.save_history = prep.save_history, lambda h: None
         try:
             queue = {"items": [], "seq": 0}
             added = prep.refill_from_library(queue)
@@ -107,6 +114,7 @@ try:
                   prep.refill_from_library(queue) == 0)
         finally:
             prep.LIBRARY, prep.seconds_on_disk = real_lib, real_disk
+            prep.load_history, prep.save_history = real_load, real_save_hist
 finally:
     prep.remux_verdict = real_verdict
     common.save_queue = real_save

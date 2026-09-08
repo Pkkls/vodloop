@@ -304,6 +304,25 @@ def matches_target(path):
     return out.strip().splitlines()[:1] == [want]
 
 
+def audio_matches_target(path):
+    """Whether this file's sound is already exactly what a chunk must carry.
+
+    Codec, rate and channel count, all three. The chunks are concatenated into
+    one stream and every junction where any of those changes is a junction the
+    pusher has to survive, which is the same reason common.py pins the picture.
+    The bitrate is deliberately not compared: it is the one thing that varies
+    across the library, and carrying it through untouched is the point.
+    """
+    try:
+        out = subprocess.run(
+            ["ffprobe", "-v", "error", "-select_streams", "a:0", "-show_entries",
+             "stream=codec_name,sample_rate,channels", "-of", "csv=p=0", str(path)],
+            capture_output=True, text=True, timeout=60).stdout
+    except (OSError, subprocess.SubprocessError):
+        return False
+    return out.strip().splitlines()[:1] == ["aac,44100,2"]
+
+
 def captioned():
     """Library files whose picture already carries their title.
 
@@ -454,6 +473,15 @@ def prepare(item, upcoming=None, watchdog=True):
             # nothing to redraw, so the title overlay goes with it: a caption is
             # not worth a channel that cannot keep a picture on the wire
             encode = list(common.REMUX)
+            if audio_matches_target(source):
+                # A library file is replayed forever, and until 2026-09-08 every
+                # pass transcoded its 160k aac down to 128k: 00360_00002.ts
+                # probed at 131025 against 159507 in the file it was copied from,
+                # and the next pass would have taken another cut off that. MPEG-TS
+                # carries aac as it is, so this costs nothing and stops the loss
+                # dead. Measured on the whole library the same day: 38 of 38 files
+                # are aac LC 44100 stereo, so this is the path they all take.
+                encode = ["-c:v", "copy", "-c:a", "copy"]
 
     # the muxer's own record of what it wrote. Counting the files instead would
     # be wrong: the feeder deletes each chunk as it plays it, and on a dry queue
@@ -625,6 +653,43 @@ def consumable(path):
     return pathlib.Path(path).parent == common.INCOMING
 
 
+HISTORY = common.STATE / "history.json"
+# How long a file is kept out of the draw after it has last been queued. The
+# library is 21.3h of video, so one pass puts every file inside this window and
+# the draw falls through to the oldest-first branch below. That is intended: the
+# week is a preference, never a lock, because a library locked out of its own
+# rotation is a grey screen.
+REPLAY_GAP_SECONDS = 7 * 86400
+
+
+def load_history():
+    """When each library file was last put in the queue, as {path: epoch}."""
+    try:
+        data = json.loads(HISTORY.read_text())
+    except (OSError, ValueError):
+        return {}
+    if not isinstance(data, dict):
+        return {}
+    out = {}
+    for path, when in data.items():
+        try:
+            out[str(path)] = float(when)
+        except (TypeError, ValueError):
+            continue  # an unreadable entry means "never played", not a crash
+    return out
+
+
+def save_history(history):
+    """Write it atomically, the same way the remux verdicts are written."""
+    try:
+        common.STATE.mkdir(parents=True, exist_ok=True)
+        tmp = HISTORY.with_suffix(".tmp")
+        tmp.write_text(json.dumps(history, indent=1))
+        tmp.replace(HISTORY)
+    except OSError:
+        pass  # a history that cannot be written repeats itself, it does not stop
+
+
 def refill_from_library(queue):
     """Put the library back in the queue once it has been played through.
 
@@ -652,26 +717,64 @@ def refill_from_library(queue):
     # ten were an encode, and refill could not even fire because it waits for an
     # empty pending list and those items never cleared. Files that need work go
     # to normalise.py, and rejoin here once it has done it.
-    sources = sorted(p for p in LIBRARY.iterdir()
-                     if p.is_file() and p.suffix.lower() in MEDIA_SUFFIXES
-                     and remux_verdict(p))
+    media = [p for p in LIBRARY.iterdir()
+             if p.is_file() and p.suffix.lower() in MEDIA_SUFFIXES]
+    sources = sorted(p for p in media if remux_verdict(p))
     if not sources:
         print("aucun fichier remuxable en bibliotheque: normalise.py a du retard",
               flush=True)
         return 0
-    # Every item below is stamped with the same added_at, and playback_order
-    # breaks that tie with a stable sort, so whatever order this list is in is
-    # the order the channel plays. Sorted meant the library ran alphabetically
-    # start to finish, and identically on the next pass. Shuffling here is the
-    # whole of the rotation: it leaves votes untouched, since those sort ahead
-    # of added_at and still decide what jumps the line.
-    random.shuffle(sources)
 
-    # the played entries naming these same files go first, or the queue keeps a
-    # dead copy of the whole library on every pass
+    now = time.time()
+    # the janitor deletes library files, and a deleted file keeps no place in
+    # the rotation: the same name arriving again is a new file, not a replay
+    known = {str(p) for p in media}
+    history = {path: when for path, when in load_history().items() if path in known}
+    # The video on air right now is not a candidate for the pass that follows
+    # it. Its entry is still "ready" and its chunks are still on the disk, and
+    # without this it went back in the draw it is currently the answer to and
+    # could be picked first, which is the same file twice in a row.
+    on_air = {i["path"] for i in queue["items"]
+              if i.get("path") and list(common.SEGMENTS.glob(f"{i['id']:05d}_*.ts"))}
+    pool = [p for p in sources if str(p) not in on_air] or sources
+
+    # Nothing recorded what had already played, so the rotation was a fresh
+    # shuffle with no memory: the last video of one pass could be the first of
+    # the next. A file that has been on air within the week now stands aside
+    # while anything else is available.
+    picks = [p for p in pool if now - history.get(str(p), 0.0) > REPLAY_GAP_SECONDS]
+    if picks:
+        random.shuffle(picks)
+    else:
+        # ponytail: with a 21.3h library this is the ordinary branch, not the
+        # exception, and it is what actually prevents a repeat: refill queues the
+        # whole library at once and only fires again when that is spent, so a
+        # file cannot come back before every other one has played. The shuffle
+        # before the sort breaks the ties a pass stamping every file with the
+        # same second creates, or the order would settle to alphabetical and
+        # stay there. Per-file stamps at play time are the upgrade if the
+        # rotation ever needs to be finer than one pass.
+        picks = list(pool)
+        random.shuffle(picks)
+        picks.sort(key=lambda p: history.get(str(p), 0.0))
+
+    # The played entries naming these same files go first, or the queue keeps a
+    # dead copy of the whole library on every pass. An item still holding chunks
+    # is exempt: dropping it left those chunks with no item, reap() deleted them
+    # on its next pass, and the video was cut off mid-play and put back in the
+    # draw. That was the repeat.
     targets = {str(p) for p in sources}
-    queue["items"] = [i for i in queue["items"] if i.get("path") not in targets]
-    for src in sources:
+    queue["items"] = [
+        i for i in queue["items"]
+        if i.get("path") not in targets
+        or list(common.SEGMENTS.glob(f"{i['id']:05d}_*.ts"))
+    ]
+    # Every item below is stamped with the same added_at, and playback_order
+    # breaks that tie with a stable sort, so the order of this list is the order
+    # the channel plays. Votes are untouched: they sort ahead of added_at and
+    # still decide what jumps the line.
+    for src in picks:
+        history[str(src)] = now
         queue["seq"] += 1
         queue["items"].append({
             "id": queue["seq"],
@@ -684,8 +787,9 @@ def refill_from_library(queue):
             "votes": [],
             "added_at": time.time(),
         })
-    print(f"bibliotheque remise en file: {len(sources)} fichier(s)", flush=True)
-    return len(sources)
+    save_history(history)
+    print(f"bibliotheque remise en file: {len(picks)} fichier(s)", flush=True)
+    return len(picks)
 
 
 def drop_unremuxable(queue):
