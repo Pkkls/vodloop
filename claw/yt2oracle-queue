@@ -1,0 +1,78 @@
+#!/bin/sh
+# yt2oracle-queue - draine /root/yt/urls.txt, une URL par tick de cron.
+#
+# Depose des URLs (une par ligne, # pour commenter) dans /root/yt/urls.txt depuis
+# n'importe ou. Le cron s'occupe du reste, PC eteint.
+#
+# ponytail: pas de daemon, pas de file d'attente en base. Un fichier texte, un
+# verrou par mkdir, un cron. Le plafond c'est une URL par tick (le Claw a 1 coeur
+# RISC-V et un upload de 46 Mo coute ~60 s) ; si tu veux du parallelisme un jour,
+# c'est la machine qu'il faut changer, pas ce script.
+set -u
+
+QUEUE=/root/yt/urls.txt
+DONE=/root/yt/done.txt
+FAILED=/root/yt/failed.txt
+LOCK=/tmp/yt2oracle-queue.lock
+LOG=/root/yt/yt2oracle.log
+
+ts() { date '+%Y-%m-%d %H:%M:%S'; }
+
+# mkdir est atomique : un seul tick gagne, les suivants sortent au lieu de s'empiler.
+# S99clawd a deja paye cette facture (trois boucles keepalive qui se battaient sur les
+# memes tokens). Le verrou vit dans /tmp, donc un reboot le nettoie tout seul.
+#
+# Mais entre deux reboots, un run tue par SIGKILL laisse le verrou derriere lui et la
+# file devient inerte SANS que rien ne le signale. C'est le mode de panne silencieuse
+# que ce systeme ne doit pas avoir. On rattrape donc, mais sur la vie du proprietaire
+# et pas sur l'age du verrou.
+#
+# L'age ne marche pas. Il a ete regle sur 30 min quand le plus long run observe faisait
+# 6 minutes, puis MAX_DURATION est passe de 3 h a 24 h : le 2026-09-08 a 06:20 un
+# telechargement de 11 h 15 en cours depuis 30 minutes a ete declare orphelin, son
+# verrou retire, et un second run est parti sur le meme coeur et la meme carte pendant
+# que le premier fusionnait 3,5 Go. A un tick toutes les 5 minutes c'est six runs
+# concurrents en une demi-heure, ce qui est exactement la panne de trois jours de
+# septembre : carte pleine, tout echoue sur son propre controle d'espace.
+#
+# Le PID du proprietaire est donc ecrit dans le verrou et c'est /proc qui repond. Un run
+# vivant garde son verrou aussi longtemps qu'il travaille. Le PID peut etre recycle, et
+# alors on saute un tick : l'erreur est du cote sur. L'age ne sert plus que de recours
+# pour un verrou sans PID, laisse par la version d'avant.
+STALE_MIN=30
+if [ -d "$LOCK" ]; then
+  owner=$(cat "$LOCK/pid" 2>/dev/null)
+  if [ -n "$owner" ] && [ -d "/proc/$owner" ]; then
+    exit 0
+  fi
+  if [ -z "$owner" ] && [ -n "$(find "$LOCK" -maxdepth 0 -mmin -$STALE_MIN 2>/dev/null)" ]; then
+    exit 0
+  fi
+  echo "$(ts) queue: verrou orphelin (pid ${owner:-inconnu} mort), retire" >> "$LOG"
+  rm -rf "$LOCK"
+fi
+
+mkdir "$LOCK" 2>/dev/null || exit 0
+echo $$ > "$LOCK/pid"
+trap 'rm -rf "$LOCK"' EXIT INT TERM
+
+[ -f "$QUEUE" ] || exit 0
+
+# Premiere ligne utile : ni vide, ni commentaire.
+url=$(grep -vE '^[[:space:]]*(#|$)' "$QUEUE" | head -1)
+[ -n "$url" ] || exit 0
+
+# On retire l'URL AVANT de la traiter. Sinon une URL definitivement cassee revient a
+# chaque tick et bloque la file derriere elle. L'echec est trace dans failed.txt, il
+# n'est pas silencieux.
+# Pas de "&&" apres le grep : quand la file se vide, grep rend 1 et l'URL resterait
+# en place, donc boucle infinie.
+grep -vxF "$url" "$QUEUE" > "$QUEUE.tmp"
+mv "$QUEUE.tmp" "$QUEUE"
+
+if yt2oracle "$url"; then
+  echo "$(ts) $url" >> "$DONE"
+else
+  echo "$(ts) $url" >> "$FAILED"
+  echo "$(ts) queue: echec, url conservee dans $FAILED" >> "$LOG"
+fi

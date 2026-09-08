@@ -1,0 +1,29 @@
+#!/bin/sh
+# Pull the dashboard inbox from Oracle into the local queue.
+#
+# The dashboard runs on Oracle (public side); this board is behind NAT and can
+# only reach out. So the board claims the inbox on each tick rather than being
+# pushed to. The claim is a single atomic mv on Oracle: whatever existed at that
+# instant is taken, and a concurrent append from the web service simply starts a
+# fresh inbox.txt. ponytail: no distributed lock, an atomic rename is enough for
+# one dashboard and one board; the ceiling is that an append landing in the same
+# millisecond as the mv waits for the next tick.
+set -u
+
+KEY=/root/.ssh/oracle_key
+DEST=ubuntu@89.168.60.67
+OSSH="ssh -i $KEY -o BatchMode=yes -o ConnectTimeout=20 -o StrictHostKeyChecking=accept-new"
+REMOTE=/home/ubuntu/yt2oracle/inbox.txt
+QUEUE=/root/yt/urls.txt
+LOG=/root/yt/yt2oracle.log
+
+mkdir -p /root/yt
+claim="/home/ubuntu/yt2oracle/inbox.claim.$(date +%s).$$"
+
+# test -s so an empty or missing inbox is a clean no-op, not an error.
+urls=$($OSSH "$DEST" "test -s $REMOTE && mv $REMOTE '$claim' && cat '$claim' && rm -f '$claim'" 2>/dev/null) || exit 0
+[ -n "$urls" ] || exit 0
+
+n=$(printf '%s\n' "$urls" | grep -c .)
+printf '%s\n' "$urls" >> "$QUEUE"
+echo "$(date '+%Y-%m-%d %H:%M:%S') inbox: $n URL(s) tirees d'Oracle" >> "$LOG"

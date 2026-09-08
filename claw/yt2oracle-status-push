@@ -1,0 +1,21 @@
+#!/bin/sh
+# Publish the board's current state to Oracle so the dashboard can show it.
+# The dashboard on Oracle knows nothing about the far side except this file.
+set -u
+
+KEY=/root/.ssh/oracle_key
+DEST=ubuntu@89.168.60.67
+OSSH="ssh -i $KEY -o BatchMode=yes -o ConnectTimeout=20 -o StrictHostKeyChecking=accept-new"
+
+# grep -c prints "0" and returns 1 on no match; a trailing "|| echo 0" would add
+# a SECOND zero and make "0\n0", which is invalid JSON. Assign then default.
+done=$(wc -l < /root/yt/done.txt 2>/dev/null); : "${done:=0}"
+failed=$(wc -l < /root/yt/failed.txt 2>/dev/null); : "${failed:=0}"
+queue=$(grep -c . /root/yt/urls.txt 2>/dev/null); : "${queue:=0}"
+free=$(df -Pm /root | tail -1 | awk '{print $4}'); : "${free:=0}"
+at=$(date +%s)
+
+if $OSSH "$DEST" true 2>/dev/null; then oracle=up; else oracle=DOWN; fi
+
+json="{\"done\":$done,\"failed\":$failed,\"queue\":$queue,\"freeMB\":$free,\"oracle\":\"$oracle\",\"at\":$at}"
+printf '%s' "$json" | $OSSH "$DEST" "cat > /home/ubuntu/yt2oracle/status.json"

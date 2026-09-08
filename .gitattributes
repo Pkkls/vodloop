@@ -6,3 +6,7 @@
 *.conf     text eol=lf
 *.service  text eol=lf
 vodloopctl text eol=lf
+# By name is not enough here: everything the board runs is extensionless, and
+# S98vodloopwatch had already slipped through these rules. The directory is the
+# rule, so nothing added to it later has to remember to ask.
+claw/*     text eol=lf

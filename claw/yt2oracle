@@ -1,0 +1,135 @@
+#!/bin/sh
+# yt2oracle - telecharge des URLs YouTube sur le Claw, pousse le resultat sur Oracle.
+#
+#   yt2oracle <url> [url...]
+#
+# Tourne sur le Claw parce que YouTube sert un mur anti-bot aux IP datacenter :
+# depuis Oracle, yt-dlp rend "Sign in to confirm you're not a bot". Depuis l'IP
+# residentielle du Claw, l'extraction passe sans cookies ni compte.
+#
+# ponytail: pas de file d'attente, pas de daemon. Un script, un cron. Si tu veux
+# suivre des chaines entieres, l'ajout c'est --download-archive, pas un ordonnanceur.
+set -eu
+
+DEST_HOST="ubuntu@89.168.60.67"
+DEST_DIR="/home/ubuntu/videos"
+KEY="/root/.ssh/oracle_key"
+WORK="/root/yt"
+# h264 et aac, jamais autre chose, et c'est le coeur de ce script.
+#
+# Sans contrainte de codec, "meilleure video 1080p" sur YouTube veut dire AV1
+# (f399) ou VP9 (f303), et "meilleur audio" veut dire opus (f251). Aucun des
+# trois ne se copie dans un MPEG-TS : la chaine en aval remuxe ce qu'elle recoit
+# et reencode tout le reste, a 0.06x le temps reel sur les deux vCPU d'Oracle qui
+# alimentent deja la diffusion. Autrement dit chaque video arrivait dans le seul
+# format qui coute des heures, et il n'y avait aucune raison a cela: YouTube sert
+# la meme video en avc1 et en mp4a si on les demande.
+#
+# Mesure du 2026-09-08 : les trois telechargements restes en travers sur la carte
+# etaient f399, f303 et f136+f251. avc1 pese un peu plus sur le fil que l'AV1, et
+# c'est tout ce que ce choix coute.
+QUALITY="bv*[vcodec^=avc1][height<=1080][filesize_approx<4000000000]+ba[acodec^=mp4a]/bv*[vcodec^=avc1][height<=720][filesize_approx<4000000000]+ba[acodec^=mp4a]/bv*[vcodec^=avc1][height<=480][filesize_approx<4000000000]+ba[acodec^=mp4a]/bv*[vcodec^=avc1][height<=360]+ba[acodec^=mp4a]"
+# Le Claw a 13 Go utiles. Une VOD de six heures en 1080p en fait huit et remplit
+# la carte avant d'avoir fini : c'est exactement ce qui a mis /root a 100% et
+# fait echouer les 54 telechargements suivants, sans que rien ne le signale.
+# prep refuse deja tout ce qui depasse quatre heures, donc rien n'est perdu ici
+# qui aurait ete diffuse.
+# The card is 15 Go and yt-dlp needs the video, the audio and the merged output
+# on it at once, so the finished file has to stay under about a third of that.
+# The format selector already prefers a rung that fits, but it can only use the
+# approximate size YouTube reports and that is missing often enough to matter:
+# a 12h VOD was seen picking 1080p60 through it on 2026-09-08. This is the hard
+# stop, and it aborts before the bytes land rather than after.
+MAX_FILESIZE=4G
+MAX_DURATION=86400
+KEEP_FREE_MB=2048
+# /var/log est un lien vers /tmp, un tmpfs en RAM : un log ecrit la disparait au
+# reboot. /root est sur la carte SD.
+LOG="$WORK/yt2oracle.log"
+
+SSH="ssh -i $KEY -o BatchMode=yes -o StrictHostKeyChecking=accept-new -o ConnectTimeout=20"
+
+log() { echo "$(date '+%Y-%m-%d %H:%M:%S') $*" | tee -a "$LOG"; }
+
+# Un telechargement interrompu laisse ses .part et ses pistes separees derriere
+# lui. Trois d'entre eux ont occupe 14,6 Go pendant trois jours et la carte est
+# restee pleine, donc chaque run suivant mourait sur le controle de place libre.
+# Le menage se fait au moment de l'echec, pas un jour plus tard.
+sweep() {
+  # *.temp.* : un merge interrompu laisse le fichier fusionne a moitie
+  # ecrit. Cest la panne des 14,6 Go de septembre avec un autre suffixe:
+  # le 2026-09-08 un merge de 4 Go tue par lOOM en a laisse 1,5 Go en
+  # travers, et rien ne les ramassait.
+  rm -f "$WORK"/*.part "$WORK"/*.ytdl "$WORK"/*.temp.* 2>/dev/null || true
+  rm -f "$WORK"/*.f[0-9][0-9][0-9].mp4 "$WORK"/*.f[0-9][0-9][0-9].webm \
+        "$WORK"/*.f[0-9][0-9][0-9].m4a 2>/dev/null || true
+}
+
+die() { sweep; log "ECHEC: $*"; exit 1; }
+
+mkdir -p "$WORK"
+
+[ $# -gt 0 ] || die "usage: yt2oracle <url> [url...]"
+command -v yt-dlp >/dev/null || die "yt-dlp absent"
+
+# Le Claw n'a que ~13 Go. On refuse de commencer si la place locale est deja basse,
+# sinon un gros download remplit la carte SD et casse le reste de la machine.
+local_free=$(df -Pm "$WORK" | tail -1 | awk '{print $4}')
+[ "$local_free" -gt "$KEEP_FREE_MB" ] || die "place locale: ${local_free} Mo libres, minimum ${KEEP_FREE_MB} Mo"
+
+log "download: $*"
+# --restrict-filenames : noms reduits a [A-Za-z0-9._-], donc plus aucun probleme de
+# quoting quand les noms repassent par scp et ssh plus bas.
+yt-dlp \
+  --no-playlist \
+  --restrict-filenames \
+  --no-progress \
+  --max-filesize "$MAX_FILESIZE" \
+  -f "$QUALITY" \
+  --match-filter "duration < $MAX_DURATION" \
+  --merge-output-format mp4 \
+  -P "$WORK" \
+  -o '%(title).120B-%(id)s.%(ext)s' \
+  "$@" >>"$LOG" 2>&1 || die "yt-dlp a rendu $? (voir $LOG)"
+
+# On ne pousse que ce qui vient d'etre produit, pas un residu d'un run precedent.
+files=$(find "$WORK" -maxdepth 1 -type f \( -name '*.mp4' -o -name '*.mkv' -o -name '*.webm' \))
+# Un temp laisse par un merge tue nest jamais passe par sweep, et il est
+# parfaitement lisible: un merge coupe a 3 h sur 11 h ne se voit nulle part
+# en aval. Sans cette ligne le run suivant le televerse comme la video.
+files=$(printf %s\n "$files" | sed "/[.]temp[.]/d")
+[ -n "$files" ] || die "rien telecharge (trop long, ou pas d'avc1 disponible)"
+
+need_kb=$(du -sk $files | awk '{s+=$1} END {print s}')
+
+$SSH "$DEST_HOST" "mkdir -p '$DEST_DIR'" || die "ssh vers Oracle impossible (cle autorisee ?)"
+
+# Oracle heberge aussi la prod kicknosub sur 45 Go. Remplir ce disque casserait
+# le service, donc on verifie avant de copier, pas apres.
+remote_free_kb=$($SSH "$DEST_HOST" "df -Pk '$DEST_DIR' | tail -1 | awk '{print \$4}'")
+margin_kb=$((KEEP_FREE_MB * 1024))
+[ $((remote_free_kb - need_kb)) -gt "$margin_kb" ] \
+  || die "place Oracle: besoin $((need_kb/1024)) Mo, libre $((remote_free_kb/1024)) Mo, marge $KEEP_FREE_MB Mo"
+
+log "upload: $((need_kb/1024)) Mo vers $DEST_HOST:$DEST_DIR"
+scp -i "$KEY" -o BatchMode=yes -o StrictHostKeyChecking=accept-new $files "$DEST_HOST:$DEST_DIR/" >>"$LOG" 2>&1 \
+  || die "scp a rendu $?"
+
+# Verification fichier par fichier : sans ca un scp tronque passerait pour un succes,
+# et on supprimerait la seule copie locale juste apres.
+rc=0
+for f in $files; do
+  name=$(basename "$f")
+  local_size=$(wc -c < "$f")
+  remote_size=$($SSH "$DEST_HOST" "wc -c < '$DEST_DIR/$name'" 2>/dev/null || echo -1)
+  if [ "$local_size" = "$remote_size" ]; then
+    log "OK $local_size o $name"
+    rm -f "$f"
+  else
+    log "MISMATCH local=$local_size distant=$remote_size $name (copie locale gardee)"
+    rc=1
+  fi
+done
+
+[ "$rc" -eq 0 ] || die "au moins un fichier n'a pas ete verifie"
+log "termine"
