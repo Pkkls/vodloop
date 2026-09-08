@@ -70,9 +70,37 @@ url=$(grep -vE '^[[:space:]]*(#|$)' "$QUEUE" | head -1)
 grep -vxF "$url" "$QUEUE" > "$QUEUE.tmp"
 mv "$QUEUE.tmp" "$QUEUE"
 
+# Nombre d'essais avant d'abandonner pour de bon. Le mur anti-bot de YouTube est
+# INTERMITTENT, pas absolu: mesure le 2026-09-08, 12 reussites contre 42 echecs
+# dans la journee, et deux tentatives sur la meme video a sept minutes d'ecart
+# ont donne un passage puis un refus. Abandonner au premier refus mettait donc
+# presque tout dans failed.txt et vidait la bibliotheque, ce qui a fini en
+# ecran de veille a l'antenne. Une URL revient en fin de file tant qu'elle n'a
+# pas epuise ses essais: la file continue d'avancer, elle ne bloque pas dessus.
+MAX_ATTEMPTS=6
+ATTEMPTS=/root/yt/attempts.txt
+
+attempts_of() {
+  [ -f "$ATTEMPTS" ] || { echo 0; return; }
+  n=$(grep -cxF "$1" "$ATTEMPTS" 2>/dev/null) || n=0
+  echo "$n"
+}
+
 if yt2oracle "$url"; then
   echo "$(ts) $url" >> "$DONE"
+  # une reussite efface l'ardoise: si la video revient un jour, elle repart de zero
+  if [ -f "$ATTEMPTS" ]; then
+    grep -vxF "$url" "$ATTEMPTS" > "$ATTEMPTS.tmp" 2>/dev/null
+    mv "$ATTEMPTS.tmp" "$ATTEMPTS"
+  fi
 else
-  echo "$(ts) $url" >> "$FAILED"
-  echo "$(ts) queue: echec, url conservee dans $FAILED" >> "$LOG"
+  echo "$url" >> "$ATTEMPTS"
+  tried=$(attempts_of "$url")
+  if [ "$tried" -lt "$MAX_ATTEMPTS" ]; then
+    echo "$url" >> "$QUEUE"
+    echo "$(ts) queue: echec ${tried}/${MAX_ATTEMPTS}, url remise en fin de file" >> "$LOG"
+  else
+    echo "$(ts) $url" >> "$FAILED"
+    echo "$(ts) queue: echec ${tried}/${MAX_ATTEMPTS}, abandon, voir $FAILED" >> "$LOG"
+  fi
 fi

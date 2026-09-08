@@ -43,6 +43,31 @@ QUALITY="bv*[vcodec^=avc1][height<=1080][filesize_approx<4000000000]+ba[acodec^=
 MAX_FILESIZE=4G
 MAX_DURATION=86400
 KEEP_FREE_MB=2048
+# Une ligne, la sortie a emprunter, par exemple socks5://127.0.0.1:1080 ou
+# http://user:pass@hote:port. Fichier absent ou vide = sortie directe.
+#
+# Le 2026-09-08 l'IP de la maison est passee dans le meme sac qu'une IP
+# datacenter pour l'API player de YouTube: toutes les videos ont repondu "Sign
+# in to confirm you're not a bot", en IPv4 comme en IPv6, sur les sept clients
+# player, et pendant ce temps le listing de playlist passait toujours. Le mur
+# est sur le player, pas sur le compte, et il suit l'abonne. La seule sortie
+# logicielle est donc de sortir par ailleurs.
+#
+# Attention a ce qu'on met dedans: un proxy datacenter tombe sur exactement le
+# meme mur, c'est deja verifie sur Oracle. Il faut une sortie residentielle.
+PROXY_FILE="$WORK/proxy.conf"
+# Cookies Netscape d'un compte YouTube connecte. Fichier absent = sans cookies.
+#
+# C'est ce que le mur reclame littericalement ("Use --cookies-from-browser or
+# --cookies"), et le 2026-09-08 c'est la seule chose qui restait: eliminees par
+# mesure ce jour-la, l'IPv4 de la maison, son IPv6, l'IP datacenter d'Oracle et
+# une sortie Cloudflare WARP renvoient toutes le meme refus, sur les sept
+# clients player, avec yt-dlp a jour et un fournisseur de PO token charge. Le
+# listing de playlist, lui, passe toujours: le mur est sur l'API player seule.
+#
+# Utiliser un compte jetable et pas le compte principal: un compte qui tire des
+# centaines de VOD se fait signaler, et ce serait le compte de quelqu'un.
+COOKIES_FILE="$WORK/cookies.txt"
 # /var/log est un lien vers /tmp, un tmpfs en RAM : un log ecrit la disparait au
 # reboot. /root est sur la carte SD.
 LOG="$WORK/yt2oracle.log"
@@ -77,10 +102,35 @@ command -v yt-dlp >/dev/null || die "yt-dlp absent"
 local_free=$(df -Pm "$WORK" | tail -1 | awk '{print $4}')
 [ "$local_free" -gt "$KEEP_FREE_MB" ] || die "place locale: ${local_free} Mo libres, minimum ${KEEP_FREE_MB} Mo"
 
+# Un proxy casse ne doit pas casser la chaine: on l'essaie, et s'il ne repond
+# pas on sort en direct plutot que de rendre chaque tick inutile. Le direct
+# echouera peut-etre sur le mur anti-bot, mais ca c'est un echec informatif et
+# pas un echec de plomberie.
+PROXY=""
+if [ -s "$PROXY_FILE" ]; then
+  want=$(sed -n 's/^[[:space:]]*\([^#][^[:space:]]*\).*/\1/p' "$PROXY_FILE" | head -1)
+  if [ -n "$want" ]; then
+    if curl -s --max-time 20 --proxy "$want" https://api.ipify.org >/dev/null 2>&1; then
+      PROXY="$want"
+      log "proxy: sortie par $(curl -s --max-time 20 --proxy "$want" https://api.ipify.org)"
+    else
+      log "proxy: $want ne repond pas, sortie directe pour ce run"
+    fi
+  fi
+fi
+
+COOKIES=""
+if [ -s "$COOKIES_FILE" ]; then
+  COOKIES="$COOKIES_FILE"
+  log "cookies: $COOKIES_FILE ($(wc -l < "$COOKIES_FILE") lignes)"
+fi
+
 log "download: $*"
 # --restrict-filenames : noms reduits a [A-Za-z0-9._-], donc plus aucun probleme de
 # quoting quand les noms repassent par scp et ssh plus bas.
 yt-dlp \
+  ${PROXY:+--proxy "$PROXY"} \
+  ${COOKIES:+--cookies "$COOKIES"} \
   --no-playlist \
   --restrict-filenames \
   --no-progress \
