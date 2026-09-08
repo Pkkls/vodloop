@@ -57,7 +57,14 @@ HANDED_COOLDOWN_SECONDS = 6 * 3600
 # them fight: the collector filling down to the line the janitor then clears,
 # every quarter of an hour, forever. Leaving a band between them means the
 # collector only adds when there is room the janitor is not about to reclaim.
-MIN_FREE_BYTES = 10 * 1024 ** 3
+# Below the janitor's target, or the two of them deadlock and the library can
+# never grow again. Measured 2026-09-08: this was 10 Go while the janitor
+# stopped retiring at 5 Go free, so free space settled just above 5 and this
+# refused every single run. The library had not gained a file since 05
+# September and the channel was replaying the same 21 hours, which is the
+# complaint that started all of this. The janitor now frees to 10 and this
+# fires below 8, so there is always a gap the collector can work in.
+MIN_FREE_BYTES = 8 * 1024 ** 3
 
 VIDEO_ID = re.compile(r"-([A-Za-z0-9_-]{11})\.(?:mp4|mkv)$")
 

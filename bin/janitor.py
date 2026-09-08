@@ -38,7 +38,12 @@ MEDIA = (".mp4", ".mkv")
 # went to 1080p: the backlog alone is 4.5G at this bitrate, and a target the
 # disk cannot reach makes this refuse to act at all, which is worse than a
 # smaller margin.
-TARGET_FREE_BYTES = 5 * 1024 ** 3
+# Above the collector's own floor, so the two of them compose into a loop
+# instead of cancelling out: this frees to here, the collector fills while it
+# has more than 8 Go to work with, and the cycle repeats. At 5 Go, which is
+# what this was until 2026-09-08, free space settled just under the collector's
+# threshold and no video was ever fetched again.
+TARGET_FREE_BYTES = 10 * 1024 ** 3
 # Below this the rotation gets thin enough to be noticeable, and a disk that
 # still cannot be satisfied is a problem to report rather than to keep cutting.
 # Shared with prep, which retires files for a different reason and would empty

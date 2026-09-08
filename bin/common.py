@@ -18,13 +18,18 @@ ALLOWLIST = ROOT / "allowed_channels.json"
 # These three used to be a promise every segment had to keep, and keeping it
 # meant re-encoding almost everything that ever arrived. As of 2026-09-08 they
 # are what an encode produces when there is no way around one, not what a file
-# has to prove before it can be copied: matches_target asks for h264 and a size
-# within this, and nothing about the frame rate. A 50fps chunk followed by a
-# 30fps one was measured going through the real feeder and pusher chain cleanly.
-# A resolution change was measured through the same chain and accepted by the
-# muxer, but the ingest reads resolution from the sequence header and no test
-# here can ask it: that one is kil's decision, taken with the risk stated, and
-# quality.py is what watches for it going wrong.
+# has to prove before it can be copied: matches_target asks for h264, a size
+# within this, and a frame rate Kick will actually pass through.
+#
+# FPS went from 50 to 60 the same day, and it is the only one of the three that
+# had been actively wrong. See fps_supported below: 50 is not a rung Kick has,
+# so it re-encoded everything we sent and the picture a viewer got was its work,
+# not ours. Nothing downloaded is ever 50; only what a PC encoded was.
+#
+# A frame rate change at a junction was measured going through the real feeder
+# and pusher chain cleanly, as was a resolution change, though the ingest reads
+# resolution from the sequence header and no test here can ask it: that one is
+# kil's decision, taken with the risk stated, and quality.py watches for it.
 # 50 is not a taste: it is what the library already is, and this box encodes at
 # 0.77x realtime, so anything that forces a re-encode loses to the clock forever.
 # 1080p since 2026-09-06. The sources are 1920x1080 at 2400-5400 kbps and were
@@ -42,7 +47,33 @@ ALLOWLIST = ROOT / "allowed_channels.json"
 # this used to claim was what the rebuild aimed at and never what landed on the
 # disk, so every later reading of the library looked like a regression against
 # a number that had never been true.
-WIDTH, HEIGHT, FPS = 1920, 1080, 50
+WIDTH, HEIGHT, FPS = 1920, 1080, 60
+
+
+def fps_supported(fps):
+    """Whether Kick will pass a source at this frame rate through untouched.
+
+    Its ingest has two rungs, 30 and 60, and its own dashboard says so: "MAL
+    CONFIGURE, passer votre frequence d'images d'entree a 30 ou 60 FPS". Fed 50
+    it does not refuse the stream, it re-encodes it, and the result is what a
+    viewer sees rather than what we sent.
+
+    Measured 2026-09-08 while the library was still 50: the master playlist
+    advertised the source rung as 1920x1080 at 3070272 bps, and pulling that
+    exact rung returned 1280x720. The rung below it, advertised as 720p60 at
+    3422999, returned 852x480 at 25. The whole ladder had collapsed one step,
+    and a player picking by bandwidth had every reason to take the 720p60 entry
+    because it advertised more than the source did.
+
+    50 was never chosen. It is what a PC encoder produced, and it is the last
+    thing in this system that came from that PC. YouTube serves 30 and 60 and
+    never 50, so a file downloaded rather than made is already right.
+
+    23.976, 25, 29.97 and 30 all sit on the 30 rung; 59.94 and 60 on the other.
+    """
+    if fps is None:
+        return False
+    return fps <= 30.5 or 59.0 <= fps <= 61.0
 VFILTER = (
     f"scale={WIDTH}:{HEIGHT}:force_original_aspect_ratio=decrease,"
     f"pad={WIDTH}:{HEIGHT}:(ow-iw)/2:(oh-ih)/2,fps={FPS},format=yuv420p"

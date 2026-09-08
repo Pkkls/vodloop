@@ -295,11 +295,15 @@ def matches_target(path):
     right size still failed this test on its frame rate alone and was re-encoded
     in full, at 0.06x realtime, to change nothing a viewer can see.
 
-    Dropping it is safe because of what the frame rate is not: it lives in
-    timestamps the muxer already carries per packet. Measured 2026-09-08 through
-    the real feeder and pusher commands: a 50fps chunk followed by a 30fps one
-    goes through the flv muxer with exit 0 and nothing on stderr, and random
-    bytes in the same chain exit 1, so the check can fail.
+    The frame rate is asked about again, but as a set rather than a value:
+    common.fps_supported says whether Kick will pass a source through at that
+    rate at all. Pinning it to one number was what made every arrival expensive,
+    and dropping it entirely was wrong in the other direction, because 50 is a
+    rate Kick re-encodes rather than relays. Both mistakes were made on
+    2026-09-08 and the second one is why the channel looked like a bitmap for an
+    hour. A junction between two supported rates was measured going through the
+    real feeder and pusher commands with exit 0 and nothing on stderr, and
+    random bytes in the same chain exit 1, so the check can fail.
 
     The size is a ceiling rather than an equality, and that is kil's call taken
     on 2026-09-08 with the risk stated. A video YouTube only has at 720p is now
@@ -321,18 +325,22 @@ def matches_target(path):
     try:
         out = subprocess.run(
             ["ffprobe", "-v", "error", "-select_streams", "v:0", "-show_entries",
-             "stream=codec_name,width,height", "-of", "csv=p=0", str(path)],
+             "stream=codec_name,width,height,r_frame_rate", "-of", "csv=p=0",
+             str(path)],
             capture_output=True, text=True, timeout=60).stdout
     except (OSError, subprocess.SubprocessError):
         return False
     fields = (out.strip().splitlines() or [""])[0].split(",")
-    if len(fields) != 3 or fields[0] != "h264":
+    if len(fields) != 4 or fields[0] != "h264":
         return False
     try:
         width, height = int(fields[1]), int(fields[2])
-    except ValueError:
+        top, _, bottom = fields[3].partition("/")
+        fps = float(top) / float(bottom or 1)
+    except (ValueError, ZeroDivisionError):
         return False
-    return 0 < width <= common.WIDTH and 0 < height <= common.HEIGHT
+    return (0 < width <= common.WIDTH and 0 < height <= common.HEIGHT
+            and common.fps_supported(fps))
 
 
 def audio_matches_target(path):
