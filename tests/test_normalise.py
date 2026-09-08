@@ -49,7 +49,7 @@ STUCK = "/lib/bad.mp4"
 
 real_verdict = prep.remux_verdict
 real_save = common.save_queue
-prep.remux_verdict = lambda p: str(p) == COPYABLE
+prep.remux_verdict = lambda p, unmeasured=False: str(p) == COPYABLE
 common.save_queue = lambda q: None
 try:
     print("what the queue is allowed to hold")
@@ -84,7 +84,7 @@ try:
         good, bad = lib / "good.mp4", lib / "bad.mp4"
         for p in (good, bad):
             p.write_bytes(b"x" * 10)
-        prep.remux_verdict = lambda p: pathlib.Path(p).name == "good.mp4"
+        prep.remux_verdict = lambda p, unmeasured=False: pathlib.Path(p).name == "good.mp4"
         real_lib, prep.LIBRARY = prep.LIBRARY, lib
         real_disk, prep.seconds_on_disk = prep.seconds_on_disk, lambda: 0
         # The refill remembers what it queued and keeps it out of the draw for a
@@ -103,12 +103,12 @@ try:
 
             # the other control: with every file copyable the refill must queue
             # them all, or this filter would quietly shrink the rotation
-            prep.remux_verdict = lambda p: True
+            prep.remux_verdict = lambda p, unmeasured=False: True
             queue = {"items": [], "seq": 0}
             check("with nothing to convert, the whole library is queued",
                   prep.refill_from_library(queue) == 2)
 
-            prep.remux_verdict = lambda p: False
+            prep.remux_verdict = lambda p, unmeasured=False: False
             queue = {"items": [], "seq": 0}
             check("and none of it when nothing can be copied",
                   prep.refill_from_library(queue) == 0)

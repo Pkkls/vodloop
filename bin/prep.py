@@ -235,8 +235,15 @@ def wait_for_encode(encoder, budget, armed=True):
 REMUX_VERDICTS = common.STATE / "remux.json"
 
 
-def remux_verdict(path):
+def remux_verdict(path, unmeasured=False):
     """Whether prepare() will copy this file rather than re-encode it.
+
+    `unmeasured` is the answer when the probe could not be taken at all, and the
+    two callers want opposite ones. Choosing what to prepare next can afford to
+    say no and look again a pass later. Deciding whether to throw an item out of
+    the queue cannot: a no there removes the video, and on 2026-09-08 a probe
+    that could not run on a busy box took the only fresh video in the library out
+    of the queue and left the channel looping the one it had already played.
 
     Exactly the pair prepare() tests, remembered: the right picture AND a copy
     that comes out playable. Both, or the answer is wrong in the direction that
@@ -269,9 +276,10 @@ def remux_verdict(path):
     else:
         answer = remux_is_safe(path)
         if answer is None:
-            # no measurement: refuse for now, remember nothing. Writing this
-            # down is what hid 22 conformant files behind a busy afternoon.
-            return False
+            # no measurement, and nothing is written down: recording it is what
+            # hid 22 conformant files behind a busy afternoon. What is returned
+            # is the caller's to choose, because "I could not look" is not "no".
+            return unmeasured
         verdict = bool(answer)
     # only this file's entry survives, so the cache cannot grow with every
     # version of every file the normaliser ever wrote
@@ -1011,9 +1019,14 @@ def drop_unremuxable(queue):
     Items a person asked for are left alone. Someone waiting on a request they
     made is owed the wait, and there is at most a handful of those.
     """
+    # Only a measured no gets an item thrown out. A probe that could not run
+    # says nothing about the file, and treating that silence as a refusal is how
+    # the only fresh video in the library was removed from the queue while the
+    # channel looped the one it had already played.
     victims = [i for i in queue["items"]
                if i["status"] == "pending" and i.get("by") == "file"
-               and i.get("path") and not remux_verdict(i["path"])]
+               and i.get("path")
+               and not remux_verdict(i["path"], unmeasured=True)]
     if not victims:
         return 0
     ids = {i["id"] for i in victims}
