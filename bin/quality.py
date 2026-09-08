@@ -453,10 +453,21 @@ def faults(row):
         # a partial chunk is the tail of a video and measures light through no
         # fault of anything, so it does not get to raise an alarm
         full = (row.get("duration") or 0) >= common.CHUNK_SECONDS * 0.9
-        if video is not None and full and video < MIN_VIDEO_BPS:
+        # The floors only speak where the comparison to the source cannot. A
+        # chunk that matched its source codec for codec carries exactly what
+        # came off YouTube, so a thin one is thin content and not a loss, and
+        # the pipeline has nothing to answer for. This is the third time an
+        # absolute floor here has been wrong about a library that changed under
+        # it: 150k audio against YouTube's 128k, then 2.4 Mbps video, and a
+        # 40 528 s stream that YouTube serves at 690 kbps in 720p30 would have
+        # been the next. Where a copy did not happen, or there is no source to
+        # compare against, the net stays up.
+        unexplained_video = not row.get("copied_video")
+        unexplained_audio = not row.get("copied_audio")
+        if video is not None and full and unexplained_video and video < MIN_VIDEO_BPS:
             found.append(f"video a {video // 1000} kbps (< {MIN_VIDEO_BPS // 1000})")
         audio = row.get("abitrate")
-        if audio is not None and audio < MIN_AUDIO_BPS:
+        if audio is not None and unexplained_audio and audio < MIN_AUDIO_BPS:
             found.append(f"audio a {audio // 1000} kbps (< {MIN_AUDIO_BPS // 1000})")
         # The one this file exists for now. Nothing is supposed to be encoded
         # any more, so a picture that does not match its source did not get here

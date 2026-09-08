@@ -100,6 +100,30 @@ check("the healthy source rung is the fattest",
 quiet = quality.faults({"chunk": "x.ts", "duration": 0, **healthy})
 check("and it says nothing", not any("RUNG" in f for f in quiet), str(quiet))
 
+print("the floors, against a source that is simply thin")
+# Measured 2026-09-08: an 11 h 15 IRL stream is served by YouTube at 690 kbps in
+# 720p30, so the catastrophe floor of 1 Mbps sits above a real, untouched
+# arrival. Every byte of it is a copy, which is the whole point of the pipeline,
+# and reporting it as a loss is what the two previous floors here did.
+thin = {"chunk": "x.ts", "duration": 300, "video_bps": 690_000,
+        "abitrate": 129_000, "source": "s.mp4",
+        "copied_video": True, "copied_audio": True,
+        "video_ratio": 1.0, "audio_ratio": 1.0}
+check("a thin chunk that matched its source is content, not a fault",
+      quality.faults(thin) == [], str(quality.faults(thin)))
+
+# the control: the same numbers, but nothing says they were copied. Then there
+# is no source to explain them and the net has to stay up.
+loose = dict(thin, copied_video=False, copied_audio=False)
+check("the same numbers with no copy behind them are still reported",
+      any("video a" in f for f in quality.faults(loose)),
+      str(quality.faults(loose)))
+
+no_source = {"chunk": "x.ts", "duration": 300, "video_bps": 690_000}
+check("with no source at all the floor is what is left",
+      any("video a" in f for f in quality.faults(no_source)),
+      str(quality.faults(no_source)))
+
 print("when it cannot see")
 check("a playlist with no chunked rung is named, not silently passed",
       served("#EXTM3U\n").get("ladder_error") is not None)
