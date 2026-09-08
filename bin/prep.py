@@ -295,13 +295,26 @@ def matches_target(path):
     right size still failed this test on its frame rate alone and was re-encoded
     in full, at 0.06x realtime, to change nothing a viewer can see.
 
-    Dropping it is safe because of what the frame rate is not. The resolution
-    lives in the sequence header the ingest reads once, which is why that stays
-    pinned; the frame rate lives in timestamps the muxer already carries per
-    packet. Measured 2026-09-08 through the real feeder and pusher commands: a
-    50fps chunk followed by a 30fps one at the same size goes through the flv
-    muxer with exit 0 and nothing on stderr, and random bytes in the same chain
-    exit 1, so the check can fail.
+    Dropping it is safe because of what the frame rate is not: it lives in
+    timestamps the muxer already carries per packet. Measured 2026-09-08 through
+    the real feeder and pusher commands: a 50fps chunk followed by a 30fps one
+    goes through the flv muxer with exit 0 and nothing on stderr, and random
+    bytes in the same chain exit 1, so the check can fail.
+
+    The size is a ceiling rather than an equality, and that is kil's call taken
+    on 2026-09-08 with the risk stated. A video YouTube only has at 720p is now
+    played at 720p instead of being re-encoded up to 1080, which is upscaling
+    and buys nothing. The cost is a resolution change mid-stream, and unlike the
+    frame rate that one does live in the sequence header the ingest reads. The
+    flv muxer accepted it in the same measurement, but the ingest is the part no
+    test here can reach without putting the channel on the line, so this is the
+    one change in this file resting on a decision rather than on a witness.
+    quality.py samples is_live and the viewer count every five minutes, which is
+    where it will show if the ingest disagrees.
+
+    The ceiling itself is not decoration: both downloaders ask for height<=1080,
+    and pushing a 4K file over this link would spend the whole bitrate budget on
+    a picture Kick re-encodes anyway.
 
     Only the video is judged here. audio_matches_target answers for the sound.
     """
@@ -312,8 +325,14 @@ def matches_target(path):
             capture_output=True, text=True, timeout=60).stdout
     except (OSError, subprocess.SubprocessError):
         return False
-    want = f"h264,{common.WIDTH},{common.HEIGHT}"
-    return out.strip().splitlines()[:1] == [want]
+    fields = (out.strip().splitlines() or [""])[0].split(",")
+    if len(fields) != 3 or fields[0] != "h264":
+        return False
+    try:
+        width, height = int(fields[1]), int(fields[2])
+    except ValueError:
+        return False
+    return 0 < width <= common.WIDTH and 0 < height <= common.HEIGHT
 
 
 def audio_matches_target(path):
@@ -472,9 +491,20 @@ def prepare(item, upcoming=None, watchdog=True):
         # 1.1x, which runs dry before the encode ends. A gate that does not know
         # what it is admitting is the same bug this file already fixed one level
         # up, left in place one level down.
-        wants_caption = source.name not in captioned()
+        # The caption used to be reason enough on its own: a file already in the
+        # right shape was re-encoded in full, once, purely to burn its title into
+        # the picture. That is a whole video's worth of encoding for a line of
+        # text, on every video that ever arrives, and it is the single largest
+        # thing this pipeline spent its time on. Dropped 2026-09-08. The title is
+        # still answered by !next, by the dashboard and by the chat, which is
+        # where an accurate answer lived anyway: a burned caption cannot follow a
+        # vote that lands later, and this file says so twenty lines further down.
+        #
+        # What is left below can only fire for a file prep cannot copy at all,
+        # and drop_unremuxable takes those out of the queue before prepare() ever
+        # sees them, so in practice nothing reaches it.
         affordable = seconds_on_disk() >= normalise_cost(item) + COST_MARGIN_SECONDS
-        if ((not matches_target(source) or wants_caption)
+        if (not matches_target(source)
                 and not consumable(source)
                 and affordable):
             fixed = normalise_in_place(source, name_file)

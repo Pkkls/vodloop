@@ -15,13 +15,16 @@ OFFSET = STATE / "offset"
 FIFO = ROOT / "pipe"
 ALLOWLIST = ROOT / "allowed_channels.json"
 
-# Every segment must share the codec and the size exactly, or concatenation
-# breaks at the junction: the resolution lives in the sequence header the ingest
-# reads once. The frame rate is not part of that promise, and matches_target
-# stopped asking for it on 2026-09-08 after a 50fps chunk followed by a 30fps
-# one was measured going through the real feeder and pusher chain cleanly. FPS
-# below is what an encode produces when there is no way around one, not what a
-# file has to prove before it can be copied.
+# These three used to be a promise every segment had to keep, and keeping it
+# meant re-encoding almost everything that ever arrived. As of 2026-09-08 they
+# are what an encode produces when there is no way around one, not what a file
+# has to prove before it can be copied: matches_target asks for h264 and a size
+# within this, and nothing about the frame rate. A 50fps chunk followed by a
+# 30fps one was measured going through the real feeder and pusher chain cleanly.
+# A resolution change was measured through the same chain and accepted by the
+# muxer, but the ingest reads resolution from the sequence header and no test
+# here can ask it: that one is kil's decision, taken with the risk stated, and
+# quality.py is what watches for it going wrong.
 # 50 is not a taste: it is what the library already is, and this box encodes at
 # 0.77x realtime, so anything that forces a re-encode loses to the clock forever.
 # 1080p since 2026-09-06. The sources are 1920x1080 at 2400-5400 kbps and were

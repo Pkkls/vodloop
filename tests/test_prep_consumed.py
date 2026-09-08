@@ -140,20 +140,20 @@ try:
                   "title": "V", "by_name": "", "duration": 60})
     check("reserve confortable: la normalisation demarre", len(calls) == 1, calls)
 
-    # Un fichier conforme est remuxe, et un remux ne peut rien dessiner. Il a
-    # donc droit a une passe, une seule, pour graver son titre. Sans la seconde
-    # verification ci-dessous cette exception se rejouerait a chaque tour et
-    # rencoderait la bibliotheque en boucle.
+    # Un fichier conforme n'est jamais reencode, meme sans titre grave dans son
+    # image. Graver le titre coutait un encodage complet par video, sur chaque
+    # video qui arrive, pour une ligne de texte: c'etait le premier poste de
+    # depense de toute la chaine. Le titre se demande a !next et au tableau de
+    # bord, ou la reponse est juste meme apres un vote.
     prep.matches_target = lambda p: True
     prep.prepare({"id": 23, "path": str(library / "bon.mp4"), "url": "b",
                   "title": "B", "by_name": "", "duration": 60})
-    check("un fichier conforme sans titre grave recoit une passe",
-          len(calls) == 2, calls)
+    check("un fichier conforme sans titre grave n'est pas reencode",
+          len(calls) == 1, calls)
 
-    prep.mark_captioned("bon.mp4")
     prep.prepare({"id": 24, "path": str(library / "bon.mp4"), "url": "b",
                   "title": "B", "by_name": "", "duration": 60})
-    check("une fois grave, il n'est plus jamais retouche", len(calls) == 2, calls)
+    check("et il ne l'est pas davantage au tour suivant", len(calls) == 1, calls)
     check("et il est remuxe, pas reencode", "copy" in FakeEncoder.last_args,
           FakeEncoder.last_args[:6])
 finally:
