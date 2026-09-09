@@ -104,6 +104,24 @@ try:
     check("a wrong picture is refused", prep.remux_verdict(video) is False)
     prep.matches_target = lambda _p: True
     check("and that refusal is remembered", prep.remux_verdict(video) is False)
+
+    print("a picture probe that could not run says nothing")
+    # ffprobe losing to a busy box used to return False from matches_target, and
+    # remux_verdict wrote that down as a permanent refusal. Measured 2026-09-09:
+    # four library files reading unusable, all four answering True the moment
+    # the box was idle, and the runway reading one hour against ten in hand.
+    (common.STATE / "remux.json").unlink(missing_ok=True)
+    prep.matches_target = lambda _p: None
+    check("choisir refuse pour l'instant", prep.remux_verdict(video) is False)
+    check("jeter ne jette pas", prep.remux_verdict(video, unmeasured=True) is True)
+    check("et rien n'est ecrit",
+          not (common.STATE / "remux.json").exists()
+          or "abcDEF12345" not in (common.STATE / "remux.json").read_text())
+    # the control: once the probe runs again the true answer is taken and kept
+    prep.matches_target = lambda _p: True
+    prep.remux_is_safe = lambda _p: True
+    check("temoin: la sonde qui retourne donne le vrai verdict",
+          prep.remux_verdict(video) is True)
     prep.matches_target = lambda _p: True
 finally:
     prep.matches_target, prep.remux_is_safe = real_matches, real_safe

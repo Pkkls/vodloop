@@ -271,7 +271,12 @@ def remux_verdict(path, unmeasured=False):
         cache = {}
     if key in cache:
         return bool(cache[key])
-    if not matches_target(path):
+    shape = matches_target(path)
+    if shape is None:
+        # the probe did not run: nothing is written down, and the caller says
+        # what silence means for it
+        return unmeasured
+    if not shape:
         # The picture is a property of the file and of nothing else, so this one
         # answer is safe to keep: it will say the same thing on an idle box and
         # on a thrashing one.
@@ -349,7 +354,14 @@ def matches_target(path):
              str(path)],
             capture_output=True, text=True, timeout=60).stdout
     except (OSError, subprocess.SubprocessError):
-        return False
+        # None, not False: the probe did not run, so it says nothing about the
+        # file. Returning False here let remux_verdict write a permanent refusal
+        # for a probe that merely lost to a busy box, and that is the third time
+        # this exact shape of bug has emptied the rotation. Measured 2026-09-09:
+        # four files reading unusable, all four returning matches, audio and
+        # safe as True the moment the box was idle, and the runway reading one
+        # hour against a library holding ten.
+        return None
     fields = (out.strip().splitlines() or [""])[0].split(",")
     if len(fields) != 4 or fields[0] != "h264":
         return False
