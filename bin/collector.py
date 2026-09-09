@@ -83,12 +83,17 @@ HANDED_COOLDOWN_SECONDS = 6 * 3600
 # complaint that started all of this. The janitor now frees to 10 and this
 # fires below 8, so there is always a gap the collector can work in.
 MIN_FREE_BYTES = 8 * 1024 ** 3
-# How many URLs the board may be sitting on before this stops adding. The board
-# does one at a time and a real video costs it fifteen to forty minutes, so four
-# is already a couple of hours of work in hand: enough that a missed run or a
-# failed fetch does not starve it, shallow enough that a choice made now is
-# fetched within the hour instead of behind a day of older ones.
-BOARD_QUEUE_DEPTH = 4
+# How many URLs the board may be sitting on before this stops adding. Two rates
+# set it: the board finishes roughly one fetch every ten minutes, and this runs
+# every thirty. Four left the board idle between passes; eight is about eighty
+# minutes of work in hand, so a missed run or a string of refusals cannot empty
+# it, and it is still shallow enough that a choice made now is fetched within
+# the hour rather than behind a day of older ones.
+#
+# Deep is not free. A 49 entry queue built before the variety rule existed held
+# 35 subathons of two hours and more and blocked every later decision for days,
+# which is the state that had the channel looping one video on 2026-09-09.
+BOARD_QUEUE_DEPTH = 8
 # The board publishes its state on a five minute tick. Past this the file is not
 # reporting the board, it is reporting the last time the board could be reached,
 # and a count read off it would be a guess. Then this falls back to the depth
@@ -107,6 +112,19 @@ URGENT_RUNWAY_SECONDS = 4 * 3600
 # same ten minutes, which is how the library gained one minute of air across
 # three complete cycles on 2026-09-09.
 MIN_USEFUL_SECONDS = 20 * 60
+# What to prefer once the channel is not starving, and it is a different
+# question. The disk holds about the same number of HOURS whatever is on it, so
+# what a band changes is how many distinct videos those hours are: measured on
+# this pool of 4570, four hours and over gives five videos on the disk, twenty
+# to sixty minutes gives fifty five, five to twenty minutes gives two hundred.
+# Nearly half the pool is four hours or more, so taking it as it comes builds
+# the poorest rotation available.
+#
+# Below the band a fetch is confetti, above it one fetch buys one video and
+# fills the disk with it. In between there are 574 candidates, which is more
+# than the disk can hold, so the band never runs the collector dry.
+VARIETY_MIN_SECONDS = 5 * 60
+VARIETY_MAX_SECONDS = 60 * 60
 
 # The optional part suffix is not decoration. A stream too long for the board's
 # card arrives as <title>-<id>.p02of04.mp4, and without this the id is not read
@@ -278,16 +296,26 @@ def pick(count, known, shortest=False):
     """
     cached = pool()
     lists = [list(cached.get(cache_key(s), {}).get("ids", [])) for s in sources()]
+    durations = {}
+    for source in sources():
+        durations.update(cached.get(cache_key(source), {}).get("dur", {}))
     if shortest:
-        durations = {}
-        for source in sources():
-            durations.update(cached.get(cache_key(source), {}).get("dur", {}))
         chosen = pick_shortest(count, known, lists, durations)
         if chosen:
             return chosen
         # nothing in the pool has a measured duration yet. Falling through to the
         # round robin queues something rather than nothing, and queueing nothing
         # is the one outcome a channel that is running dry cannot afford
+    else:
+        # Not starving, so the question is variety rather than air time. Each
+        # source keeps its turn; what is filtered is what that turn may offer.
+        # A source with nothing in the band keeps its whole list, so narrowing
+        # can never silence a source altogether.
+        banded = [[v for v in ids
+                   if VARIETY_MIN_SECONDS <= (durations.get(v) or 0) < VARIETY_MAX_SECONDS]
+                  or ids
+                  for ids in lists]
+        lists = banded
     cursors = [0] * len(lists)
     chosen = []
     while len(chosen) < count:

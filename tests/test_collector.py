@@ -208,6 +208,48 @@ try:
     check("with no duration anywhere it queues something rather than nothing",
           len(blind) == 3, str(blind))
 
+    print("when it is not starving, it goes for variety")
+    # The disk holds about the same number of hours whatever is on it, so what a
+    # duration band changes is how many DISTINCT videos those hours are. On the
+    # real pool of 4570: four hours and over gives five videos on the disk,
+    # twenty to sixty minutes gives fifty five. Nearly half the pool is four
+    # hours or more, so taking it as it comes builds the poorest rotation there
+    # is. Below the band a fetch is confetti; above it, one fetch fills the disk
+    # with a single video.
+    LONG = ids("x", 5)
+    SHORT = ids("y", 5)
+    BAND = ids("z", 5)
+    collector.sources = lambda: [{"url": u, "match": []} for u in ("src-a",)]
+    collector.pool = lambda: {"src-a": {
+        "ids": LONG + SHORT + BAND,
+        "dur": dict([(v, 40000) for v in LONG]
+                    + [(v, 30) for v in SHORT]
+                    + [(v, 1800) for v in BAND])}}
+    calm = collector.pick(5, set())
+    check("les subathons de 11 h sont ecartes",
+          not any(v[0] == "x" for v in calm), str(calm))
+    check("les clips de 30 s aussi", not any(v[0] == "y" for v in calm), str(calm))
+    check("il ne reste que la bande utile",
+          [v[0] for v in calm] == list("zzzzz"), str(calm))
+
+    # the control: with nothing in the band the source keeps its whole list, so
+    # narrowing can never silence a source altogether
+    collector.pool = lambda: {"src-a": {
+        "ids": LONG + SHORT,
+        "dur": dict([(v, 40000) for v in LONG] + [(v, 30) for v in SHORT])}}
+    check("temoin: une source sans rien dans la bande sert quand meme",
+          len(collector.pick(4, set())) == 4)
+
+    # and the urgent branch is untouched by the band: it has its own rule
+    collector.pool = lambda: {"src-a": {
+        "ids": LONG + BAND,
+        "dur": dict([(v, 40000) for v in LONG] + [(v, 1800) for v in BAND])}}
+    check("temoin: en urgence c'est toujours le plus court utile",
+          [v[0] for v in collector.pick(2, set(), shortest=True)] == list("zz"))
+
+    collector.sources = lambda: [{"url": u, "match": []}
+                                 for u in ("src-a", "src-b", "src-c")]
+
     print("the runway it reads")
     # prep takes its library from VODLOOP_LIBRARY, which the unit sets and this
     # module's crontab line does not. Unwired, runway_seconds() counts only the
