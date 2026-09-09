@@ -1,0 +1,145 @@
+#!/bin/bash
+# vodloop-project - interrupteur on/off pour un projet heberge sur ce serveur.
+#
+# Eteindre un projet doit rendre le disque sans perdre la possibilite de le
+# rallumer. Ce script archive d'abord, verifie l'archive, et ne supprime
+# qu'ensuite. Rallumer restaure depuis la derniere archive.
+#
+# Ce n'est pas un gestionnaire de paquets: il ne connait qu'un repertoire, une
+# unite systemd optionnelle et un site nginx optionnel, parce que c'est tout ce
+# que les projets de cette machine utilisent.
+#
+#   vodloop-project list
+#   vodloop-project off <nom>
+#   vodloop-project on  <nom>
+set -uo pipefail
+
+HOME_DIR=/home/ubuntu
+ARCHIVES="$HOME_DIR/backups/archives"
+NGINX_AVAIL=/etc/nginx/sites-available
+NGINX_ENABLED=/etc/nginx/sites-enabled
+
+die() { echo "erreur: $*" >&2; exit 1; }
+
+free_mb() { df -Pm / | tail -1 | awk '{print $4}'; }
+
+usage() {
+  cat <<'EOF'
+usage:
+  vodloop-project list          etat de chaque projet connu
+  vodloop-project off <nom>     archive, verifie, desactive, rend le disque
+  vodloop-project on  <nom>     restaure depuis la derniere archive
+EOF
+  exit 2
+}
+
+# Les projets sont les repertoires de /home/ubuntu qui ne sont ni de l'outillage
+# ni des donnees. Liste explicite plutot que devinette: se tromper ici efface un
+# projet qui tourne.
+known_projects() {
+  printf '%s\n' kicknosub-web kicksearch kickvods
+}
+
+state_of() {
+  local name="${1:-}"
+  [ -n "$name" ] || return 0
+  local dir="$HOME_DIR/$name" unit="" site="" st="absent"
+  [ -d "$dir" ] && st="present"
+  systemctl list-unit-files "$name.service" >/dev/null 2>&1 \
+    && systemctl cat "$name.service" >/dev/null 2>&1 && unit="$name.service"
+  [ -e "$NGINX_ENABLED/$name" ] && site="nginx"
+  local size="-"
+  [ -d "$dir" ] && size=$(du -shx "$dir" 2>/dev/null | cut -f1)
+  local arch="-"
+  arch=$(ls -1t "$ARCHIVES/$name"-*.tar.gz 2>/dev/null | head -1)
+  [ -n "$arch" ] && arch=$(basename "$arch") || arch="-"
+  printf '  %-16s %-8s %-6s %-6s %-8s %s\n' \
+    "$name" "$st" "${unit:+unit}" "${site:+$site}" "$size" "$arch"
+}
+
+cmd_list() {
+  printf '  %-16s %-8s %-6s %-6s %-8s %s\n' \
+    NOM ETAT UNITE NGINX TAILLE ARCHIVE
+  local p
+  while read -r p; do state_of "$p"; done < <(known_projects)
+}
+
+cmd_off() {
+  local name="${1:-}"; [ -n "$name" ] || usage
+  local dir="$HOME_DIR/$name"
+  [ -d "$dir" ] || die "$name: aucun repertoire $dir"
+  known_projects | grep -qx "$name" || die "$name n'est pas dans la liste connue"
+
+  local before; before=$(free_mb)
+  mkdir -p "$ARCHIVES"
+  local stamp; stamp=$(date +%Y%m%d-%H%M%S)
+  local tgz="$ARCHIVES/$name-$stamp.tar.gz"
+
+  echo "1. archivage de $name"
+  # node_modules et caches se reinstallent, ils n'ont pas a peser dans l'archive
+  tar czf "$tgz" -C "$HOME_DIR" \
+      --exclude=node_modules --exclude=__pycache__ --exclude='*.pyc' \
+      "$name" || die "archivage echoue"
+
+  echo "2. verification de l'archive"
+  local entries
+  entries=$(tar tzf "$tgz" 2>/dev/null | wc -l) || die "archive illisible"
+  [ "$entries" -gt 0 ] || die "archive vide, rien ne sera supprime"
+  echo "   $(du -h "$tgz" | cut -f1), $entries entrees lisibles"
+
+  # L'unite et le site sont notes dans l'archive pour que "on" sache quoi rendre
+  local manifest="$ARCHIVES/$name-$stamp.manifest"
+  : > "$manifest"
+  if systemctl cat "$name.service" >/dev/null 2>&1; then
+    echo "3. arret de $name.service"
+    systemctl disable --now "$name.service" >/dev/null 2>&1 && echo "unit=$name.service" >> "$manifest"
+  fi
+  if [ -e "$NGINX_ENABLED/$name" ]; then
+    echo "4. desactivation du site nginx"
+    rm -f "$NGINX_ENABLED/$name" && echo "nginx=$name" >> "$manifest"
+    nginx -t >/dev/null 2>&1 && systemctl reload nginx || echo "   nginx refuse de recharger, site laisse desactive"
+  fi
+
+  echo "5. liberation du disque"
+  rm -rf "$dir"
+  local after; after=$(free_mb)
+  echo "   $((after - before)) Mo rendus, $after Mo libres"
+  echo
+  echo "rallumer: vodloop-project on $name"
+}
+
+cmd_on() {
+  local name="${1:-}"; [ -n "$name" ] || usage
+  local tgz; tgz=$(ls -1t "$ARCHIVES/$name"-*.tar.gz 2>/dev/null | head -1)
+  [ -n "$tgz" ] || die "$name: aucune archive dans $ARCHIVES"
+  [ -d "$HOME_DIR/$name" ] && die "$name: le repertoire existe deja, rien touche"
+
+  echo "1. restauration depuis $(basename "$tgz")"
+  tar xzf "$tgz" -C "$HOME_DIR" || die "restauration echouee"
+
+  local manifest="${tgz%.tar.gz}.manifest"
+  if [ -f "$manifest" ]; then
+    local unit site
+    unit=$(sed -n 's/^unit=//p' "$manifest")
+    site=$(sed -n 's/^nginx=//p' "$manifest")
+    if [ -n "$site" ] && [ -e "$NGINX_AVAIL/$site" ]; then
+      echo "2. reactivation du site nginx"
+      ln -sf "$NGINX_AVAIL/$site" "$NGINX_ENABLED/$site"
+      nginx -t >/dev/null 2>&1 && systemctl reload nginx
+    fi
+    if [ -n "$unit" ]; then
+      echo "3. redemarrage de $unit"
+      systemctl enable --now "$unit" >/dev/null 2>&1 || echo "   l'unite n'a pas demarre, a regarder"
+    fi
+  fi
+  echo
+  echo "note: les dependances exclues de l'archive (node_modules) sont a reinstaller"
+  state_of "$name"
+}
+
+case "${1:-}" in
+  list) cmd_list ;;
+  off)  shift; cmd_off "$@" ;;
+  on)   shift; cmd_on "$@" ;;
+  *)    usage ;;
+esac
