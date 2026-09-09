@@ -143,13 +143,51 @@ try:
     # order below is what proves the duration is being read.
     collector.sources = lambda: [{"url": u, "match": []}
                                  for u in ("src-a", "src-b", "src-c")]
+    # all three above MIN_USEFUL_SECONDS, so this measures the ordering alone
     collector.pool = lambda: {
         "src-a": {"ids": A, "dur": {v: 3600 for v in A}},
-        "src-b": {"ids": B, "dur": {v: 600 for v in B}},
+        "src-b": {"ids": B, "dur": {v: 1500 for v in B}},
         "src-c": {"ids": C, "dur": {v: 43000 for v in C}}}
     urgent = collector.pick(3, set(), shortest=True)
     check("the shortest videos are taken first",
           [v[0] for v in urgent] == list("bbb"), str(urgent))
+
+    print("but not videos too short to pay for the trip")
+    # A fetch costs the board about ten minutes whatever it returns, so a clip
+    # adds nothing and spends the same. Left out, this asked for exactly the
+    # worst videos in the pool and got three of 17, 26 and 17 seconds: one
+    # minute of air for three complete cycles, on 2026-09-09.
+    collector.pool = lambda: {
+        "src-a": {"ids": A, "dur": {v: 3600 for v in A}},
+        "src-b": {"ids": B, "dur": {v: 20 for v in B}},
+        "src-c": {"ids": C, "dur": {v: 1500 for v in C}}}
+    picked = collector.pick(3, set(), shortest=True)
+    check("a 20 second clip is refused even though it is the shortest",
+          not any(v[0] == "b" for v in picked), str(picked))
+    check("and the shortest one above the floor is taken",
+          [v[0] for v in picked] == list("ccc"), str(picked))
+
+    # the control: raise the clips above the floor and they win again, so the
+    # check above is measuring the floor and not some other exclusion
+    collector.pool = lambda: {
+        "src-a": {"ids": A, "dur": {v: 3600 for v in A}},
+        "src-b": {"ids": B, "dur": {v: collector.MIN_USEFUL_SECONDS for v in B}},
+        "src-c": {"ids": C, "dur": {v: 1500 for v in C}}}
+    check("temoin: juste au-dessus du plancher, ils repassent devant",
+          [v[0] for v in collector.pick(3, set(), shortest=True)] == list("bbb"))
+
+    # and when nothing at all clears the floor, a short video beats no video
+    collector.pool = lambda: {
+        "src-a": {"ids": A, "dur": {v: 30 for v in A}},
+        "src-b": {"ids": B, "dur": {v: 20 for v in B}},
+        "src-c": {"ids": C, "dur": {v: 40 for v in C}}}
+    check("un pool entierement sous le plancher donne quand meme quelque chose",
+          len(collector.pick(3, set(), shortest=True)) == 3)
+
+    collector.pool = lambda: {
+        "src-a": {"ids": A, "dur": {v: 3600 for v in A}},
+        "src-b": {"ids": B, "dur": {v: 600 for v in B}},
+        "src-c": {"ids": C, "dur": {v: 43000 for v in C}}}
 
     # the control: the same pool, same call, without the flag. If this also came
     # out shortest first the check above would be measuring the fixture.

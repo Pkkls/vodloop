@@ -99,6 +99,14 @@ STATUS_STALE_SECONDS = 45 * 60
 # one hour floor that prep never has to refuse a deletion, far enough below a
 # full library that this is not permanently in a hurry.
 URGENT_RUNWAY_SECONDS = 4 * 3600
+# Below this a video is not worth fetching at all. Measured on the board: a run
+# costs about ten minutes end to end whatever it returns, and the download
+# itself moves at several times real time, so the time a fetch adds to the
+# runway is roughly its duration minus that fixed cost. Twenty minutes returns
+# about double what it costs; seventeen seconds returns nothing and spends the
+# same ten minutes, which is how the library gained one minute of air across
+# three complete cycles on 2026-09-09.
+MIN_USEFUL_SECONDS = 20 * 60
 
 # The optional part suffix is not decoration. A stream too long for the board's
 # card arrives as <title>-<id>.p02of04.mp4, and without this the id is not read
@@ -234,7 +242,7 @@ def pool():
 
 
 def pick_shortest(count, known, lists, durations):
-    """Up to count ids, shortest first, from the whole pool at once.
+    """Up to count ids: the shortest videos that still pay for themselves.
 
     Round robin is abandoned here on purpose. When air time is short the
     question is no longer which source deserves a turn, it is which video is
@@ -242,10 +250,23 @@ def pick_shortest(count, known, lists, durations):
     any one list. An unmeasured duration is not treated as a short video: it is
     left out, because guessing wrong in this direction queues a twelve hour
     subathon in front of a channel that has thirty minutes left.
+
+    The floor is the part that was missing, and leaving it out was a trap that
+    ran for two days. A fetch costs the board about ten minutes whatever it
+    brings back: metadata, download, merge, upload, verify. Sorting on duration
+    alone therefore asks for the videos with the worst possible return, and it
+    got exactly that: three clips of 17, 26 and 17 seconds, one minute of air
+    for three full cycles. The channel could not climb out, because every pass
+    left the runway low, which kept it urgent, which asked for more clips.
+
+    So the shortest candidate is chosen from those long enough to be worth the
+    trip. Below the floor a fetch is a net loss of runway, not a small gain.
     """
     candidates = {vid for ids in lists for vid in ids} - set(known)
     rated = sorted((durations[v], v) for v in candidates if durations.get(v))
-    return [vid for _, vid in rated[:count]]
+    worth = [(secs, vid) for secs, vid in rated if secs >= MIN_USEFUL_SECONDS]
+    # nothing in the pool clears the floor: better a short video than none
+    return [vid for _, vid in (worth or rated)[:count]]
 
 
 def pick(count, known, shortest=False):
