@@ -57,6 +57,8 @@ YTDLP = shutil.which("yt-dlp") or "/home/ubuntu/.local/bin/yt-dlp"
 SOURCES_FILE = common.STATE / "sources.json"
 POOL_FILE = common.STATE / "pool.json"
 HANDED_FILE = common.STATE / "handed.json"
+# Ids dont la source elle-meme est defectueuse. Ecrit par prep, lu ici.
+UNUSABLE_FILE = common.STATE / "unusable.json"
 
 # A ceiling, not the real limit: disk is. Set above what the disk can hold so
 # the equilibrium is decided by free space, which is the thing that actually
@@ -200,6 +202,25 @@ def inbox_ids():
         return set(re.findall(r"[A-Za-z0-9_-]{11}", INBOX.read_text()))
     except OSError:
         return set()
+
+
+def unusable_ids():
+    """Videos whose source itself is defective, and that must never be fetched
+    again.
+
+    Some uploads carry video packets with no PTS at all. Copied into MPEG-TS
+    they look fine, and the flv muxer at the far end refuses the first one and
+    takes the pusher down with it. prep refuses them on purpose, which is right,
+    but nothing stopped the collector offering the same id once the file left
+    the library: on 2026-09-10 one was downloaded a second time, 2,8 Go and a
+    full cycle of a board that manages a handful of fetches a day, and the fresh
+    copy carried exactly the same five bad packets in its first thirty seconds.
+    The defect is upstream, so no amount of re-fetching will change it.
+
+    A missing or unreadable file means no exclusion, which is the safe
+    direction: at worst a video is fetched again, never one silently lost.
+    """
+    return set(load(UNUSABLE_FILE, []))
 
 
 def list_source(source):
@@ -382,7 +403,8 @@ def main(argv):
         print("bibliotheque pleine ou carte deja servie, rien a faire")
         return 0
 
-    known = library_ids() | inbox_ids() | recent
+    unusable = unusable_ids()
+    known = library_ids() | inbox_ids() | recent | unusable
     chosen = pick(want, known, shortest=urgent)
     if not chosen:
         print("rien de nouveau dans les sources")

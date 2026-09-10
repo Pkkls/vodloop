@@ -233,6 +233,39 @@ def wait_for_encode(encoder, budget, armed=True):
 
 
 REMUX_VERDICTS = common.STATE / "remux.json"
+# Ids whose source is defective, shared with the collector so it stops offering
+# them. Written here because this is the only place that ever finds out.
+UNUSABLE = common.STATE / "unusable.json"
+UNUSABLE_ID = re.compile(r"-([A-Za-z0-9_-]{11})(?:\.p\d+of\d+)?\.[A-Za-z0-9]+$")
+
+
+def mark_unusable(path):
+    """Record that this video's source cannot be copied, whatever is done to it.
+
+    Only the id is kept, not the path: the point is that fetching it again is
+    wasted, and the next copy would land under a different name anyway. A file
+    whose name carries no id is skipped rather than guessed at.
+    """
+    found = UNUSABLE_ID.search(pathlib.Path(path).name)
+    if not found:
+        return
+    try:
+        current = json.loads(UNUSABLE.read_text())
+        current = current if isinstance(current, list) else []
+    except (OSError, ValueError):
+        current = []
+    if found.group(1) in current:
+        return
+    current.append(found.group(1))
+    try:
+        common.STATE.mkdir(parents=True, exist_ok=True)
+        tmp = UNUSABLE.with_suffix(".tmp")
+        tmp.write_text(json.dumps(current, indent=1))
+        tmp.replace(UNUSABLE)
+        print(f"source defectueuse, ne sera plus telechargee: {found.group(1)}",
+              flush=True)
+    except OSError:
+        pass  # une liste qu'on ne peut pas ecrire coute un re-telechargement
 
 
 def remux_verdict(path, unmeasured=False):
@@ -295,6 +328,15 @@ def remux_verdict(path, unmeasured=False):
         # the channel looped one video with three usable ones in the library.
         # So a yes is remembered and a no is asked again, which costs a second.
         verdict, remember = bool(answer), bool(answer)
+        if not answer:
+            # The probe ran and found packets with no PTS, so the fault is in
+            # the source itself and re-downloading cannot change it. Measured
+            # 2026-09-10: the same video was fetched a second time, 2,8 Go and a
+            # full cycle of a board that manages a handful of fetches a day, and
+            # the fresh copy carried exactly the same five bad packets in its
+            # first thirty seconds. The id is written down so the collector
+            # stops offering it.
+            mark_unusable(path)
     if not remember:
         return verdict
     # only this file's entry survives, so the cache cannot grow with every

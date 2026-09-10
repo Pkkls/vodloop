@@ -14,6 +14,7 @@ fresh video in a two file library out of the queue, and the channel looped the
 one it had already played. matches_target and audio_matches_target both said
 True on that file the whole time.
 """
+import json
 import os
 import pathlib
 import sys
@@ -125,6 +126,33 @@ try:
     prep.matches_target = lambda _p: True
 finally:
     prep.matches_target, prep.remux_is_safe = real_matches, real_safe
+
+print("une source defectueuse ne doit plus etre telechargee")
+# Mesure 2026-09-10: la meme video a ete recuperee une seconde fois, 2,8 Go et un
+# cycle complet d'une carte qui fait quelques fetchs par jour, et la copie neuve
+# portait exactement les cinq memes paquets sans PTS. Le defaut est en amont.
+(common.STATE / "remux.json").unlink(missing_ok=True)
+(common.STATE / "unusable.json").unlink(missing_ok=True)
+prep.matches_target = lambda _p: True
+prep.remux_is_safe = lambda _p: False
+prep.remux_verdict(video)
+marked = json.loads((common.STATE / "unusable.json").read_text())
+check("l'id est retenu apres un refus mesure", marked == ["abcDEF12345"], str(marked))
+
+# le controle: une sonde qui n'a PAS tourne ne doit rien inscrire, sinon une
+# machine chargee bannirait des videos saines
+(common.STATE / "unusable.json").unlink(missing_ok=True)
+(common.STATE / "remux.json").unlink(missing_ok=True)
+prep.remux_is_safe = lambda _p: None
+prep.remux_verdict(video)
+check("temoin: une sonde qui n'a pas tourne n'inscrit rien",
+      not (common.STATE / "unusable.json").exists())
+
+# et un succes n'inscrit rien non plus
+prep.remux_is_safe = lambda _p: True
+prep.remux_verdict(video)
+check("temoin: un succes n'inscrit rien",
+      not (common.STATE / "unusable.json").exists())
 
 print()
 if failures:
