@@ -14,6 +14,11 @@ BOTCONFIG = STATE / "botconfig.json"
 OFFSET = STATE / "offset"
 FIFO = ROOT / "pipe"
 ALLOWLIST = ROOT / "allowed_channels.json"
+# The panel asks for a prep restart by dropping this file; medic is what acts on
+# it. One definition, because two components read it and a name that drifts is a
+# request nobody ever honours. Only its existence and its age are ever read, so
+# nothing a caller writes into it reaches anything.
+PREP_RESTART_REQUEST = STATE / "prep_restart_request"
 
 # These three used to be a promise every segment had to keep, and keeping it
 # meant re-encoding almost everything that ever arrived. As of 2026-09-08 they

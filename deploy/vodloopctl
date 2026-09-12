@@ -15,6 +15,11 @@
 # session, which ends the stream, closes the VOD and loses the viewers. So
 # there is no restart verb for the pusher, "pause" stops the feeder instead,
 # and the pusher is always the last thing stopped and the first thing started.
+#
+# prep-restart is the one restart verb, and the asymmetry is why it can exist:
+# prep touches no socket. The pusher keeps the session, the feeder keeps sending
+# the chunks already cut, and prep's own startup keeps every chunk it had
+# finished, so the viewer sees nothing at all.
 set -u
 
 PUSH=vodloop-push
@@ -23,7 +28,7 @@ PREP=vodloop-prep
 CHAT=vodloop-chat
 
 usage() {
-    echo "usage: vodloopctl {go-live|stop|pause|resume|bot-start|bot-stop|status}" >&2
+    echo "usage: vodloopctl {go-live|stop|pause|resume|prep-restart|bot-start|bot-stop|status}" >&2
     exit 2
 }
 
@@ -58,6 +63,15 @@ case "$1" in
     resume)
         systemctl start "$FEED" || exit 1
         echo "resumed"
+        ;;
+    prep-restart)
+        # The only restart in this file, and the only unit that may have one.
+        # It costs the chunk being cut and nothing else: recover_orphans keeps
+        # every chunk the muxer had closed, so the runway in front of it stays
+        # and the feeder never notices. Picking up a deployed fix used to mean
+        # a shell on the box for exactly this.
+        systemctl restart "$PREP" || exit 1
+        echo "prep restarted"
         ;;
     bot-start)
         systemctl start "$CHAT" || exit 1

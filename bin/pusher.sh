@@ -20,6 +20,16 @@ sleep infinity > "$FIFO" &
 PLACEHOLDER=$!
 trap 'kill $PLACEHOLDER 2>/dev/null' EXIT
 
+# One exec of this script is one RTMP session, and Kick reads the resolution out
+# of the sequence header when a session opens and advertises it for the whole
+# live. So the first picture this ffmpeg carries names the channel until it dies,
+# and left to chance that is whatever chunk sat at the head of the queue. Saying
+# here that a new session is starting is what lets the feeder put the 1080p60
+# standby clip in front of it instead. The pid is in the line because two starts
+# can share a second and a repeated line reads as the same session.
+mkdir -p "$ROOT/state" 2>/dev/null
+printf '%s %s\n' "$(date +%s)" "$$" > "$ROOT/state/push_session" 2>/dev/null || true
+
 exec ffmpeg -hide_banner -loglevel warning \
   -re -i "$FIFO" -c copy \
   -f flv "$KICK_INGEST/$KICK_STREAM_KEY"

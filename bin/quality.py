@@ -163,7 +163,7 @@ def whole(raw):
         return None
 
 
-def ladder(playback_url):
+def ladder(playback_url, airing=None):
     """What Kick advertises for the source rung, and what can outbid it.
 
     A player choosing by bandwidth takes the fattest rung it can afford, so the
@@ -179,6 +179,22 @@ def ladder(playback_url):
     720p30 stream at 690 kbps, which is what YouTube serves for the long IRL
     VODs in this pool, is outbid by Kick's 720p60 rung on every sample of every
     one of its eleven hours.
+
+    "The source's own resolution" is the whole of the difficulty, and it is
+    airing, as (width, height), that answers it. Kick's label cannot: its ingest
+    reads the resolution out of the sequence header when the RTMP session opens
+    and advertises that for the rest of the live, whatever is pushed afterwards.
+    Observed on the live channel 2026-09-12, where the source rung is still
+    announced 1920x1080@60 because that is what the session opened on, hours
+    after the mixed-resolution library started sending 720p through it.
+
+    So taken from the label, a 690 kbps 720p30 VOD reads as a 1080p source
+    outbid by a 1280x720 rung, which is exactly the paragraph above being
+    reported as if it were the paragraph before it: a standing alert, every six
+    hours, for eleven hours at a time, about pixels nobody is losing. Measured
+    against what is actually on the wire it is what it always was, a rung at the
+    source's own size, and it says nothing. When there is nothing to measure the
+    label is all there is and the old behaviour is what is left.
     """
     if not playback_url:
         return {}
@@ -188,13 +204,20 @@ def ladder(playback_url):
     source = next((r for r in found if r["video"] == "chunked"), None)
     if source is None:
         return {"ladder_error": "aucun rung chunked"}
-    pixels = (source["width"] or 0) * (source["height"] or 0)
+    pixels = ((airing[0] or 0) * (airing[1] or 0) if airing
+              else (source["width"] or 0) * (source["height"] or 0))
     smaller = [r["bps"] for r in found
                if r is not source and r["bps"]
                and 0 < (r["width"] or 0) * (r["height"] or 0) < pixels]
     return {"rung_width": source["width"], "rung_height": source["height"],
             "rung_fps": source["fps"], "rung_bps": source["bps"],
             "rung_count": len(found),
+            # recorded, never compared. The gap between these two is Kick's
+            # frozen label and not a fault of this machine: it cannot be closed
+            # without opening a new RTMP session, which ends the live, and there
+            # is nothing for an alert to ask anyone to do about it.
+            "air_width": airing[0] if airing else None,
+            "air_height": airing[1] if airing else None,
             "rung_best_smaller_bps": max(smaller) if smaller else None}
 
 
@@ -313,6 +336,26 @@ def newest_chunk():
     return max(settled or chunks, key=lambda p: p.stat().st_mtime)
 
 
+def airing_file():
+    """The file the feeder is sending into the FIFO right now, or None.
+
+    ready_segments() is in playback order and the feeder takes its head, sends
+    it, and only then deletes it, so the head is what is on the wire. That is a
+    different question from newest_chunk(), which answers what prep last wrote
+    and sits up to AHEAD_LIMIT_SECONDS ahead of the viewer: two hours is long
+    enough for the picture to have changed size twice.
+
+    With no chunk ready the feeder is on the standby clip, so that is what is on
+    the wire and it is probed like anything else rather than assumed from
+    common.WIDTH: the point of this function is to measure what is going out.
+    """
+    chunks = common.ready_segments()
+    if chunks:
+        return chunks[0]
+    filler = common.ROOT / "filler.ts"
+    return filler if filler.is_file() else None
+
+
 def streams(path):
     """Codec, geometry and rates of one file, however it is wrapped."""
     try:
@@ -349,6 +392,21 @@ def streams(path):
         "asample_rate": number(audio.get("sample_rate")),
         "achannels": audio.get("channels"),
     }
+
+
+def on_air():
+    """The picture size actually leaving this machine, or None.
+
+    None is not a fault and not a zero: it means nothing could be measured, and
+    ladder() falls back to Kick's own label when it gets one.
+    """
+    path = airing_file()
+    if path is None:
+        return None
+    info = streams(path)
+    if not info or not info.get("width") or not info.get("height"):
+        return None
+    return info["width"], info["height"]
 
 
 def source_of(chunk):
@@ -434,7 +492,7 @@ def sample():
     row.update(cpu())
     row.update(kick())
     if row.get("is_live"):
-        row.update(ladder(row.get("playback_url")))
+        row.update(ladder(row.get("playback_url"), airing=on_air()))
     # the url is a signed handle that changes every sample and is worth nothing
     # once read, so it is not kept in a log that lives for six weeks
     row.pop("playback_url", None)
@@ -570,6 +628,13 @@ def one_line(row):
             f"{row.get('viewer_count') if row.get('viewer_count') is not None else '?'}")
 
 
+def frozen_label(row):
+    """Whether Kick is announcing a size this machine is no longer sending."""
+    announced = (row.get("rung_width"), row.get("rung_height"))
+    pushed = (row.get("air_width"), row.get("air_height"))
+    return all(announced) and all(pushed) and announced != pushed
+
+
 def detail(row):
     """One sample in full: the source on the left, the wire on the right."""
     lines = [
@@ -600,16 +665,22 @@ def detail(row):
         f"tampon {row.get('buffer_s')}s",
         f"  kick     http={row.get('kick_http')} live={row.get('is_live')} "
         f"spectateurs={row.get('viewer_count')}",
-        # Recorded rather than compared. The buffer runs up to half an hour, so
-        # the chunk measured above is not the one on air yet, and asserting the
-        # two agree would fire on every change of source rather than on a fault.
-        # What this is for is the day a 720p file follows a 1080p one: if Kick
-        # keeps advertising the old shape, it is in this line that it shows.
-        f"  rung     source {row.get('rung_width')}x{row.get('rung_height')}"
+        # Recorded rather than compared, and this is the line that answered the
+        # question the README left open. A 720p file did follow a 1080p one, and
+        # Kick went on advertising the old shape: it reads the resolution out of
+        # the sequence header when the session opens and keeps it for the whole
+        # live. So these two disagree by design whenever a video that is not
+        # 1080p is on air, "annonce" is what a player is told and "antenne" is
+        # what it is sent, and only the second one is this machine's to answer
+        # for. ladder() measures against "antenne" for exactly that reason.
+        f"  rung     annonce {row.get('rung_width')}x{row.get('rung_height')}"
         f"@{row.get('rung_fps')} {kbps(row.get('rung_bps'))} sur "
         f"{row.get('rung_count')} rungs, meilleur plus petit "
         f"{kbps(row.get('rung_best_smaller_bps'))}"
         f"{'  ' + row['ladder_error'] if row.get('ladder_error') else ''}",
+        f"           antenne {row.get('air_width')}x{row.get('air_height')}"
+        + ("   etiquette figee a l'ouverture de la session"
+           if frozen_label(row) else ""),
     ]
     return "\n".join(lines)
 
