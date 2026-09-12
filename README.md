@@ -160,6 +160,16 @@ writer sitting in the feeder unit would take the stream down every time the
 feeder restarted. Verified live: restarting `vodloop-feed` left the pusher PID
 unchanged and the channel online throughout.
 
+"Freely" is true of `vodloop-prep` since 2026-09-12 and was not before. prep
+writes chunks into `segments/` while the feeder is already eating them, and it
+only consults its look-ahead limit between videos, so the item in flight can be
+holding hours of runway. The orphan recovery on startup deleted all of it, and
+three separate things restart that unit: `deploy/harden-oracle.sh` whenever it
+lays a drop-in, `medic.py` after three dry passes, and a person picking up a fix.
+It now keeps every chunk the muxer had closed and drops only the last one, which
+is the only one that can be half written, because the segment muxer holds one
+open at a time and never returns to an earlier one.
+
 ## Monitoring
 
 `quality.py` writes one JSON line every five minutes and answers two questions
@@ -171,8 +181,12 @@ generation to lose. If they ever differ it prints `REENCODAGE` with both shapes,
 which is the regression detector for the rule at the top of this file.
 
 Then it reads Kick's master playlist and checks that the source rung is not
-outbid by a rung with fewer pixels. That is the one fault a perfect pipeline can
-still produce, because it happens after the bytes leave.
+outbid by a rung carrying fewer pixels than the chunk currently going out. That
+is the one fault a perfect pipeline can still produce, because it happens after
+the bytes leave. The comparison is against the chunk and not against the size
+Kick prints beside the source rung, for the reason under Limits: that size is
+frozen at the start of the session and stops describing the picture the moment a
+video of another shape comes round.
 
 Thresholds here are deliberately thin. Absolute bitrate floors have been wrong
 about this library three times: 150k of audio against YouTube's 128k, then
@@ -324,12 +338,33 @@ Only publicly reachable videos are handled. A video behind a sign-in check is
 recorded as an error on its queue item, and there is deliberately no support for
 supplying an account session.
 
-**Resolution is mixed on air.** A 720p-only video airs at 720p rather than being
-upscaled, which is the deliberate choice. The FLV muxer accepts a resolution
-change, but Kick's ingest reads resolution from the sequence header and there is
-no way to ask it without risking the channel, so `quality.py` records what Kick
-advertises on every sample and the answer will show up there rather than in a
-test.
+**Resolution is mixed on air, and Kick's label for it is not.** A 720p-only video
+airs at 720p rather than being upscaled, which is the deliberate choice. The FLV
+muxer accepts the change and the ingest carries it. What the ingest does not do
+is follow it: it reads the resolution out of the sequence header when the RTMP
+session opens and advertises that for the whole live. Observed 2026-09-12, the
+source rung is still announced `1920x1080@60` hours after 720p files started
+going through it.
+
+The label belongs to the session, so only a new session can correct it, and a new
+session is an ended stream, a closed VOD and no viewers. It is therefore left
+alone, and two things follow from leaving it alone.
+
+`quality.py` measures the ladder against the chunk on the wire rather than
+against the label. Taken from the label, every 720p VOD in this pool reads as a
+1080p source outbid by a smaller rung, which is a standing alert every six hours
+for the eleven hours one of them lasts, about pixels nobody is losing — and it
+would be raised by the one check that catches a real picture fault.
+
+And the feeder opens a session the pusher has just started with the 1080p60
+standby clip, so the label the channel is then stuck with is the best shape the
+library holds rather than whatever chunk happened to be at the head of the queue.
+This one is a decision, not a measurement: it is twenty seconds of standby clip
+spent at the only moment there are no viewers to spend it on. It lands rather
+than races because `vodloop-feed` is `BindsTo=` the pusher, so a pusher restart
+takes the feeder with it and the feeder meets the new session at the top of its
+loop; were it ever mid-chunk instead, the label would be what it would have been
+anyway.
 
 **The board's card is the ceiling on duration, not the server.** yt-dlp needs the
 video track, the audio track and the merged output on the card at once, so the
