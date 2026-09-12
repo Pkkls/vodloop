@@ -309,6 +309,26 @@ The dashboard reads `VODLOOP_TOKEN` from `web.env` and listens on loopback only.
 `deploy/nginx-vodloop.conf` is the reverse proxy in front of it; run
 `certbot --nginx` against that host to add the certificate.
 
+The four scripts no systemd unit covers are driven by the server's own cron, at
+the intervals the component table above gives. The flag is the load-bearing part:
+`medic.py` without `--apply` reports what it would do and does none of it, and
+that includes the panel's prep restart, which then writes a request nothing ever
+honours.
+
+```
+*/4  * * * *  cd ~/vodloop && python3 bin/medic.py --apply
+*/5  * * * *  cd ~/vodloop && python3 bin/quality.py --telegram
+*/15 * * * *  cd ~/vodloop && python3 bin/janitor.py
+*/30 * * * *  cd ~/vodloop && python3 bin/collector.py
+```
+
+`vodloopctl` is installed by hand rather than run from the checkout, so a
+`git pull` does not update it. Re-install it whenever it changes:
+
+```sh
+sudo install -o root -g root -m 0755 deploy/vodloopctl /usr/local/sbin/vodloopctl
+```
+
 The board's four scripts go in `/usr/bin` and are driven entirely by cron:
 
 ```
