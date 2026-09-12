@@ -45,9 +45,6 @@ import tgbot
 LOG = common.STATE / "quality.jsonl"
 ALERTS = common.STATE / "quality_alert.json"
 
-# A chunk prep is still writing measures short and light, so it is skipped in
-# favour of the newest one nothing has touched for a while.
-SETTLED_SECONDS = 30
 # ponytail: the file is trimmed to its second half once it passes this, rather
 # than rotated. 288 samples a day is about 250 ko, so this holds roughly six
 # weeks, and the disk this runs on has a prep that stops preparing below 4 Go.
@@ -163,8 +160,14 @@ def whole(raw):
         return None
 
 
-def ladder(playback_url):
+def ladder(playback_url, pushed=None):
     """What Kick advertises for the source rung, and what can outbid it.
+
+    `pushed` is the (width, height) of the chunk on air, and when it is known it
+    is what "smaller" is measured against. Kick labels the source rung once per
+    RTMP session and never again: measured 2026-09-12, a session opened at
+    1080p60 still advertised 1920x1080 hours later while its segments decoded
+    to 640x360, so against the label every 720p file read as an upscale.
 
     A player choosing by bandwidth takes the fattest rung it can afford, so the
     thing that costs a viewer picture is a rung with FEWER pixels than the
@@ -187,8 +190,21 @@ def ladder(playback_url):
         return {"ladder_error": "playlist illisible"}
     source = next((r for r in found if r["video"] == "chunked"), None)
     if source is None:
-        return {"ladder_error": "aucun rung chunked"}
-    pixels = (source["width"] or 0) * (source["height"] or 0)
+        # A session opened below 1080p gets no passthrough at all: measured
+        # 2026-09-12 on a 720p60 session, the ladder topped out at Kick's own
+        # 720p60 encode. That is a generation lost, not a fault, unless what is
+        # on air now is bigger than that top, which is every viewer downscaled.
+        top = max(found, key=lambda r: (r["width"] or 0) * (r["height"] or 0))
+        out = {"rung_width": top["width"], "rung_height": top["height"],
+               "rung_fps": top["fps"], "rung_bps": None, "rung_count": len(found),
+               "rung_best_smaller_bps": None}
+        pushed_pixels = pushed[0] * pushed[1] if pushed and all(pushed) else 0
+        if pushed_pixels > (top["width"] or 0) * (top["height"] or 0):
+            out["ladder_error"] = ("session ouverte plus bas que l'antenne, "
+                                   "Kick ne sert pas sa resolution")
+        return out
+    width, height = pushed if pushed and all(pushed) else (source["width"], source["height"])
+    pixels = (width or 0) * (height or 0)
     smaller = [r["bps"] for r in found
                if r is not source and r["bps"]
                and 0 < (r["width"] or 0) * (r["height"] or 0) < pixels]
@@ -300,17 +316,18 @@ def cpu(window=1.0):
 
 # --- what is on the wire, and what it was made from -----------------------
 
-def newest_chunk():
-    """The most recent chunk nothing is still writing to, or None."""
+def on_air_chunk():
+    """The chunk the feeder is sending right now, or None.
+
+    The feeder plays the oldest ready chunk and deletes it once sent, so while
+    it plays it is still the first one in the list. This used to read the
+    NEWEST chunk, the one prep had just cut and that would air hours later.
+    Measured 2026-09-12 21:15: the monitor reported 1920x1080 at 60 and 4781
+    kbps while the channel was pushing 640x360 at 534 kbps, so the one alarm
+    written for a stream collapsing under a megabit could never fire on it.
+    """
     chunks = common.ready_segments()
-    if not chunks:
-        return None
-    now = time.time()
-    try:
-        settled = [p for p in chunks if now - p.stat().st_mtime > SETTLED_SECONDS]
-    except OSError:
-        settled = []
-    return max(settled or chunks, key=lambda p: p.stat().st_mtime)
+    return chunks[0] if chunks else None
 
 
 def streams(path):
@@ -382,11 +399,18 @@ def compare(chunk_info, source_info):
     out = {"source_" + k: v for k, v in source_info.items()
            if k in ("vcodec", "width", "height", "fps", "video_bps",
                     "acodec", "abitrate", "asample_rate", "achannels")}
+    # The frame rate is compared within a tolerance: a copied variable rate file
+    # reads 29263/1000 in its mkv and 117/4 once in mpegts, which is the same
+    # packets described twice. Exact equality called that a re-encode on
+    # 2026-09-12 20:20 with no encoder running.
+    mine_fps, theirs_fps = chunk_info.get("fps"), source_info.get("fps")
     out["copied_video"] = bool(
         chunk_info.get("vcodec") and chunk_info["vcodec"] == source_info.get("vcodec")
         and chunk_info.get("width") == source_info.get("width")
         and chunk_info.get("height") == source_info.get("height")
-        and chunk_info.get("fps") == source_info.get("fps"))
+        and (mine_fps == theirs_fps
+             or (mine_fps is not None and theirs_fps is not None
+                 and abs(mine_fps - theirs_fps) < 0.1)))
     out["copied_audio"] = bool(
         chunk_info.get("acodec") and chunk_info["acodec"] == source_info.get("acodec")
         and chunk_info.get("asample_rate") == source_info.get("asample_rate")
@@ -419,7 +443,7 @@ def sample():
     row = {"ts": int(time.time()),
            "buffer_s": prep.seconds_on_disk(),
            "free_bytes": shutil.disk_usage(common.ROOT).free}
-    chunk = newest_chunk()
+    chunk = on_air_chunk()
     row["chunk"] = chunk.name if chunk else None
     if chunk is not None:
         info = streams(chunk)
@@ -434,7 +458,7 @@ def sample():
     row.update(cpu())
     row.update(kick())
     if row.get("is_live"):
-        row.update(ladder(row.get("playback_url")))
+        row.update(ladder(row.get("playback_url"), (row.get("width"), row.get("height"))))
     # the url is a signed handle that changes every sample and is worth nothing
     # once read, so it is not kept in a log that lives for six weeks
     row.pop("playback_url", None)

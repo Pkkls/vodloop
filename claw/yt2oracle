@@ -145,8 +145,16 @@ RETRY_SLEEP=20
 
 # --restrict-filenames : noms reduits a [A-Za-z0-9._-], donc plus aucun probleme de
 # quoting quand les noms repassent par scp et ssh plus bas.
+#
+# --force-ipv4 : le Claw a une IPv6 publique et YouTube se resout chez lui en
+# IPv6, la ou le PC de la maison n'en a pas et sort en IPv4. Mesure 2026-09-13
+# 00:38 sur le Claw, meme video, meme minute : IPv4 forcee rend 137+140 en
+# 1920x1080, IPv6 rend "Sign in to confirm you're not a bot". Les 365 echecs
+# accumules depuis le 10 sont tous passes par l'IPv6. Le 2026-09-08 les deux
+# familles etaient refusees : le mur bouge, c'est la mesure du jour qui tranche.
 fetch() {
   yt-dlp \
+    --force-ipv4 \
     ${PROXY:+--proxy "$PROXY"} \
     ${COOKIES:+--cookies "$COOKIES"} \
     --no-playlist \

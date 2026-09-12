@@ -48,6 +48,13 @@ ALLOWLIST = ROOT / "allowed_channels.json"
 # disk, so every later reading of the library looked like a regression against
 # a number that had never been true.
 WIDTH, HEIGHT, FPS = 1920, 1080, 60
+# The floor of the four profiles, 480p30 being the lowest. The ceiling alone let
+# a 640x360 file through, because YouTube keeps long VODs in avc1 at 360p only
+# and the downloader, pinned to avc1, took that. Measured 2026-09-12 21:17: the
+# channel pushing 640x360 at 30 fps and 534 kbps, Kick serving the viewer an
+# upscale of it in its 720p60 rung, while the monitor, reading the newest cut
+# chunk instead of the one on air, reported 1920x1080 at 4781 kbps.
+MIN_HEIGHT = 480
 
 
 def fps_supported(fps):

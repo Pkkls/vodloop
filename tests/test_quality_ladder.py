@@ -117,6 +117,78 @@ check("the healthy source rung is the fattest",
 quiet = quality.faults({"chunk": "x.ts", "duration": 0, **healthy})
 check("and it says nothing", not any("RUNG" in f for f in quiet), str(quiet))
 
+print("a label Kick froze at the start of the session")
+# Measured 2026-09-12 21:17: session opened at 1080p60, the chunked rung still
+# labelled 1920x1080 at 60 while its segments decoded to 640x360, and then to
+# 1280x720 once the next file aired.
+STALE = """#EXTM3U
+#EXT-X-STREAM-INF:BANDWIDTH=3422999,RESOLUTION=1280x720,FRAME-RATE=60.000,VIDEO="720p60"
+https://example.invalid/720p60.m3u8
+#EXT-X-STREAM-INF:BANDWIDTH=1427999,RESOLUTION=852x480,FRAME-RATE=30.000,VIDEO="480p30"
+https://example.invalid/480p30.m3u8
+#EXT-X-STREAM-INF:BANDWIDTH=1365409,RESOLUTION=1920x1080,FRAME-RATE=60.000,VIDEO="chunked"
+https://example.invalid/chunked.m3u8
+#EXT-X-STREAM-INF:BANDWIDTH=630000,RESOLUTION=640x360,FRAME-RATE=30.000,VIDEO="360p30"
+https://example.invalid/360p30.m3u8
+"""
+
+
+def served_pushed(text, pushed):
+    real = quality.urllib.request.urlopen
+    quality.urllib.request.urlopen = lambda *_a, **_k: _Answer(text)
+    try:
+        return quality.ladder("https://example.invalid/master.m3u8", pushed)
+    finally:
+        quality.urllib.request.urlopen = real
+
+
+def rung_fault(row):
+    return any("RUNG" in f for f in quality.faults({"chunk": "x.ts", "duration": 0, **row}))
+
+
+# Pushing 720p, Kick's own 720p60 has the same pixels and costs a generation,
+# not a picture: it must not be the rung counted against the source. The 480p30
+# one is smaller, and measured at 21:30 with the 720p file on air the frozen
+# source rung advertised 1 321 933 against its 1 427 999, so that one is real.
+at_720 = served_pushed(STALE, (1280, 720))
+check("pushing 720p, the same-size 720p60 rung no longer counts against it",
+      at_720.get("rung_best_smaller_bps") == 1427999, str(at_720.get("rung_best_smaller_bps")))
+check("and the 480p30 rung outbidding it is still reported", rung_fault(at_720))
+check("temoin: against the frozen label, the 720p60 rung was the one counted",
+      served_pushed(STALE, None).get("rung_best_smaller_bps") == 3422999)
+check("temoin: a real 1080p push counts the 720p60 rung",
+      served_pushed(STALE, (1920, 1080)).get("rung_best_smaller_bps") == 3422999)
+check("an unreadable chunk falls back to the label",
+      served_pushed(STALE, (None, None)).get("rung_best_smaller_bps") == 3422999)
+# built, not measured: the case the change exists for, a 720p source that beats
+# every smaller rung and is only outbid by Kick's encode at its own size
+LEADS_SMALLER = STALE.replace("BANDWIDTH=1365409", "BANDWIDTH=2400000")
+check("a 720p source outbid only at its own size is not called an upscale",
+      not rung_fault(served_pushed(LEADS_SMALLER, (1280, 720))))
+check("temoin: against the frozen label that same ladder raised the alarm",
+      rung_fault(served_pushed(LEADS_SMALLER, None)))
+
+print("a session opened below 1080p")
+# Measured 2026-09-12 22:31 on a session opened at 720p60: no chunked rung.
+NO_PASSTHROUGH = """#EXTM3U
+#EXT-X-STREAM-INF:BANDWIDTH=3422999,RESOLUTION=1280x720,FRAME-RATE=60.000,VIDEO="720p60"
+https://example.invalid/720p60.m3u8
+#EXT-X-STREAM-INF:BANDWIDTH=1427999,RESOLUTION=852x480,FRAME-RATE=30.000,VIDEO="480p30"
+https://example.invalid/480p30.m3u8
+#EXT-X-STREAM-INF:BANDWIDTH=630000,RESOLUTION=640x360,FRAME-RATE=30.000,VIDEO="360p30"
+https://example.invalid/360p30.m3u8
+"""
+same = served_pushed(NO_PASSTHROUGH, (1280, 720))
+check("720p on air in a 720p session is not a fault", not quality.faults(
+    {"chunk": "x.ts", "duration": 0, **same}), str(quality.faults({"chunk": "x.ts", "duration": 0, **same})))
+check("and the top it is served at is recorded",
+      (same.get("rung_width"), same.get("rung_height")) == (1280, 720), str(same))
+bigger = served_pushed(NO_PASSTHROUGH, (1920, 1080))
+check("1080p on air in that session is reported, every viewer is downscaled",
+      any("ladder" in f for f in quality.faults({"chunk": "x.ts", "duration": 0, **bigger})))
+check("temoin: with nothing known about the chunk, nothing is claimed",
+      not served_pushed(NO_PASSTHROUGH, None).get("ladder_error"))
+
 print("the floors, against a source that is simply thin")
 # Measured 2026-09-08: an 11 h 15 IRL stream is served by YouTube at 690 kbps in
 # 720p30, so the catastrophe floor of 1 Mbps sits above a real, untouched

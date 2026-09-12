@@ -293,7 +293,11 @@ def remux_verdict(path, unmeasured=False):
     path = pathlib.Path(path)
     try:
         stat = path.stat()
-        key = f"{path.name}:{stat.st_size}:{int(stat.st_mtime)}"
+        # The limits the verdict was taken under are part of the key. Without
+        # them a yes recorded before the 480p floor existed kept answering for a
+        # 640x360 file, and that file aired on 2026-09-12.
+        key = (f"{path.name}:{stat.st_size}:{int(stat.st_mtime)}"
+               f":h{common.MIN_HEIGHT}-{common.HEIGHT}")
     except OSError:
         return False
     try:
@@ -413,7 +417,8 @@ def matches_target(path):
         fps = float(top) / float(bottom or 1)
     except (ValueError, ZeroDivisionError):
         return False
-    return (0 < width <= common.WIDTH and 0 < height <= common.HEIGHT
+    return (0 < width <= common.WIDTH
+            and common.MIN_HEIGHT <= height <= common.HEIGHT
             and common.fps_supported(fps))
 
 

@@ -13,6 +13,8 @@ This process may be restarted freely. The pusher and its placeholder writer must
 not be, which is why they live in a separate unit.
 """
 import json
+import os
+import signal
 import subprocess
 import sys
 import time
@@ -20,6 +22,13 @@ import time
 import common
 
 IDLE_POLL_SECONDS = 2
+
+PUSH_UNIT = "vodloop-push"
+SESSION = common.STATE / "session.json"
+# A reopening costs the viewers about six seconds. A fault that asked for one on
+# every chunk would take the channel down in a loop, so there is one per window
+# whatever the profiles say.
+REOPEN_GAP_SECONDS = 10 * 60
 
 
 def duration_of(path):
@@ -78,6 +87,97 @@ def drop_item_of(chunk):
     return dropped
 
 
+def profile_of(path):
+    """(width, height, fps) of a chunk's picture, or None when it cannot be read."""
+    out = subprocess.run(
+        ["ffprobe", "-v", "error", "-select_streams", "v:0", "-show_entries",
+         "stream=width,height,r_frame_rate", "-of", "csv=p=0", str(path)],
+        capture_output=True, text=True,
+    )
+    try:
+        width, height, rate = (out.stdout.strip().splitlines() or [""])[0].split(",")[:3]
+        top, _, bottom = rate.partition("/")
+        return int(width), int(height), round(float(top) / float(bottom or 1), 2)
+    except (ValueError, ZeroDivisionError):
+        return None
+
+
+def exceeds(profile, opened):
+    """Whether a session opened at `opened` would serve `profile` below itself.
+
+    Kick fixes its ladder from the first picture of an RTMP session and never
+    revises it. Measured 2026-09-12: a session opened at 1080p60 served later
+    720p and 360p files under a 1920x1080 label, which costs a label, not a
+    picture; a session opened at 720p60 has no passthrough rung at all and tops
+    out at its own 720p60 encode, so a 1080p file played in it reaches every
+    viewer at 720p. Going down never needs a new session. Going up does.
+    """
+    return (profile[0] * profile[1] > opened[0] * opened[1]
+            or profile[2] > opened[2] + 1)
+
+
+def pusher_pid():
+    """The pusher's ffmpeg: pusher.sh execs it, so it is the unit's main process."""
+    out = subprocess.run(
+        ["systemctl", "show", "-p", "MainPID", "--value", PUSH_UNIT],
+        capture_output=True, text=True,
+    )
+    try:
+        return int(out.stdout.strip())
+    except ValueError:
+        return 0
+
+
+def read_session():
+    try:
+        data = json.loads(SESSION.read_text())
+        return data if isinstance(data, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
+def write_session(data):
+    tmp = SESSION.with_suffix(".tmp")
+    tmp.write_text(json.dumps(data))
+    tmp.replace(SESSION)
+
+
+def reopen_if_below(chunk, may_reopen=True, now=time.time):
+    """End the RTMP session when `chunk` would be served below itself. True if so.
+
+    The first picture a pusher carries is what its session opened at, recorded
+    against the pusher's pid so that a pusher systemd restarted, which Kick also
+    does on its own every 48 hours, starts a fresh record. Ending the session is
+    a SIGTERM to that ffmpeg: systemd restarts the pusher five seconds later and
+    brings this unit back with it, as it did on 2026-09-10 and 2026-09-12 at
+    03:21, and the chunk that asked is still first in line because nothing sent
+    or deleted it.
+    """
+    pid = pusher_pid()
+    profile = profile_of(chunk)
+    if pid <= 0 or profile is None:
+        return False
+    session = read_session()
+    last = session.get("reopened_at", 0)
+    if session.get("pid") != pid or not session.get("profile"):
+        write_session({"pid": pid, "profile": list(profile), "reopened_at": last})
+        return False
+    if not may_reopen or not exceeds(profile, tuple(session["profile"])):
+        return False
+    if now() - last < REOPEN_GAP_SECONDS:
+        return False
+    # Written before the signal: this process dies with the pusher, and the one
+    # systemd starts must not ask again for the same chunk.
+    write_session({"pid": 0, "profile": list(profile), "reopened_at": now()})
+    try:
+        os.kill(pid, signal.SIGTERM)
+    except OSError:
+        # nothing was ended, so the session is still the one recorded
+        write_session(session)
+        return False
+    return True
+
+
 POLL_SECONDS = 0.5
 
 
@@ -119,6 +219,16 @@ def main():
     while True:
         segments = common.ready_segments()
         source = segments[0] if segments else filler
+
+        # The filler is recorded when it opens a session, and never asks for a
+        # new one: standby is not worth a reconnect.
+        if reopen_if_below(source, may_reopen=bool(segments)):
+            print(f"session rouverte pour {source.name}: {profile_of(source)}", flush=True)
+            # systemd stops this unit with the pusher; if it has not within
+            # the wait, the next pass finds a new pusher and simply feeds.
+            time.sleep(30)
+            continue
+
         length = duration_of(source)
 
         # Claim the timeline range BEFORE sending it. Crashing mid-chunk then
