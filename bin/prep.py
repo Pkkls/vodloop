@@ -1072,7 +1072,8 @@ def drop_unremuxable(queue):
 
 
 def recover_orphans(queue):
-    """Put back anything left mid-encode by a previous run.
+    """Put back anything left mid-encode by a previous run, keeping what it
+    already finished.
 
     This process is the only thing that ever writes "preparing", so at startup
     nothing can legitimately be in that state: whatever is there was interrupted,
@@ -1080,20 +1081,49 @@ def recover_orphans(queue):
     Twice on 2026-09-03 a restart of this unit left an item stranded that way and
     the queue quietly stopped moving behind it.
 
-    The chunks it half wrote go too. Half a video reaching the stream is worse
-    than the item being encoded again.
+    What goes and what stays is the rest of it, and until 2026-09-12 everything
+    went. That was wrong by a wide margin. prepare() writes chunks straight into
+    segments/ while the feeder is already eating them, and AHEAD_LIMIT_SECONDS is
+    only consulted between items, so the item in flight can be holding hours of
+    runway on the disk. Deleting all of it meant any restart of this unit --
+    deploy/harden-oracle.sh restarts it whenever it lays a drop-in, medic
+    restarts it on three dry passes, and a person restarts it to pick up a fix --
+    could take the buffer to nothing and put the channel on the standby clip.
+    That is the fault the rest of this file spends its time preventing, arriving
+    by way of the repair.
+
+    Only the highest-numbered chunk can be incomplete. The segment muxer holds
+    exactly one open at a time and never returns to an earlier one, so every
+    chunk that has a successor was closed before that successor existed. Dropping
+    the last one keeps "half a video never reaches the stream" whole and keeps
+    the hours in front of it. It also drops a complete chunk whenever the
+    interruption landed between two, which costs five minutes and is the side to
+    err on.
+
+    An item that keeps chunks is ready, not pending: they are already on the disk
+    in playback order, and re-cutting it from the start would write 00000 again
+    underneath them and air its opening twice. It plays short this once and comes
+    round whole on its next pass. An item that kept nothing goes back to pending
+    exactly as before, so nothing of it is counted as air time.
     """
-    recovered = 0
+    recovered = kept = 0
     for item in queue["items"]:
         if item["status"] != "preparing":
             continue
-        item["status"] = "pending"
+        chunks = sorted(common.SEGMENTS.glob(f"{item['id']:05d}_*.ts"))
+        if chunks:
+            chunks.pop().unlink(missing_ok=True)
+        # the muxer's record of the interrupted run. prepare() truncates it on
+        # the next one, so it is only ever stale, but an item that is now ready
+        # would leave it behind forever.
+        (common.STATE / f"list_{item['id']:05d}.txt").unlink(missing_ok=True)
+        item["status"] = "ready" if chunks else "pending"
         item.pop("error", None)
         recovered += 1
-        for chunk in common.SEGMENTS.glob(f"{item['id']:05d}_*.ts"):
-            chunk.unlink(missing_ok=True)
+        kept += len(chunks)
     if recovered:
-        print(f"reprise: {recovered} item(s) laisses en cours par un arret", flush=True)
+        print(f"reprise: {recovered} item(s) laisses en cours par un arret, "
+              f"{kept} chunk(s) termine(s) gardes", flush=True)
     return recovered
 
 
