@@ -58,11 +58,11 @@ class _Answer:
         return False
 
 
-def served(text):
+def served(text, airing=None):
     real = quality.urllib.request.urlopen
     quality.urllib.request.urlopen = lambda *_a, **_k: _Answer(text)
     try:
-        return quality.ladder("https://example.invalid/master.m3u8")
+        return quality.ladder("https://example.invalid/master.m3u8", airing=airing)
     finally:
         quality.urllib.request.urlopen = real
 
@@ -96,6 +96,68 @@ check("a rung at the source's own size does not count as outbidding it",
 check("and so it is not reported",
       not any("RUNG" in f for f in quality.faults(
           {"chunk": "x.ts", "duration": 0, **thin_720})))
+
+print("the label Kick freezes at the start of the session")
+# Observed on the live channel 2026-09-12. Kick reads the resolution out of the
+# sequence header when the RTMP session opens and advertises it for the whole
+# live, so the source rung is still announced 1920x1080 hours after the mixed
+# library started sending 720p through it. The playlist below is the SAME_SIZE
+# situation above -- a 720p source and Kick's 720p60 encode of it -- wearing the
+# label of the 1080p file the session happened to open on.
+FROZEN = """#EXTM3U
+#EXT-X-STREAM-INF:BANDWIDTH=3422999,RESOLUTION=1280x720,FRAME-RATE=60.000,VIDEO="720p60"
+https://example.invalid/720p60.m3u8
+#EXT-X-STREAM-INF:BANDWIDTH=760000,RESOLUTION=1920x1080,FRAME-RATE=60.000,VIDEO="chunked"
+https://example.invalid/chunked.m3u8
+"""
+stale = served(FROZEN, airing=(1280, 720))
+check("measured against the wire, a rung at the source's own size is no fault",
+      stale.get("rung_best_smaller_bps") is None, str(stale))
+check("and nothing is reported",
+      not any("RUNG" in f for f in quality.faults(
+          {"chunk": "x.ts", "duration": 0, **stale})))
+check("both sizes are kept, so the gap can be read back",
+      (stale.get("rung_width"), stale.get("air_width")) == (1920, 1280), str(stale))
+check("and the gap is named for the detail block",
+      quality.frozen_label(stale))
+
+# the control, and the reason airing exists at all: taken from Kick's label the
+# same channel reads as a 1080p source outbid by a 720p rung, which is a
+# standing alert every six hours for the eleven hours one of these VODs lasts.
+believed = served(FROZEN)
+check("taken from the label alone it is a false alarm",
+      any("RUNG" in f for f in quality.faults(
+          {"chunk": "x.ts", "duration": 0, **believed})), str(believed))
+# and the other control: when the wire agrees with the label there is nothing to
+# tell apart, and a genuinely outbid 1080p source is still reported
+truly_1080 = served(BROKEN, airing=(1920, 1080))
+check("a real 1080p source outbid by a 720p rung is still reported",
+      any("RUNG" in f for f in quality.faults(
+          {"chunk": "x.ts", "duration": 0, **truly_1080})), str(truly_1080))
+check("agreement between the two is not called a frozen label",
+      not quality.frozen_label(truly_1080))
+check("nothing measured on the wire is not called one either",
+      not quality.frozen_label(believed))
+
+print("what counts as on the wire")
+import tempfile  # noqa: E402
+air_root = pathlib.Path(tempfile.mkdtemp(prefix="quality-air-"))
+quality.common.ROOT = air_root
+quality.common.SEGMENTS = air_root / "segments"
+quality.common.SEGMENTS.mkdir()
+check("with nothing ready and no clip there is nothing to measure",
+      quality.airing_file() is None)
+(air_root / "filler.ts").write_text("clip")
+check("with nothing ready the standby clip is what is going out",
+      quality.airing_file() == air_root / "filler.ts", str(quality.airing_file()))
+for name in ("00007_00003.ts", "00007_00004.ts", "00009_00000.ts"):
+    (quality.common.SEGMENTS / name).write_text("chunk")
+# the feeder takes the head of the list and deletes it once it has been sent, so
+# the head is on the wire. newest_chunk() is what prep last wrote, which is up to
+# AHEAD_LIMIT_SECONDS ahead of the viewer and answers a different question.
+check("the head of the playback order is what is on the wire",
+      quality.airing_file().name == "00007_00003.ts",
+      quality.airing_file().name)
 
 print("the fault it exists for")
 found = quality.faults({"chunk": "x.ts", "duration": 0, **broken})
