@@ -9,6 +9,11 @@ Two things here are load-bearing and were established by measurement:
   - that cumulative offset is persisted, so restarting this service resumes
     where it left off instead of sending timestamps backwards.
 
+A third thing here rests on a decision rather than on a measurement, and is
+marked as such: a session the pusher has just opened is sent the standby clip
+first, because Kick names the channel after the first picture it carries and
+keeps that name for the whole live. See needs_greeting.
+
 This process may be restarted freely. The pusher and its placeholder writer must
 not be, which is why they live in a separate unit.
 """
@@ -48,6 +53,81 @@ def ensure_filler():
         check=True,
     )
     return filler
+
+
+SESSION = "push_session"
+GREETED = "greeted_session"
+
+
+def _read(name):
+    try:
+        return (common.STATE / name).read_text().strip() or None
+    except OSError:
+        return None
+
+
+def push_session():
+    """Which RTMP session the pusher is on, or None when it does not say.
+
+    pusher.sh writes one line per exec and one exec is one connection to Kick.
+    An old pusher that predates that line, or a state directory it could not
+    write, both read as None, which is the answer that changes nothing.
+    """
+    return _read(SESSION)
+
+
+def mark_greeted(session):
+    try:
+        common.STATE.mkdir(parents=True, exist_ok=True)
+        tmp = common.STATE / (GREETED + ".tmp")
+        tmp.write_text(session)
+        tmp.replace(common.STATE / GREETED)
+    except OSError:
+        pass  # a greeting that cannot be recorded is repeated, not wrong
+
+
+def needs_greeting(session, greeted):
+    """Whether this session still has to be opened with the standby clip.
+
+    Kick reads the resolution out of the sequence header when the session opens
+    and advertises it for the whole live, so the first picture decides what the
+    channel is called until the pusher dies. This library is mixed and most of
+    it is 720p, so left to chance the channel is usually named after a 720p VOD
+    and then announces every 1080p video in the rotation as something smaller
+    than it is. filler.ts is common.WIDTH x common.HEIGHT at common.FPS by
+    construction, so sending it first pins the label at the best shape the
+    library holds. It costs twenty seconds of standby clip, paid at the one
+    moment there are no viewers to spend it on: the session it opens is a
+    session the old one just dropped.
+
+    A session with no predecessor on record is not greeted. The first run after
+    this shipped finds a pusher whose header was read hours ago, and greeting it
+    would be twenty seconds of grey for a label already decided.
+
+    What makes this land rather than race is the unit file: vodloop-feed is
+    BindsTo= vodloop-push, so a pusher restart stops this process too and the
+    pusher's Wants= starts it again. It therefore meets a new session at the top
+    of its loop and not halfway through a chunk. Should it ever be mid-chunk
+    anyway, that chunk reaches the new session first and the label is whatever it
+    was going to be: the same as before this existed, never worse.
+    """
+    if session is None or greeted is None:
+        return False
+    return session != greeted
+
+
+def next_source(greet, segments, filler):
+    """What goes out next, and which chunk sending it consumes.
+
+    The second value is what playing eats: the head of the playback order, or
+    None when the standby clip is going out instead, whether because the queue
+    is dry or because a new session is being opened on it. Keeping the two apart
+    is not decoration. The old loop deleted "the source" whenever segments
+    existed, so a greeting with a full queue behind it would have deleted
+    filler.ts, which is the one file the next session needs to still be there.
+    """
+    playing = None if greet else (segments[0] if segments else None)
+    return playing or filler, playing
 
 
 def skip_stamp():
@@ -115,10 +195,24 @@ def feed(path, offset, stop_when=None):
 def main():
     filler = ensure_filler()
     offset = common.read_offset()
+    greeted = _read(GREETED)
 
     while True:
-        segments = common.ready_segments()
-        source = segments[0] if segments else filler
+        session = push_session()
+        greet = needs_greeting(session, greeted)
+        if session is not None and session != greeted:
+            # Claimed before it is sent, for the same reason the timeline range
+            # below is: a crash in between costs one greeting, which is the
+            # behaviour this had before it existed, while claiming it afterwards
+            # would put the channel on the standby clip in a loop.
+            mark_greeted(session)
+            greeted = session
+        if greet:
+            print(f"nouvelle session rtmp {session}: clip d'attente en tete "
+                  f"pour fixer l'etiquette a {common.WIDTH}x{common.HEIGHT}"
+                  f"@{common.FPS}", flush=True)
+
+        source, playing = next_source(greet, common.ready_segments(), filler)
         length = duration_of(source)
 
         # Claim the timeline range BEFORE sending it. Crashing mid-chunk then
@@ -129,12 +223,12 @@ def main():
         granted = skip_stamp()
         cut = feed(source, offset - length, stop_when=lambda: skip_stamp() > granted)
 
-        if segments:
-            source.unlink(missing_ok=True)  # played chunks are purged immediately
+        if playing is not None:
+            playing.unlink(missing_ok=True)  # played chunks are purged immediately
             if cut:
-                print(f"saut: {drop_item_of(source)} chunk(s) restant(s) ecarte(s)",
+                print(f"saut: {drop_item_of(playing)} chunk(s) restant(s) ecarte(s)",
                       flush=True)
-        else:
+        elif not greet:
             time.sleep(IDLE_POLL_SECONDS)
 
 
