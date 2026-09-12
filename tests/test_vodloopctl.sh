@@ -51,12 +51,22 @@ check "resume ne redemarre que le feeder" "start vodloop-feed|" "$(calls)"
 rc=$(run bot-stop)
 check "bot-stop ne touche que le chat" "stop vodloop-chat|" "$(calls)"
 
-# no verb anywhere may restart the pusher: that is what ends the live
+rc=$(run prep-restart)
+check "prep-restart rc" "rc=0" "$rc"
+check "prep-restart ne touche QUE prep" "restart vodloop-prep|" "$(calls)"
+
+# No verb anywhere may restart the pusher: that is what ends the live. This used
+# to be spelled "no verb produces a restart at all", which was the same thing
+# until prep-restart existed. Asking about the pusher by name is what was always
+# meant, and it stays true with a restart verb in the file.
 : > "$LOG"
-for verb in go-live stop pause resume bot-start bot-stop status; do
+for verb in go-live stop pause resume prep-restart bot-start bot-stop status; do
     sh "$CTL" "$verb" >/dev/null 2>&1
 done
-check "aucun verbe ne redemarre le pusher" "" "$(grep -c 'restart' "$LOG" | grep -v '^0$')"
+check "aucun verbe ne redemarre le pusher" "0" "$(grep -c 'restart vodloop-push' "$LOG")"
+# the control: the grep above must be able to find something, or it proves
+# nothing about a file where the word never appears
+check "et le seul restart du fichier est celui de prep" "1" "$(grep -c 'restart vodloop-prep' "$LOG")"
 
 check "verbe inconnu refuse"        "rc=2" "$(run definitely-not-a-verb)"
 check "sans argument refuse"        "rc=2" "$(run)"

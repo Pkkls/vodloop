@@ -82,6 +82,7 @@ PAGE = """<!doctype html><meta charset=utf-8><title>vodloop</title>
   <input id=url placeholder="lien YouTube a ajouter">
   <button onclick=add()>Ajouter</button>
   <button class=ghost onclick=skip()>Passer</button>
+  <button class=ghost onclick=prepRestart()>Relancer prep</button>
  </div>
  <div id=msg class=k style=margin-top:8px></div>
 </div>
@@ -151,6 +152,11 @@ const note = r => { document.getElementById('msg').textContent =
 const add = () => call('/api/add', {url: document.getElementById('url').value})
   .then(r => { note(r); if (r.ok) document.getElementById('url').value = ''; refresh(); });
 const skip = () => call('/api/skip', {}).then(r => { note(r); refresh(); });
+// The only control here that does not change what is playing. It is not behind
+// a confirmation because it costs the chunk being cut and nothing the viewer
+// sees, and the answer says it is a request rather than a restart, because it
+// is medic that carries it out on its next pass.
+const prepRestart = () => call('/api/prep-restart', {}).then(r => { note(r); refresh(); });
 refresh(); setInterval(refresh, 5000);
 </script>""".replace("__COMMON__", COMMON_JS)
 
@@ -336,6 +342,26 @@ class Handler(http.server.BaseHTTPRequestHandler):
             for chunk in common.SEGMENTS.glob(f"{wanted:05d}_*.ts"):
                 chunk.unlink(missing_ok=True)
             return self.reply(200, {"note": "retire"})
+
+        if self.path == "/api/prep-restart":
+            # Deliberately a request and not a command. harden-oracle.sh gives
+            # this unit NoNewPrivileges=yes, which is precisely what stops a
+            # setuid binary elevating, so "sudo vodloopctl" from here would work
+            # only on a box the hardening pass has not reached yet and break the
+            # day it does. medic already runs from cron outside that sandbox and
+            # already owns this restart, its cooldown and its announcement, so
+            # the ask is dropped where medic looks and medic decides.
+            #
+            # state/ is in this unit's ReadWritePaths, so the drop survives the
+            # sandbox. Nothing is written into the file: medic reads that it
+            # exists and how old it is, never what is in it.
+            try:
+                common.STATE.mkdir(parents=True, exist_ok=True)
+                common.PREP_RESTART_REQUEST.touch()
+            except OSError as exc:
+                return self.reply(500, {"error": f"demande non ecrite ({type(exc).__name__})"})
+            return self.reply(200, {"note": "demande posee, medic relancera prep "
+                                            "au prochain passage"})
 
         if self.path == "/api/skip":
             segments = common.ready_segments()

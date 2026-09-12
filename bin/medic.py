@@ -9,6 +9,12 @@ The alarms told the owner. The owner then had to go and fix it, which on
 without action is still a person on call, so this closes that loop for the three
 faults that actually happened.
 
+It also carries out one thing that is not a fault at all: a prep restart the
+operator asked for from the panel. That lands here rather than in the panel
+because the panel is sandboxed with NoNewPrivileges and this is not, and because
+the restart, its cooldown and its announcement already live here. See
+restart_requested.
+
 Every one of them follows the same shape, learned the hard way today:
 
   - measure first, never infer. A thing that cannot be measured is unknown, and
@@ -42,10 +48,20 @@ STRAY_MIN_AGE_SECONDS = 300
 # The pusher can hold its socket open and send nothing. systemd sees a running
 # process and is satisfied; viewers see a frozen frame. Nothing detected this.
 SILENT_PUSHER_COOLDOWN = 20 * 60
-# Restarting prep throws away an encode in progress, so this waits until the
+# Restarting prep throws away the chunk being cut, so this waits until the
 # channel has been on the standby clip for three passes running.
 DRY_PASSES_BEFORE_RESTART = 3
 PREP_RESTART_COOLDOWN = 30 * 60
+# A restart the operator asked for from the panel, rather than one deduced from
+# an empty buffer. The panel cannot run systemctl itself: harden-oracle.sh gives
+# that unit NoNewPrivileges=yes, which is what stops sudo elevating. This runs
+# from cron outside any sandbox, so the ask lands here instead.
+#
+# It is bounded in time because a request written while this was not running
+# describes a situation that has since changed, and restarting prep an hour late
+# helps nobody. At one tick every four minutes, fifteen leaves room for three
+# missed passes.
+REQUEST_MAX_AGE_SECONDS = 15 * 60
 
 
 def load():
@@ -116,6 +132,30 @@ def wire_bytes(seconds=8):
     return None if second is None else first + second
 
 
+def restart_requested():
+    """Whether the panel has asked for a prep restart recently.
+
+    Only the file's age is read. Its contents are never opened, so nothing a
+    caller can write into it reaches this process, and a stale one left on the
+    disk is inert rather than a restart waiting to go off.
+
+    This asks nothing and changes nothing, which is what lets a dry run report
+    the request without consuming it.
+    """
+    try:
+        age = time.time() - common.PREP_RESTART_REQUEST.stat().st_mtime
+    except OSError:
+        return False
+    return age <= REQUEST_MAX_AGE_SECONDS
+
+
+def clear_request():
+    try:
+        common.PREP_RESTART_REQUEST.unlink(missing_ok=True)
+    except OSError:
+        pass  # a request that cannot be cleared re-fires once, and is bounded
+
+
 def act(apply, note, command):
     if not apply:
         print(f"  ferait: {note}")
@@ -156,7 +196,22 @@ def main(argv):
     else:
         print(f"  pusher emet ({moved} octets)")
 
-    # 3. a channel that has been on the standby clip for several passes
+    # 3. a restart the operator asked for, rather than one deduced from a fault
+    if restart_requested():
+        # Deliberately outside PREP_RESTART_COOLDOWN. That cooldown exists to
+        # stop this repair firing in a loop against a condition it cannot fix,
+        # and a person asking once is not a loop: the request is cleared as soon
+        # as it is honoured, and only the token-gated panel can write one.
+        if act(apply, "redemarrage de prep demande depuis le panneau",
+               ["sudo", "systemctl", "restart", "vodloop-prep"]):
+            data["prep_restarted"] = now
+            data["dry_passes"] = 0
+            clear_request()
+            did += 1
+    else:
+        print("  aucune demande de redemarrage de prep")
+
+    # 4. a channel that has been on the standby clip for several passes
     backlog = prep.seconds_on_disk()
     dry = data.get("dry_passes", 0) + 1 if backlog == 0 else 0
     data["dry_passes"] = dry

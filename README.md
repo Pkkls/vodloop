@@ -121,7 +121,7 @@ under conditions that have since changed.
 | `bin/feeder.py` | feeds chunks into the FIFO with a cumulative timestamp offset |
 | `bin/pusher.sh` | the single ffmpeg that talks to Kick |
 | `bin/janitor.py` | retires played files under disk pressure, on runway. Cron, 15 min |
-| `bin/medic.py` | restarts push or prep when they fail. Cron, 4 min |
+| `bin/medic.py` | restarts push or prep when they fail, or when the panel asks. Cron, 4 min |
 | `bin/quality.py` | measures source against wire, and Kick's ladder. Cron, 5 min |
 | `bin/chat.py` | reads chat events, applies commands to the queue |
 | `bin/chatlogic.py` | command handling and limits, no I/O, tested directly |
@@ -169,6 +169,22 @@ lays a drop-in, `medic.py` after three dry passes, and a person picking up a fix
 It now keeps every chunk the muxer had closed and drops only the last one, which
 is the only one that can be half written, because the segment muxer holds one
 open at a time and never returns to an earlier one.
+
+That is also why `vodloopctl` now has one restart verb, and only one:
+
+```sh
+sudo vodloopctl prep-restart
+```
+
+The panel has the same control, and reaches it the long way round. `vodloop-web`
+is sandboxed with `NoNewPrivileges=yes` by `deploy/harden-oracle.sh`, which is
+exactly what stops a setuid binary elevating, so a panel that shelled out to
+`sudo` would work on a box the hardening pass had not reached yet and break
+without a word the day it did. Instead the panel drops a request in `state/`,
+which is in its `ReadWritePaths`, and `medic.py` — cron, no sandbox, and already
+the owner of this restart, its cooldown and its announcement — carries it out on
+its next pass. A request older than fifteen minutes is ignored rather than
+honoured late, and nothing ever reads the file's contents, only its age.
 
 ## Monitoring
 

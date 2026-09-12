@@ -95,6 +95,44 @@ check("nothing is done without --apply",
       'apply = "--apply" in argv' in source and "if not apply:" in source)
 check("every repair is announced", "tgbot.say(" in source)
 
+print("the restart the operator asks for")
+# The panel cannot run systemctl: harden-oracle.sh gives that unit
+# NoNewPrivileges=yes, which stops sudo elevating. So it drops a file and this,
+# running from cron outside any sandbox, is what carries it out.
+request_root = pathlib.Path(tempfile.mkdtemp(prefix="medic-request-"))
+medic.common.STATE = request_root
+medic.common.PREP_RESTART_REQUEST = request_root / "prep_restart_request"
+
+check("with no file dropped nothing is asked", not medic.restart_requested())
+medic.common.PREP_RESTART_REQUEST.touch()
+check("a fresh request is seen", medic.restart_requested())
+
+# A request written while this was not running describes a situation that has
+# since changed. Restarting prep an hour late helps nobody.
+stale = time.time() - medic.REQUEST_MAX_AGE_SECONDS - 60
+import os  # noqa: E402
+os.utime(medic.common.PREP_RESTART_REQUEST, (stale, stale))
+check("a stale one is inert, not a restart waiting to go off",
+      not medic.restart_requested())
+check("and it is left where it is, so reading never writes",
+      medic.common.PREP_RESTART_REQUEST.exists())
+
+# Hostile contents are not a concern because they are never read, and that is
+# worth pinning: the day someone opens this file, this check goes red.
+medic.common.PREP_RESTART_REQUEST.write_text("; rm -rf /\n")
+os.utime(medic.common.PREP_RESTART_REQUEST, None)
+check("what is in the file changes nothing", medic.restart_requested())
+check("nothing ever reads its contents",
+      "PREP_RESTART_REQUEST.read" not in source
+      and "PREP_RESTART_REQUEST.open" not in source)
+check("the request bypasses the cooldown on purpose, and says why",
+      "Deliberately outside PREP_RESTART_COOLDOWN" in source)
+
+medic.clear_request()
+check("honouring it clears it, so it fires once",
+      not medic.common.PREP_RESTART_REQUEST.exists()
+      and not medic.restart_requested())
+
 print("dry run changes nothing")
 real_strays, real_wire = medic.strays, medic.wire_bytes
 real_disk = medic.prep.seconds_on_disk
