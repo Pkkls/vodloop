@@ -161,6 +161,48 @@ for cmd in ("/status", "/now", "/lib", "/conv", "/help", "/start"):
 check("an unknown word is ignored rather than answered",
       "return None" in source.split("def handle")[1].split("def ")[0])
 
+print("one bot, one token, two channels")
+# Deux pollers sur le meme token se volent leurs getUpdates et chacun ne voit
+# que la moitie des commandes. Le seul poller repond donc pour les autres en
+# relancant ce meme fichier avec LEUR environnement, qui est la seule chose qui
+# les distingue.
+_real_run, _real_others = tgbot.subprocess.run, tgbot.OTHERS
+try:
+    vu = {}
+
+    class _Res:
+        stdout = "reponse de l'autre chaine"
+
+    def _fake_run(cmd, **kw):
+        vu["cmd"] = cmd
+        vu["env"] = kw.get("env", {})
+        return _Res()
+
+    tgbot.subprocess.run = _fake_run
+    tgbot.OTHERS = ["nanatty247"]
+    out = tgbot.handle("/status nanatty247")
+    check("la commande part vers l'autre chaine",
+          "reponse de l'autre chaine" in out and out.startswith("[nanatty247]"), out)
+    check("avec la racine de CETTE chaine la",
+          vu["env"].get("VODLOOP_ROOT") == "/home/ubuntu/nanatty247",
+          vu["env"].get("VODLOOP_ROOT"))
+    check("et sa bibliotheque, et son motif d'unite",
+          vu["env"].get("VODLOOP_LIBRARY") == "/home/ubuntu/videos-nanatty247"
+          and vu["env"].get("VODLOOP_UNIT") == "vodloop-%s@nanatty247",
+          str(vu["env"].get("VODLOOP_UNIT")))
+    check("l'enfant ne croit pas repondre pour d'autres a son tour",
+          "VODLOOP_CHANNELS" not in vu["env"])
+    check("c'est bien la meme commande qui est reposee",
+          vu["cmd"][-2:] == ["--answer", "/status"], str(vu["cmd"][-2:]))
+    # le temoin: sans chaine declaree, la meme phrase reste locale
+    vu.clear()
+    tgbot.OTHERS = []
+    tgbot.status_text = lambda: "reponse locale"
+    check("temoin: sans chaine declaree, rien n'est delegue",
+          tgbot.handle("/status nanatty247") == "reponse locale" and not vu)
+finally:
+    tgbot.subprocess.run, tgbot.OTHERS = _real_run, _real_others
+
 print("a fault that lasts keeps saying so")
 # Mesure 2026-09-14: l'alarme bibliotheque de la 2e chaine etait bloquee sur
 # "3 fichiers jouables" depuis la veille et n'avait parle qu'une fois, parce que

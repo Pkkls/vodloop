@@ -22,6 +22,7 @@ anywhere else is ignored: without that, whoever finds the bot gets /skip on a
 channel that is not theirs.
 """
 import json
+import os
 import pathlib
 import subprocess
 import sys
@@ -65,6 +66,11 @@ STALE_ARRIVAL_SECONDS = 6 * 3600
 # night of it is several messages, long enough that a slow repair is not
 # drowned in its own alarm.
 REMIND_SECONDS = 3 * 3600
+# The other channels this one answers for, by name. One token, one poller: a
+# second bot polling the same token would take half the updates and each would
+# see half the commands, so the single poller speaks for everybody.
+OTHERS = [c.strip() for c in os.environ.get("VODLOOP_CHANNELS", "").split(",")
+          if c.strip()]
 
 
 def env():
@@ -328,15 +334,52 @@ HELP = """commandes
 /black   l'image est-elle vraiment noire, vue d'un spectateur
 /skip    couper la video en cours
 /mute    couper les alertes 8h
+
+n'importe laquelle suivie d'un nom de chaine repond pour elle,
+par exemple: /status nanatty247
 /help    ceci
 
 les alertes partent toutes seules quand le tampon tombe, quand le
 pusher se met a boucler, ou quand la bibliotheque jouable s'epuise"""
 
 
+def ask_channel(name, cmd):
+    """The same command, answered with another channel's environment.
+
+    One Telegram token cannot have two pollers: they would take each other's
+    updates, and each would see half the commands. So one bot answers for every
+    channel, and it does it by running this same file with the other channel's
+    environment, because the environment is the only thing that differs between
+    them. A subprocess with that environment IS the other channel.
+    """
+    # Ecrit a la main plutot que par pathlib: ce chemin decrit le serveur, pas
+    # la machine qui execute, et pathlib rendrait des antislashs ailleurs.
+    child = dict(os.environ,
+                 VODLOOP_ROOT=f"/home/ubuntu/{name}",
+                 VODLOOP_LIBRARY=f"/home/ubuntu/videos-{name}",
+                 VODLOOP_UNIT="vodloop-%s@" + name,
+                 VODLOOP_LABEL=f"[{name}]")
+    # cleared, or the child would think it too answers for other channels and
+    # a typo could bounce between them
+    child.pop("VODLOOP_CHANNELS", None)
+    try:
+        out = subprocess.run(
+            [sys.executable, str(pathlib.Path(__file__).resolve()), "--answer", cmd],
+            capture_output=True, text=True, timeout=120, env=child)
+    except (OSError, subprocess.SubprocessError) as err:
+        return f"[{name}] injoignable: {err}"
+    answer = (out.stdout or "").strip()
+    return f"[{name}]\n{answer}" if answer else f"[{name}] n'a rien a dire sur {cmd}"
+
+
 def handle(text):
-    word = (text or "").strip().split()[:1]
-    cmd = (word[0].split("@")[0].lower() if word else "")
+    parts = (text or "").strip().split()
+    cmd = (parts[0].split("@")[0].lower() if parts else "")
+    # "/status nanatty247" is the same question asked of the other channel. The
+    # bare form stays this channel's, so nothing anyone already types changes.
+    target = parts[1].lower() if len(parts) > 1 else ""
+    if target and target in OTHERS:
+        return ask_channel(target, cmd)
     if cmd in ("/status", "/etat"):
         return status_text()
     if cmd == "/now":
@@ -459,6 +502,12 @@ def health():
 def main(argv):
     if "--once" in argv:
         health()
+        return 0
+    if "--answer" in argv:
+        # Answers one command for whatever channel this process's environment
+        # names, and prints it. This is how the one bot speaks for the others.
+        rest = argv[argv.index("--answer") + 1:]
+        print(handle(" ".join(rest)) or "")
         return 0
     data = state()
     offset = data.get("offset", 0)
