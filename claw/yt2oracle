@@ -12,7 +12,15 @@
 set -eu
 
 DEST_HOST="ubuntu@89.168.60.67"
-DEST_DIR="/home/ubuntu/videos"
+# Ou livrer, quel morceau, et jusqu'a quelle hauteur. Tout vient de la file, qui
+# les tient d'une inbox ecrite sur Oracle; rien n'est de confiance ici et tout
+# finit dans une ligne de commande yt-dlp, donc chaque valeur est validee plus
+# bas avant d'etre utilisee. Sans rien, c'est exactement le comportement d'avant
+# qu'il y ait plusieurs chaines.
+DEST_DIR="${DEST_DIR:-/home/ubuntu/videos}"
+PART="${PART:-}"
+RANGE="${RANGE:-}"
+MAXH="${MAXH:-}"
 KEY="/root/.ssh/oracle_key"
 WORK="/root/yt"
 # h264 et aac, jamais autre chose, et c'est le coeur de ce script.
@@ -102,6 +110,31 @@ mkdir -p "$WORK"
 [ $# -gt 0 ] || die "usage: yt2oracle <url> [url...]"
 command -v yt-dlp >/dev/null || die "yt-dlp absent"
 
+# Les quatre valeurs qui viennent de l'exterieur, verifiees avant usage. Le
+# suffixe de DEST_DIR n'admet que des minuscules, des chiffres et des tirets:
+# une bibliotheque est /home/ubuntu/videos ou /home/ubuntu/videos-<nom>, et rien
+# d'autre ne doit pouvoir etre ecrit sur Oracle par ce script.
+suffix=${DEST_DIR#/home/ubuntu/videos}
+case "$suffix" in
+  "") ;;
+  -*) case "$suffix" in *[!a-z0-9-]*) die "DEST_DIR refuse: $DEST_DIR" ;; esac ;;
+  *) die "DEST_DIR refuse: $DEST_DIR" ;;
+esac
+case "$PART" in
+  "") ;;
+  p[0-9]*of[0-9]*) case "$PART" in *[!0-9pof]*) die "PART refuse: $PART" ;; esac ;;
+  *) die "PART refuse: $PART" ;;
+esac
+case "$RANGE" in
+  "") ;;
+  [0-9]*-[0-9]*) case "$RANGE" in *[!0-9-]*) die "RANGE refuse: $RANGE" ;; esac ;;
+  *) die "RANGE refuse: $RANGE" ;;
+esac
+case "$MAXH" in "" | 1080 | 720 | 480 | 360) ;; *) die "MAXH refuse: $MAXH" ;; esac
+# Un morceau sans tranche telechargerait la video entiere sous le nom d'un
+# morceau, et les sept autres morceaux viendraient se poser a cote.
+[ -z "$PART" ] || [ -n "$RANGE" ] || die "PART sans RANGE"
+
 # Le Claw n'a que ~13 Go. On refuse de commencer si la place locale est deja basse,
 # sinon un gros download remplit la carte SD et casse le reste de la machine.
 local_free=$(df -Pm "$WORK" | tail -1 | awk '{print $4}')
@@ -143,6 +176,32 @@ log "download: $*"
 TRIES=4
 RETRY_SLEEP=20
 
+# Ce qui change quand on demande un MORCEAU plutot qu'une video.
+#
+# filesize_approx est la taille de la video ENTIERE, pas celle de la tranche.
+# Sur un flux de onze heures aucun palier ne passe sous les 4 Go, donc le
+# selecteur ci-dessus ne rendrait rien du tout et --max-filesize avorterait
+# avant le premier octet. Ce qui borne un morceau, c'est sa duree.
+#
+# La hauteur demandee est celle que la chaine diffuse: tirer du 1080p pour
+# emettre du 720p coute trois fois la carte, le lien et l'encodage pour une
+# image que personne ne voit.
+SIZE_ARGS="--max-filesize $MAX_FILESIZE"
+SECTION=""
+OUTTMPL='%(title).120B-%(id)s.%(ext)s'
+if [ -n "$PART" ]; then
+  SIZE_ARGS=""
+  # L'etoile fait partie de la syntaxe de yt-dlp: sans elle, l'argument est lu
+  # comme une expression reguliere sur les titres de chapitres. Elle est donc
+  # passee entre guillemets DANS l'expansion, sinon le shell la developpe sur
+  # le repertoire courant avant que yt-dlp ne la voie.
+  SECTION="*$RANGE"
+  OUTTMPL="%(title).120B-%(id)s.$PART.%(ext)s"
+  QUALITY="bv*[vcodec^=avc1][height<=${MAXH:-720}]+ba[acodec^=mp4a]/bv*[vcodec^=avc1][height<=480]+ba[acodec^=mp4a]/bv*[vcodec^=avc1][height<=360]+ba[acodec^=mp4a]"
+elif [ -n "$MAXH" ] && [ "$MAXH" -lt 1080 ]; then
+  QUALITY="bv*[vcodec^=avc1][height<=$MAXH][filesize_approx<4000000000]+ba[acodec^=mp4a]/bv*[vcodec^=avc1][height<=480][filesize_approx<4000000000]+ba[acodec^=mp4a]/bv*[vcodec^=avc1][height<=360]+ba[acodec^=mp4a]"
+fi
+
 # --restrict-filenames : noms reduits a [A-Za-z0-9._-], donc plus aucun probleme de
 # quoting quand les noms repassent par scp et ssh plus bas.
 #
@@ -160,12 +219,13 @@ fetch() {
     --no-playlist \
     --restrict-filenames \
     --no-progress \
-    --max-filesize "$MAX_FILESIZE" \
+    $SIZE_ARGS \
+    ${SECTION:+--download-sections} ${SECTION:+"$SECTION"} \
     -f "$QUALITY" \
     --match-filter "duration < $MAX_DURATION" \
     --merge-output-format mkv \
     -P "$WORK" \
-    -o '%(title).120B-%(id)s.%(ext)s' \
+    -o "$OUTTMPL" \
     "$@" >>"$LOG" 2>&1
 }
 

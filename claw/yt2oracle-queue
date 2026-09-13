@@ -58,17 +58,48 @@ trap 'rm -rf "$LOCK"' EXIT INT TERM
 
 [ -f "$QUEUE" ] || exit 0
 
-# Premiere ligne utile : ni vide, ni commentaire.
-url=$(grep -vE '^[[:space:]]*(#|$)' "$QUEUE" | head -1)
-[ -n "$url" ] || exit 0
+# Une carte, une file, plusieurs chaines. En prenant les lignes dans l'ordre, la
+# chaine dont l'inbox est la plus profonde prend tous les ticks jusqu'a ce
+# qu'elle se vide, et l'autre attend des heures: sur une chaine 24/7 c'est la
+# difference entre une rotation et la meme soiree rejouee. On prend donc la
+# premiere ligne qui n'est PAS pour la chaine servie au tick precedent, et
+# l'ordre a l'interieur d'une chaine reste celui de sa file.
+LAST_DEST=/root/yt/last_dest
+last=$(cat "$LAST_DEST" 2>/dev/null) || last=""
+useful=$(grep -vE '^[[:space:]]*(#|$)' "$QUEUE")
+# last vide: le motif ne vaut " dest=$", qui ne correspond a rien, donc rien
+# n'est ecarte. Une seule chaine: aucune ligne ne passe le filtre et on retombe
+# sur la premiere, comme avant qu'il y en ait deux.
+line=$(printf '%s\n' "$useful" | grep -v " dest=${last}\$" | head -1)
+[ -n "$line" ] || line=$(printf '%s\n' "$useful" | head -1)
+[ -n "$line" ] || exit 0
 
-# On retire l'URL AVANT de la traiter. Sinon une URL definitivement cassee revient a
+# On retire la ligne AVANT de la traiter. Sinon une URL definitivement cassee revient a
 # chaque tick et bloque la file derriere elle. L'echec est trace dans failed.txt, il
 # n'est pas silencieux.
 # Pas de "&&" apres le grep : quand la file se vide, grep rend 1 et l'URL resterait
 # en place, donc boucle infinie.
-grep -vxF "$url" "$QUEUE" > "$QUEUE.tmp"
+grep -vxF "$line" "$QUEUE" > "$QUEUE.tmp"
 mv "$QUEUE.tmp" "$QUEUE"
+
+# Une ligne est une URL et, au plus, la destination, le morceau demande, sa
+# tranche et la hauteur. Tout a deja ete filtre par inbox-pull; ici on ne fait
+# que separer. Une ligne d'avant les destinations n'a que l'URL et retombe donc
+# sur la bibliotheque de la premiere chaine.
+url=""; dest=videos; part=""; range=""; maxh=""
+for tok in $line; do
+  case "$tok" in
+    dest=*) dest=${tok#dest=} ;;
+    part=*) part=${tok#part=} ;;
+    range=*) range=${tok#range=} ;;
+    h=*) maxh=${tok#h=} ;;
+    *) [ -n "$url" ] || url=$tok ;;
+  esac
+done
+[ -n "$url" ] || exit 0
+# Ecrit avant le telechargement: un run tue en cours de route a quand meme
+# consomme son tour, et le tick suivant doit aller a l'autre chaine.
+echo "$dest" > "$LAST_DEST"
 
 # Nombre d'essais avant d'abandonner pour de bon. Le mur anti-bot de YouTube est
 # INTERMITTENT, pas absolu: mesure le 2026-09-08, 12 reussites contre 42 echecs
@@ -86,21 +117,24 @@ attempts_of() {
   echo "$n"
 }
 
-if yt2oracle "$url"; then
-  echo "$(ts) $url" >> "$DONE"
+# Les essais se comptent sur la ligne et pas sur l'URL: deux morceaux d'une
+# meme video sont deux telechargements differents, et l'echec de l'un ne dit
+# rien de l'autre.
+if DEST_DIR="/home/ubuntu/$dest" PART="$part" RANGE="$range" MAXH="$maxh" yt2oracle "$url"; then
+  echo "$(ts) $line" >> "$DONE"
   # une reussite efface l'ardoise: si la video revient un jour, elle repart de zero
   if [ -f "$ATTEMPTS" ]; then
-    grep -vxF "$url" "$ATTEMPTS" > "$ATTEMPTS.tmp" 2>/dev/null
+    grep -vxF "$line" "$ATTEMPTS" > "$ATTEMPTS.tmp" 2>/dev/null
     mv "$ATTEMPTS.tmp" "$ATTEMPTS"
   fi
 else
-  echo "$url" >> "$ATTEMPTS"
-  tried=$(attempts_of "$url")
+  echo "$line" >> "$ATTEMPTS"
+  tried=$(attempts_of "$line")
   if [ "$tried" -lt "$MAX_ATTEMPTS" ]; then
-    echo "$url" >> "$QUEUE"
+    echo "$line" >> "$QUEUE"
     echo "$(ts) queue: echec ${tried}/${MAX_ATTEMPTS}, url remise en fin de file" >> "$LOG"
   else
-    echo "$(ts) $url" >> "$FAILED"
+    echo "$(ts) $line" >> "$FAILED"
     echo "$(ts) queue: echec ${tried}/${MAX_ATTEMPTS}, abandon, voir $FAILED" >> "$LOG"
   fi
 fi

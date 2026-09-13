@@ -15,7 +15,28 @@ queue=$(grep -c . /root/yt/urls.txt 2>/dev/null); : "${queue:=0}"
 free=$(df -Pm /root | tail -1 | awk '{print $4}'); : "${free:=0}"
 at=$(date +%s)
 
+# Le total ne suffit plus: chaque chaine a son inbox, et son collector s'arrete
+# des que la carte a de quoi faire. Avec un seul nombre, la chaine dont la file
+# est vide lirait la profondeur de l'autre et n'ajouterait plus rien, en
+# attendant indefiniment que le voisin se vide. On publie donc le compte par
+# bibliotheque a cote du total, que les anciennes versions continuent de lire.
+# Une ligne sans destination appartient a la premiere chaine.
+queues=$(awk '
+  NF {
+    d = "videos"
+    for (i = 1; i <= NF; i++) if ($i ~ /^dest=videos(-[a-z0-9]+)?$/) d = substr($i, 6)
+    c[d]++
+  }
+  END {
+    s = ""
+    for (k in c) { if (s != "") s = s ","; s = s "\"" k "\":" c[k] }
+    print "{" s "}"
+  }' /root/yt/urls.txt 2>/dev/null)
+# pas de ":=" ici: la valeur par defaut contient des accolades, qui fermeraient
+# l'expansion avant la fin
+[ -n "$queues" ] || queues='{}'
+
 if $OSSH "$DEST" true 2>/dev/null; then oracle=up; else oracle=DOWN; fi
 
-json="{\"done\":$done,\"failed\":$failed,\"queue\":$queue,\"freeMB\":$free,\"oracle\":\"$oracle\",\"at\":$at}"
+json="{\"done\":$done,\"failed\":$failed,\"queue\":$queue,\"queues\":$queues,\"freeMB\":$free,\"oracle\":\"$oracle\",\"at\":$at}"
 printf '%s' "$json" | $OSSH "$DEST" "cat > /home/ubuntu/yt2oracle/status.json"

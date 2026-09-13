@@ -1,5 +1,5 @@
 #!/bin/sh
-# Pull the dashboard inbox from Oracle into the local queue.
+# Pull the dashboard inboxes from Oracle into the local queue.
 #
 # The dashboard runs on Oracle (public side); this board is behind NAT and can
 # only reach out. So the board claims the inbox on each tick rather than being
@@ -8,22 +8,69 @@
 # fresh inbox.txt. ponytail: no distributed lock, an atomic rename is enough for
 # one dashboard and one board; the ceiling is that an append landing in the same
 # millisecond as the mv waits for the next tick.
+#
+# One inbox per channel: inbox.txt for the library named videos, inbox-<name>.txt
+# for videos-<name>. Each line is tagged here with the library it is for, and
+# that tag is what the queue alternates on and what yt2oracle delivers to.
 set -u
 
 KEY=/root/.ssh/oracle_key
 DEST=ubuntu@89.168.60.67
 OSSH="ssh -i $KEY -o BatchMode=yes -o ConnectTimeout=20 -o StrictHostKeyChecking=accept-new"
-REMOTE=/home/ubuntu/yt2oracle/inbox.txt
 QUEUE=/root/yt/urls.txt
 LOG=/root/yt/yt2oracle.log
 
 mkdir -p /root/yt
-claim="/home/ubuntu/yt2oracle/inbox.claim.$(date +%s).$$"
 
-# test -s so an empty or missing inbox is a clean no-op, not an error.
-urls=$($OSSH "$DEST" "test -s $REMOTE && mv $REMOTE '$claim' && cat '$claim' && rm -f '$claim'" 2>/dev/null) || exit 0
-[ -n "$urls" ] || exit 0
+# Every inbox claimed in one round trip, printed as "<library> <line>". Single
+# quoted on purpose: nothing in here is expanded by this board's shell, so the
+# remote script needs no escaping and cannot pick up a local value by accident.
+raw=$($OSSH "$DEST" '
+cd /home/ubuntu/yt2oracle 2>/dev/null || exit 0
+for f in inbox.txt inbox-*.txt; do
+  [ -s "$f" ] || continue
+  c="$f.claim.$$"
+  mv "$f" "$c" 2>/dev/null || continue
+  case "$f" in
+    inbox.txt) d=videos ;;
+    *) d="videos-${f#inbox-}"; d="${d%.txt}" ;;
+  esac
+  sed "s|^|$d |" "$c"
+  rm -f "$c"
+done' 2>/dev/null) || exit 0
+[ -n "$raw" ] || exit 0
 
-n=$(printf '%s\n' "$urls" | grep -c .)
-printf '%s\n' "$urls" >> "$QUEUE"
+# What comes back was written by a web service anyone with the dashboard can
+# reach, and every token of it ends up in a yt-dlp command line. So the line is
+# rebuilt here out of the four things this board understands, and anything else
+# is dropped rather than passed on. A token that is not one of these four has no
+# legitimate reason to exist, and a token starting with a dash would be a
+# yt-dlp option.
+clean=$(printf '%s\n' "$raw" | awk '
+  {
+    dest = $1; url = ""; part = ""; range = ""; h = ""
+    if (dest !~ /^videos(-[a-z0-9]+)?$/) next
+    for (i = 2; i <= NF; i++) {
+      t = $i
+      if (url == "" && (t ~ /^https:\/\/www\.youtube\.com\/watch\?v=[A-Za-z0-9_-]+$/ ||
+                        t ~ /^https:\/\/youtu\.be\/[A-Za-z0-9_-]+$/)) url = t
+      else if (t ~ /^part=p[0-9]+of[0-9]+$/) part = t
+      else if (t ~ /^range=[0-9]+-[0-9]+$/) range = t
+      else if (t ~ /^h=[0-9]+$/) h = t
+    }
+    if (url == "") next
+    line = url
+    if (part != "") line = line " " part
+    if (range != "") line = line " " range
+    if (h != "") line = line " " h
+    print line " dest=" dest
+  }')
+
+got=$(printf '%s\n' "$raw" | grep -c .)
+n=$(printf '%s\n' "$clean" | grep -c .)
+[ "$n" -gt 0 ] && printf '%s\n' "$clean" >> "$QUEUE"
 echo "$(date '+%Y-%m-%d %H:%M:%S') inbox: $n URL(s) tirees d'Oracle" >> "$LOG"
+# A dropped line is a line nobody will ever see again, so it is said out loud
+# rather than swallowed.
+[ "$n" -eq "$got" ] || \
+  echo "$(date '+%Y-%m-%d %H:%M:%S') inbox: $((got - n)) ligne(s) refusee(s) a la lecture" >> "$LOG"
