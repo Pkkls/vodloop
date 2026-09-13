@@ -55,6 +55,16 @@ LOW_PLAYABLE_FILES = 8
 # disk and not a fault. The floor the janitor frees to is the line that
 # actually means something is wrong.
 LOW_FREE_BYTES = common.SHARED_FREE_FLOOR_BYTES
+# A channel eats twenty four hours of video a day. Gaining none for this long
+# is broken whatever the cause, and it is the assertion that would have caught
+# the one fault nothing else did: every YouTube ranged fetch had been answered
+# with HTTP 403 since parts were introduced, for about a day, and the first
+# thing to notice was a viewer.
+STALE_ARRIVAL_SECONDS = 6 * 3600
+# How often a fault that is still there says so again. Short enough that a
+# night of it is several messages, long enough that a slow repair is not
+# drowned in its own alarm.
+REMIND_SECONDS = 3 * 3600
 
 
 def env():
@@ -367,17 +377,43 @@ def handle(text):
     return None
 
 
+def newest_arrival():
+    """Seconds since the library last gained a file, or None if it is empty.
+
+    Nothing arriving is the fault that hides every other one. The board can be
+    refusing, the collector can be blocking itself, a whole fetch path can have
+    stopped working: the symptom is the same and no component reports it,
+    because no component owns the chain end to end. This is the one number that
+    does, and it costs one stat per file.
+    """
+    if not LIBRARY.is_dir():
+        return None
+    seen = []
+    for path in LIBRARY.iterdir():
+        try:
+            if path.is_file() and path.suffix.lower() in (".mp4", ".mkv"):
+                seen.append(path.stat().st_mtime)
+        except OSError:
+            continue
+    return time.time() - max(seen) if seen else None
+
+
 def health():
-    """Fire once when something breaks, once more when it comes back."""
+    """Say what is broken, and keep saying it while it still is."""
     data = state()
     if time.time() < data.get("quiet_until", 0):
         return
     was = data.get("alarms", {})
+    said_at = data.get("alarm_said", {})
     backlog = prep.seconds_on_disk()
     total, playable = library()
     moved = emitting()
 
     now = {}
+    stale = newest_arrival()
+    if stale is not None and stale > STALE_ARRIVAL_SECONDS:
+        now["arrivees"] = (f"rien de neuf en bibliotheque depuis {stale / 3600:.0f} h, "
+                           f"la chaine consomme sans etre reapprovisionnee")
     if backlog <= LOW_BACKLOG_SECONDS:
         now["tampon"] = f"tampon a {backlog}s, la chaine va tomber sur le clip d'attente"
     if playable <= LOW_PLAYABLE_FILES:
@@ -393,14 +429,29 @@ def health():
     except (TypeError, ValueError):
         pass
 
+    # A fault that lasts has to keep saying so. Saying it only on the edge
+    # means one message for a twenty four hour outage, and one message in a
+    # chat two channels share is one message nobody finds again. Measured
+    # 2026-09-14: the second channel's library alarm had been latched at three
+    # playable files since the night before, and the only thing that noticed
+    # was a viewer seeing the same video come round twice.
+    fresh = {}
     for key, message in now.items():
+        last = said_at.get(key, 0)
         if key not in was:
             say("ALERTE " + message)
+            fresh[key] = time.time()
+        elif time.time() - last >= REMIND_SECONDS:
+            say(f"TOUJOURS EN PANNE depuis {(time.time() - last) / 3600:.0f} h: {message}")
+            fresh[key] = time.time()
+        else:
+            fresh[key] = last
     for key in was:
         if key not in now:
             say(f"revenu a la normale: {key}")
 
     data["alarms"] = now
+    data["alarm_said"] = fresh
     data["push_restarts"] = restarts(PUSH)
     save_state(data)
 

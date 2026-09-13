@@ -161,6 +161,70 @@ for cmd in ("/status", "/now", "/lib", "/conv", "/help", "/start"):
 check("an unknown word is ignored rather than answered",
       "return None" in source.split("def handle")[1].split("def ")[0])
 
+print("a fault that lasts keeps saying so")
+# Mesure 2026-09-14: l'alarme bibliotheque de la 2e chaine etait bloquee sur
+# "3 fichiers jouables" depuis la veille et n'avait parle qu'une fois, parce que
+# health() ne disait quelque chose que sur le front montant. Une panne de 24 h
+# produisait UN message, dans un fil que deux chaines partagent.
+import tempfile as _tf, pathlib as _pl, time as _t
+_root = _pl.Path(_tf.mkdtemp())
+_lib = _pl.Path(_tf.mkdtemp())
+saved = (tgbot.STATEFILE, tgbot.LIBRARY, tgbot.common.STATE, tgbot.say,
+         tgbot.emitting, tgbot.library, tgbot.prep.seconds_on_disk,
+         tgbot.free_bytes, tgbot.restarts)
+try:
+    tgbot.STATEFILE = _root / "tg.json"
+    tgbot.common.STATE = _root
+    tgbot.LIBRARY = _lib
+    spoken = []
+    tgbot.say = lambda text: spoken.append(text) or True
+    tgbot.emitting = lambda: 1000
+    tgbot.library = lambda: (3, 3)          # sous le seuil, l'alarme doit tenir
+    tgbot.prep.seconds_on_disk = lambda: 99999
+    tgbot.free_bytes = lambda: 99 * 1024 ** 3
+    tgbot.restarts = lambda name: "0"
+
+    tgbot.health()
+    check("la premiere fois, elle alerte", any("ALERTE" in s for s in spoken),
+          str(spoken[:1]))
+    spoken.clear()
+    tgbot.health()
+    check("juste apres, elle se tait", spoken == [], str(spoken))
+    # on recule la date du dernier message: la panne dure
+    data = tgbot.state()
+    data["alarm_said"] = {k: _t.time() - tgbot.REMIND_SECONDS - 1
+                          for k in data.get("alarms", {})}
+    tgbot.save_state(data)
+    tgbot.health()
+    check("mais passe le delai de rappel, elle le redit",
+          any("TOUJOURS EN PANNE" in s for s in spoken), str(spoken[:1]))
+
+    print("rien qui arrive est une panne en soi")
+    # le temoin d'abord: une bibliotheque qui vient de recevoir ne dit rien
+    (_lib / "frais-abcDEF12345.mkv").write_bytes(b"x")
+    check("temoin: un fichier qui vient darriver ne declenche rien",
+          tgbot.newest_arrival() < 60, str(tgbot.newest_arrival()))
+    import os as _os
+    vieux = _t.time() - tgbot.STALE_ARRIVAL_SECONDS - 3600
+    _os.utime(_lib / "frais-abcDEF12345.mkv", (vieux, vieux))
+    check("un fichier trop vieux rend bien son age",
+          tgbot.newest_arrival() > tgbot.STALE_ARRIVAL_SECONDS)
+    spoken.clear()
+    tgbot.STATEFILE = _root / "tg2.json"
+    tgbot.health()
+    check("et la chaine alerte sur labsence darrivee",
+          any("rien de neuf" in s for s in spoken), str(spoken))
+    # une bibliotheque vide n'a pas d'age: c'est un autre probleme, couvert par
+    # l'alarme bibliotheque, et en faire une alarme d'arrivee dirait deux fois
+    # la meme chose
+    (_lib / "frais-abcDEF12345.mkv").unlink()
+    check("une bibliotheque vide ne fabrique pas de fausse alarme darrivee",
+          tgbot.newest_arrival() is None)
+finally:
+    (tgbot.STATEFILE, tgbot.LIBRARY, tgbot.common.STATE, tgbot.say,
+     tgbot.emitting, tgbot.library, tgbot.prep.seconds_on_disk,
+     tgbot.free_bytes, tgbot.restarts) = saved
+
 print("thresholds warn before the floor prep abandons at")
 check("the backlog alarm fires above prep's abandon floor",
       tgbot.LOW_BACKLOG_SECONDS > tgbot.prep.ABANDON_BELOW_SECONDS,
