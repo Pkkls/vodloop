@@ -79,13 +79,33 @@ EOF
 pick() {
   last=$1
   useful=$(grep -vE '^[[:space:]]*(#|$)' "$QUEUE")
-  line=$(printf '%s\n' "$useful" | grep -v " dest=${last}\$" | head -1)
+  line=$(printf '%s\n' "$useful" | awk -v last="$last" '
+    {
+      d = "videos"
+      for (i = 1; i <= NF; i++) if ($i ~ /^dest=/) d = substr($i, 6)
+      if (d != last) { print; exit }
+    }')
   [ -n "$line" ] || line=$(printf '%s\n' "$useful" | head -1)
-  printf '%s' "${line##* dest=}"
+  case "$line" in *" dest="*) printf '%s' "${line##* dest=}" ;; *) printf 'videos' ;; esac
 }
 is "sans tour precedent, c'est la premiere ligne" "$(pick '')" "videos"
 is "apres la premiere chaine, c'est l'autre" "$(pick videos)" "videos-second"
 is "et apres l'autre, on revient" "$(pick videos-second)" "videos"
+
+# Une ligne d'avant les destinations n'a aucun jeton dest= et appartient a la
+# premiere chaine. Cherchee par son texte elle ne correspond a rien, donc elle
+# n'etait jamais ecartee et la file la reprenait sans fin: le 2026-09-13 trois
+# telechargements de la premiere chaine se sont enchaines pendant que les huit
+# lignes de l'autre attendaient.
+cat > "$QUEUE" <<EOF
+https://www.youtube.com/watch?v=aaaaaaaaaaa
+https://www.youtube.com/watch?v=bbbbbbbbbbb
+https://www.youtube.com/watch?v=ccccccccccc dest=videos-second
+EOF
+is "une ligne sans destination compte pour la premiere chaine" \
+   "$(pick videos)" "videos-second"
+is "temoin: et c'est bien elle qu'on sert quand c'est son tour" \
+   "$(pick videos-second)" "videos"
 # the control: with only one channel queued there is nothing to alternate with,
 # and the file has to keep draining rather than stop
 cat > "$QUEUE" <<EOF

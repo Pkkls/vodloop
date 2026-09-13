@@ -67,10 +67,21 @@ trap 'rm -rf "$LOCK"' EXIT INT TERM
 LAST_DEST=/root/yt/last_dest
 last=$(cat "$LAST_DEST" 2>/dev/null) || last=""
 useful=$(grep -vE '^[[:space:]]*(#|$)' "$QUEUE")
-# last vide: le motif ne vaut " dest=$", qui ne correspond a rien, donc rien
-# n'est ecarte. Une seule chaine: aucune ligne ne passe le filtre et on retombe
-# sur la premiere, comme avant qu'il y en ait deux.
-line=$(printf '%s\n' "$useful" | grep -v " dest=${last}\$" | head -1)
+# On resout la destination de CHAQUE ligne avant de comparer, au lieu de
+# chercher le texte " dest=<last>" dedans. Une ligne d'avant les destinations
+# n'a pas de jeton du tout et appartient a la premiere chaine: cherchee par son
+# texte elle ne correspondait a rien, donc elle n'etait jamais ecartee et
+# head -1 la reprenait sans fin. Mesure le 2026-09-13: trois telechargements
+# cx247 d'affilee pendant que les huit lignes de l'autre chaine attendaient.
+#
+# last vide, ou une seule chaine en file: aucune ligne ne peut etre ecartee et
+# on retombe sur la premiere, comme avant qu'il y en ait deux.
+line=$(printf '%s\n' "$useful" | awk -v last="$last" '
+  {
+    d = "videos"
+    for (i = 1; i <= NF; i++) if ($i ~ /^dest=/) d = substr($i, 6)
+    if (d != last) { print; exit }
+  }')
 [ -n "$line" ] || line=$(printf '%s\n' "$useful" | head -1)
 [ -n "$line" ] || exit 0
 
