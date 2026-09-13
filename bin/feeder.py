@@ -23,7 +23,7 @@ import common
 
 IDLE_POLL_SECONDS = 2
 
-PUSH_UNIT = "vodloop-push"
+PUSH_UNIT = common.unit("push")
 SESSION = common.STATE / "session.json"
 # A reopening costs the viewers about six seconds. A fault that asked for one on
 # every chunk would take the channel down in a loop, so there is one per window

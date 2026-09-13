@@ -218,8 +218,8 @@ def ladder(playback_url, pushed=None):
 
 # Matched against a process command line, all words present. The pusher has no
 # script name to match on: it is a bare ffmpeg, and what makes it the pusher is
-# where it is sending.
-WATCHED = {"push": ("ffmpeg", "flv", "rtmps"),
+# where it is reading from and where it is sending.
+WATCHED = {"push": ("ffmpeg", "rtmps", str(common.FIFO)),
            "feed": ("feeder.py",),
            "prep": ("prep.py",)}
 
@@ -241,6 +241,21 @@ def _cpu_jiffies():
     return out
 
 
+def _owned(entry, role):
+    """Whether a process is this channel's unit for that role.
+
+    Two channels run the same scripts out of the same tree, so "feeder.py" on
+    a command line says what a process does and nothing about whose it is. The
+    cgroup says: it carries the unit that started it. The .service suffix
+    matters, or vodloop-push also matches vodloop-push@othername.service and
+    the first channel reports the second one's numbers as its own.
+    """
+    try:
+        return f"{common.unit(role)}.service" in (entry / "cgroup").read_text()
+    except OSError:
+        return False
+
+
 def _pids():
     """The pid of each service worth watching, found by its command line."""
     found = {}
@@ -257,7 +272,8 @@ def _pids():
         except OSError:
             continue  # it exited between the listing and the read
         for label, needles in WATCHED.items():
-            if label not in found and all(w in line for w in needles):
+            if (label not in found and all(w in line for w in needles)
+                    and _owned(entry, label)):
                 found[label] = int(entry.name)
     return found
 

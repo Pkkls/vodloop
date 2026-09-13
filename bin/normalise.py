@@ -43,7 +43,7 @@ sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 import common
 import prep
 
-LIBRARY = pathlib.Path("/home/ubuntu/videos")
+LIBRARY = common.LIBRARY_DIR
 MEDIA = (".mp4", ".mkv")
 FAILED = common.STATE / "normalise_failed.json"
 

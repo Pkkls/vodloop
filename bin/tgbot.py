@@ -37,7 +37,10 @@ import prep
 
 ENVFILE = common.ROOT / "tg.env"
 STATEFILE = common.STATE / "tg.json"
-LIBRARY = pathlib.Path("/home/ubuntu/videos")
+LIBRARY = common.LIBRARY_DIR
+# One code tree serves every channel, so the units it talks about are the
+# ones its own environment names, never a fixed set.
+PUSH, FEED, PREP = common.unit("push"), common.unit("feed"), common.unit("prep")
 
 POLL_SECONDS = 25          # long poll, so this costs nothing while idle
 HEALTH_EVERY = 120         # a health pass at most this often
@@ -47,7 +50,11 @@ HEALTH_EVERY = 120         # a health pass at most this often
 # an encode at two chunks, so warning there would be warning too late.
 LOW_BACKLOG_SECONDS = 4 * common.CHUNK_SECONDS
 LOW_PLAYABLE_FILES = 8
-LOW_FREE_BYTES = 6 * 1024 ** 3
+# Free space is shared by every channel on the box. At 6 Go this alarmed for
+# ever as soon as two shares were full, which is the normal state of a full
+# disk and not a fault. The floor the janitor frees to is the line that
+# actually means something is wrong.
+LOW_FREE_BYTES = common.SHARED_FREE_FLOOR_BYTES
 
 
 def env():
@@ -86,6 +93,10 @@ def say(text):
     chat = env().get("TG_CHAT")
     if not chat:
         return False
+    # Several channels report into one chat, so a message says which one it
+    # is from. Unset, the label is empty and the first channel reads exactly
+    # as it always did.
+    text = f"{common.LABEL} {text}" if common.LABEL else text
     return bool(api("sendMessage", chat_id=chat, text=text[:3900],
                     disable_web_page_preview="true"))
 
@@ -144,7 +155,11 @@ def emitting():
     Kick's API answers 404 often enough that asking it is not a liveness test.
     What leaves the socket is.
     """
-    pids = sh(["pgrep", "-f", "ffmpeg.*rtmps"]).split()
+    # Scoped to this channel's own pipe. "ffmpeg.*rtmps" takes the first
+    # pusher on the box, and medic restarts whatever this reports silent:
+    # with two channels that is how one channel's medic ends the other's
+    # live.
+    pids = sh(["pgrep", "-f", f"ffmpeg.*{common.FIFO}"]).split()
     if not pids:
         return None
 
@@ -234,8 +249,8 @@ def status_text():
         f"tampon       {backlog}s ({backlog // common.CHUNK_SECONDS} chunks)\n"
         f"bibliotheque {playable} jouables / {total}\n"
         f"disque       {free_bytes() / 1024 ** 3:.1f} Go libres\n"
-        f"push {unit('vodloop-push')} ({restarts('vodloop-push')} relances)  "
-        f"feed {unit('vodloop-feed')}  prep {unit('vodloop-prep')}"
+        f"push {unit(PUSH)} ({restarts(PUSH)} relances)  "
+        f"feed {unit(FEED)}  prep {unit(PREP)}"
     )
 
 
@@ -272,7 +287,7 @@ def conv_text():
 
 
 def log_text():
-    out = sh(["journalctl", "-u", "vodloop-push", "-u", "vodloop-prep",
+    out = sh(["journalctl", "-u", PUSH, "-u", PREP,
               "-n", "400", "--no-pager"], 60)
     bad = [l for l in out.splitlines()
            if any(w in l.lower() for w in
@@ -330,7 +345,7 @@ def handle(text):
             # unknown is not black, and saying so is the whole point
             return f"indetermine: {detail}\n(indetermine n'est pas 'noir')"
         since = sh(["systemctl", "show", "-p", "ActiveEnterTimestamp",
-                    "--value", "vodloop-push"])
+                    "--value", PUSH])
         verdict = ("l'image que recoit un spectateur est REELLE" if ok
                    else "l'image que recoit un spectateur est NOIRE")
         tail = ("si ton lecteur est noir, il tient une session morte: recharge"
@@ -373,7 +388,7 @@ def health():
     if moved == 0:
         now["fil"] = "le pusher n'envoie plus rien"
     try:
-        if int(restarts("vodloop-push")) > int(data.get("push_restarts", -1) or -1) >= 0:
+        if int(restarts(PUSH)) > int(data.get("push_restarts", -1) or -1) >= 0:
             now["pusher"] = "le pusher vient de redemarrer"
     except (TypeError, ValueError):
         pass
@@ -386,7 +401,7 @@ def health():
             say(f"revenu a la normale: {key}")
 
     data["alarms"] = now
-    data["push_restarts"] = restarts("vodloop-push")
+    data["push_restarts"] = restarts(PUSH)
     save_state(data)
 
 

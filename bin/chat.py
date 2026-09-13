@@ -239,7 +239,30 @@ class Store:
         self.dirty = False
 
 
+def for_us(event, owner):
+    """Whether an event belongs to this channel.
+
+    One bus serves every channel on this server and publishes every
+    broadcaster it is subscribed to on the same feed. Unfiltered, the
+    neighbour's chat would reorder this channel's queue, skip its video and
+    answer its viewers. The bus can filter server side and sse_url asks it to,
+    but which build of it is deployed is not something this process can know,
+    so the envelope is checked here too.
+
+    An envelope carrying no broadcaster at all is kept. The bus omits the
+    field when it could not read one out of the payload, and dropping on
+    absence would take a channel off chat over a shape change rather than over
+    a mismatch.
+    """
+    if not owner or not isinstance(event, dict):
+        return True
+    seen = str(event.get("broadcaster") or "").strip()
+    return not seen or seen == str(owner).strip()
+
+
 def apply(event, mods, store, replier=None, owner=None):
+    if not for_us(event, owner):
+        return
     message = as_message(unwrap(event))
     if message is None:
         return
@@ -257,11 +280,16 @@ def apply(event, mods, store, replier=None, owner=None):
             replier.send(reply, str(message["user_id"]))
 
 
+def sse_url(owner):
+    """The bus feed, narrowed to this channel's broadcaster when it has one."""
+    return SSE_URL + (f"&broadcaster={urllib.parse.quote(str(owner))}" if owner else "")
+
+
 def stream(mods, store, replier=None, owner=None):
     """Follow the SSE feed, reconnecting for as long as this process lives."""
     while True:
         try:
-            with urllib.request.urlopen(SSE_URL, timeout=60) as response:
+            with urllib.request.urlopen(sse_url(owner), timeout=60) as response:
                 for raw in response:
                     line = raw[:MAX_EVENT_BYTES].decode("utf-8", "replace").strip()
                     if not line.startswith("data:"):

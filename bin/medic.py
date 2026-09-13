@@ -150,7 +150,7 @@ def main(argv):
             print("  pusher muet mais deja relance recemment, on attend")
         else:
             if act(apply, "pusher muet malgre un process vivant, relance",
-                   ["sudo", "systemctl", "restart", "vodloop-push"]):
+                   ["sudo", "systemctl", "restart", common.unit("push")]):
                 data["pusher_restarted"] = now
                 did += 1
     else:
@@ -168,7 +168,7 @@ def main(argv):
         if now - data.get("prep_restarted", 0) < PREP_RESTART_COOLDOWN:
             print("  prep deja relance recemment, on attend")
         elif act(apply, f"tampon vide depuis {dry} passes, prep relance",
-                 ["sudo", "systemctl", "restart", "vodloop-prep"]):
+                 ["sudo", "systemctl", "restart", common.unit("prep")]):
             data["prep_restarted"] = now
             data["dry_passes"] = 0
             did += 1
