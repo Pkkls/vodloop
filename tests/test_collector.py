@@ -417,6 +417,25 @@ try:
         busy = run(20, 1.0, flying).count("ajouterait")
         check("ce qui est en vol est deja depense sur la part",
               busy < collector.MAX_PER_RUN, f"{busy} lignes au lieu de 8")
+
+        # En vol et ne-pas-reproposer sont deux questions. Avec un refetch de 21
+        # jours, une cle remise il y a huit heures ne vole plus: elle a atterri
+        # ou elle a echoue. Mesure 2026-09-14: huit cles retirees de la file de
+        # la carte, qui n'arriveraient donc jamais, etaient encore facturees a
+        # la part trois semaines plus tard.
+        real_refetch = collector.REFETCH_SECONDS
+        try:
+            collector.REFETCH_SECONDS = 21 * 24 * 3600
+            landed = {v: now - 8 * 3600 for v in POOL[:16]}
+            freed = run(20, 1.0, landed).count("ajouterait")
+            check("une cle remise il y a huit heures ne pese plus sur la part",
+                  freed == collector.MAX_PER_RUN, f"{freed} lignes")
+            # le temoin: les memes cles, remises a l'instant, pesent encore
+            still = run(20, 1.0, {v: now for v in POOL[:16]}).count("ajouterait")
+            check("temoin: les memes, remises a l'instant, pesent toujours",
+                  still < collector.MAX_PER_RUN, f"{still} lignes")
+        finally:
+            collector.REFETCH_SECONDS = real_refetch
         # the control: the same ledger, the same count of entries, old enough
         # that nothing is in flight any more
         stale = {v: now - 8 * 24 * 3600 for v in POOL[:16]}

@@ -562,6 +562,15 @@ def main(argv):
     # stream: at six hours the channel loops on part one and never reaches two.
     cooldown = REFETCH_SECONDS or HANDED_COOLDOWN_SECONDS
     recent = {k for k, at in handed.items() if now - at < cooldown}
+    # Still on its way, which is a different question from may it be offered
+    # again. A key handed over has either landed or failed within the six
+    # hours below; after that it is not in flight whatever the refetch rule
+    # says. Measured 2026-09-14 with REFETCH_DAYS=21: eight keys that had been
+    # dropped from the board's queue and would never arrive were still being
+    # charged to the share three weeks later, and the channel could not use
+    # what it had been given.
+    in_flight = {k for k, at in handed.items()
+                 if now - at < HANDED_COOLDOWN_SECONDS}
     runway = prep.runway_seconds()
     urgent = runway < URGENT_RUNWAY_SECONDS
     board = board_queue(now)
@@ -571,7 +580,7 @@ def main(argv):
     share = (f" part={used / 1024 ** 3:.1f}/{budget / 1024 ** 3:.1f}G"
              if budget else "")
     print(f"bibliotheque={have}/{TARGET_LIBRARY_FILES} libre={free / 1024 ** 3:.1f}G"
-          f"{share} sources={len(sources())} en_vol={len(recent)} "
+          f"{share} sources={len(sources())} en_vol={len(in_flight)} "
           f"antenne={runway / 3600:.1f}h{' URGENT' if urgent else ''} "
           f"carte={'?' if board is None else board}/{BOARD_QUEUE_DEPTH}")
 
@@ -610,7 +619,7 @@ def main(argv):
         # neither the library nor the inbox, having been claimed off it, so
         # without this a run queues into space the previous run already spent.
         rate = library_rate(durations)
-        for key in recent - held:
+        for key in in_flight - held:
             room -= estimate(key, durations, rate)
         keep = []
         for key in chosen:
