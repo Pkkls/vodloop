@@ -423,6 +423,22 @@ try:
         # ou elle a echoue. Mesure 2026-09-14: huit cles retirees de la file de
         # la carte, qui n'arriveraient donc jamais, etaient encore facturees a
         # la part trois semaines plus tard.
+        # La carte dit combien elle tient, et c'est le seul compte honnete de ce
+        # qui arrive encore. Mesure 2026-09-14: onze cles dans la fenetre de six
+        # heures contre une carte qui en annoncait trois, donc dix-neuf Go
+        # reserves sur une part de dix-huit, et la chaine refusait chaque passe
+        # avec trois fichiers en bibliotheque.
+        real_bq = collector.board_queue
+        try:
+            collector.board_queue = lambda now=None: 2
+            capped = run(20, 1.0, {v: now for v in POOL[:16]}).count("ajouterait")
+            collector.board_queue = lambda now=None: None
+            uncapped = run(20, 1.0, {v: now for v in POOL[:16]}).count("ajouterait")
+            check("seules les cles que la carte tient encore sont facturees",
+                  capped > uncapped, f"{capped} lignes avec plafond, {uncapped} sans")
+        finally:
+            collector.board_queue = real_bq
+
         real_refetch = collector.REFETCH_SECONDS
         try:
             collector.REFETCH_SECONDS = 21 * 24 * 3600

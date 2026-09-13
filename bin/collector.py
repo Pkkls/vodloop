@@ -619,7 +619,21 @@ def main(argv):
         # neither the library nor the inbox, having been claimed off it, so
         # without this a run queues into space the previous run already spent.
         rate = library_rate(durations)
-        for key in in_flight - held:
+        # The board says how many it is holding, and that is the only honest
+        # count of what is still coming. A key handed over and absent from that
+        # count has landed, or failed, or been taken out of its queue by hand,
+        # and charging it reserves bytes for a file that will never arrive.
+        #
+        # Measured 2026-09-14: eleven keys inside the six hour window against a
+        # board reporting three, so nineteen gigabytes were reserved out of an
+        # eighteen gigabyte share and the channel refused every run while its
+        # library sat at three files. The newest are kept, being the ones the
+        # board has not had time to finish.
+        flying = [k for k, _ in sorted(((k, handed[k]) for k in in_flight - held),
+                                       key=lambda kv: -kv[1])]
+        if board is not None:
+            flying = flying[:board]
+        for key in flying:
             room -= estimate(key, durations, rate)
         keep = []
         for key in chosen:
