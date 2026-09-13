@@ -1,185 +1,250 @@
 #!/usr/bin/env python3
-"""Channel artwork for Kick: one avatar, one banner, same look as the rest.
+"""Channel artwork for Kick: one avatar, one banner.
 
     python3 tools/brand.py <channel> [outdir]
 
-The palette and the type are taken from assets/offline-banner.png, which is
-what a viewer sees when the channel is down, and from prep.py, which draws the
-title over the video in DejaVu Sans Bold. A channel whose banner, standby card
-and on-air overlay disagree looks like three channels.
+What this channel actually airs is long IRL streams, most of them five hours
+and up, whole days abroad. So the artwork is about a day passing, not about a
+loop: the first draft was a green replay arrow around the digits 247, which is
+what every channel with 247 in its name already looks like.
 
-Sizes are what Kick asks for, doubled so the artwork stays sharp on a dense
-screen: the banner floor is 1200x134 and the avatar has to sit between 128 and
-3000 square. The avatar is drawn for the circle Kick crops it to, and for the
-40 pixels it becomes next to a chat message, which is why the mark is a ring
-and three digits and not a wordmark nobody could read.
+The avatar is a sunrise at the horizon, drawn edge to edge because Kick crops
+it to a circle, and readable as a warm band with a bright dot at the forty
+pixels it becomes beside a chat message. The banner is a twenty four hour
+timeline with a playhead on it, which is the only shape that makes sense of a
+strip nine times wider than it is tall and is also, literally, what the channel
+is.
+
+Type is Bahnschrift Bold Condensed, the DIN that signage and departure boards
+are set in, because the subject is travel and because DejaVu is what everything
+else already looks like.
+
+Sizes are what Kick asks for, doubled so they stay sharp: the banner floor is
+1200x134 and the avatar has to sit between 128 and 3000 square.
 """
 import pathlib
 import sys
 
-from PIL import Image, ImageDraw, ImageFont
+import numpy as np
+from PIL import Image, ImageChops, ImageDraw, ImageFilter, ImageFont
 
-BG = (12, 15, 22)
-GREEN = (83, 252, 24)
-WHITE = (255, 255, 255)
-GREY = (139, 146, 160)
-DIM = (26, 32, 48)
+# A day, in the order it happens. Not a palette picked to look technical.
+NIGHT = (7, 11, 24)
+DEEP = (20, 34, 78)
+BLUE_HOUR = (58, 42, 82)
+DAWN = (232, 112, 58)
+GLOW = (255, 194, 122)
+NOON = (255, 222, 175)
+DUSK = (255, 94, 58)
+LAND = (6, 8, 14)
+WARM = (246, 239, 228)
+MUTED = (150, 140, 158)
 
-FONTS = pathlib.Path(__file__).resolve().parent / "fonts"
-# matplotlib ships the same DejaVu the server draws titles with, so the artwork
-# and the on-air overlay are the same typeface without shipping a font here
+WIN = pathlib.Path("C:/Windows/Fonts")
+DISPLAY = str(WIN / "bahnschrift.ttf")
+DISPLAY_FACE = "Bold Condensed"
 try:
     import matplotlib
-    FONTS = pathlib.Path(matplotlib.__file__).parent / "mpl-data" / "fonts" / "ttf"
-except ImportError:
-    pass
-BOLD = str(FONTS / "DejaVuSans-Bold.ttf")
-MONO = str(FONTS / "DejaVuSansMono-Bold.ttf")
+    _MPL = pathlib.Path(matplotlib.__file__).parent / "mpl-data" / "fonts" / "ttf"
+    MONO = str(_MPL / "DejaVuSansMono-Bold.ttf")
+    FALLBACK = str(_MPL / "DejaVuSans-Bold.ttf")
+except ImportError:  # pragma: no cover
+    MONO = FALLBACK = str(WIN / "consolab.ttf")
 
-SCALE = 3  # drawn this much larger, then reduced: round shapes need it
+SCALE = 3  # drawn this much larger, then reduced: gradients and arcs need it
+
+
+def display(size):
+    """The signage face, at its condensed bold instance.
+
+    Bahnschrift is one variable font and loads at Regular, which is too light
+    to be a wordmark. A machine without it falls back rather than failing.
+    """
+    try:
+        font = ImageFont.truetype(DISPLAY, size)
+        font.set_variation_by_name(DISPLAY_FACE)
+        return font
+    except (OSError, AttributeError):
+        return ImageFont.truetype(FALLBACK, size)
 
 
 def split_name(channel):
-    """A channel like abc247 reads as a name and a number. Both get their own
-    weight in the artwork, and a name without a trailing number keeps all of
-    it."""
+    """A channel like abc247 reads as a name and a number, and the two are set
+    differently. A name with no trailing number keeps all of it."""
     head = channel.rstrip("0123456789")
     return head or channel, channel[len(head):]
 
 
-def tracked(draw, xy, text, font, fill, tracking):
-    """Text with letters spaced out, which Pillow will not do on its own.
+def ramp(stops, n, vertical=True):
+    """A gradient of n pixels from (position, colour) stops.
 
-    Returns the width, so a caller can centre what it just drew or put
-    something after it.
+    Built as an array and stretched, because a python loop over nine million
+    pixels takes longer than the rest of this file put together.
     """
+    pos = np.array([p for p, _ in stops], dtype=float)
+    cols = np.array([c for _, c in stops], dtype=float)
+    t = np.linspace(0.0, 1.0, n)
+    out = np.stack([np.interp(t, pos, cols[:, k]) for k in range(3)], axis=1)
+    out = out.astype(np.uint8)
+    return out.reshape(n, 1, 3) if vertical else out.reshape(1, n, 3)
+
+
+def tape(im, spacing, strength):
+    """Thin dark lines across the picture.
+
+    Everything here is a recording of a day that already happened, and this is
+    the cheapest way to say so without drawing a tape or a play button.
+    """
+    lines = Image.new("L", im.size, 0)
+    d = ImageDraw.Draw(lines)
+    for y in range(0, im.size[1], spacing):
+        d.line([(0, y), (im.size[0], y)], fill=strength, width=max(1, spacing // 6))
+    im.paste(Image.new("RGB", im.size, (0, 0, 0)), (0, 0), lines)
+    return im
+
+
+def tracked(d, xy, text, font, fill, tracking):
+    """Letter-spaced text, which Pillow will not do on its own."""
     x, y = xy
     for ch in text:
-        if draw is not None:
-            draw.text((x, y), ch, font=font, fill=fill)
-        x += draw.textlength(ch, font=font) + tracking
+        d.text((x, y), ch, font=font, fill=fill)
+        x += d.textlength(ch, font=font) + tracking
     return x - xy[0] - tracking
 
 
-def width_of(draw, text, font, tracking):
-    x = 0
-    for ch in text:
-        x += draw.textlength(ch, font=font) + tracking
-    return x - tracking
+def width_of(d, text, font, tracking):
+    return sum(d.textlength(c, font=font) + tracking for c in text) - tracking
 
 
 def avatar(channel, size=1024):
-    """A ring, and the number inside it.
+    """A sunrise, drawn to the edges because Kick crops it to a circle.
 
-    Kick crops this to a circle and shows it at 40 pixels beside every chat
-    message. So there is one shape and one word in it: a replay ring, because
-    the whole channel is a loop, and the number, because that is the part of
-    the name that survives being small.
+    No letters in it. The channel name is shown beside the avatar everywhere it
+    appears, so spending the mark on repeating it buys nothing, and at forty
+    pixels a word is a smudge while a warm band with a bright dot is still a
+    warm band with a bright dot.
     """
     s = size * SCALE
-    im = Image.new("RGB", (s, s), BG)
+    # High, so the black below it stays a base and does not become half the
+    # mark: at forty pixels the useful part is the band, and a horizon at the
+    # middle left it two pixels tall.
+    horizon = 0.660
+
+    sky = Image.fromarray(np.repeat(ramp([
+        (0.000, NIGHT), (0.260, (12, 20, 50)), (0.440, DEEP),
+        (0.560, BLUE_HOUR), (0.614, DAWN), (horizon, GLOW),
+    ], s), s, axis=1))
+
+    im = sky.copy()
     d = ImageDraw.Draw(im)
-    name, number = split_name(channel)
 
-    # the ring, left open at the top right for the arrow head
-    import math
-    r = int(s * 0.375)
-    w = int(s * 0.052)
-    box = (s // 2 - r, s // 2 - r, s // 2 + r, s // 2 + r)
-    gap_at = -32
-    # started a few degrees behind the head so the stroke runs under its base:
-    # butted exactly against it, the flat cap leaves a nick in the ring
-    d.arc(box, start=gap_at - 5, end=298, fill=GREEN, width=w)
+    # the sun, sitting in the horizon rather than above it: the land is drawn
+    # over its lower third a few lines down
+    r = int(s * 0.190)
+    cx, cy = int(s * 0.430), int(s * 0.600)
+    # the halo first, added rather than pasted, so it lights the sky instead of
+    # sitting on it as a grey disc
+    glow = Image.new("RGB", (s, s), (0, 0, 0))
+    ImageDraw.Draw(glow).ellipse([cx - r * 2.2, cy - r * 2.2, cx + r * 2.2, cy + r * 2.2],
+                                 fill=(96, 44, 20))
+    im = ImageChops.add(im, glow.filter(ImageFilter.GaussianBlur(s * 0.07)))
+    d = ImageDraw.Draw(im)
+    # the disc itself is not one flat colour: it cools towards the top and
+    # burns where it meets the haze, which is what keeps it from reading as a
+    # sticker
+    body = Image.fromarray(np.repeat(ramp([
+        (0.0, (255, 241, 214)), (0.6, NOON), (1.0, (255, 178, 104)),
+    ], 2 * r), 2 * r, axis=1))
+    disc = Image.new("L", (2 * r, 2 * r), 0)
+    ImageDraw.Draw(disc).ellipse([0, 0, 2 * r - 1, 2 * r - 1], fill=255)
+    im.paste(body, (cx - r, cy - r), disc)
 
-    # The head sits ON the ring and points along it, not away from it. Built
-    # from the radius it belongs to: tangent for the direction it travels,
-    # radius for its thickness. Pointed outwards instead, it reads as a
-    # triangle someone dropped next to a circle.
-    a = math.radians(gap_at)
-    u = (math.cos(a), math.sin(a))            # outwards
-    t = (math.sin(a), -math.cos(a))           # along the ring, towards the gap
-    cx, cy = s / 2 + r * u[0], s / 2 + r * u[1]
-    reach, half = w * 1.55, w * 1.15
-    back = w * 0.45
-    d.polygon([(cx + t[0] * reach, cy + t[1] * reach),
-               (cx - t[0] * back + u[0] * half, cy - t[1] * back + u[1] * half),
-               (cx - t[0] * back - u[0] * half, cy - t[1] * back - u[1] * half)],
-              fill=GREEN)
+    land = Image.fromarray(np.repeat(ramp([
+        (0.0, (14, 12, 20)), (0.25, LAND), (1.0, (3, 4, 8)),
+    ], s - int(s * horizon)), s, axis=1))
+    im.paste(land, (0, int(s * horizon)))
+    # the line itself, thin and bright, where the light stops
+    d.rectangle([0, int(s * horizon) - int(s * 0.004), s, int(s * horizon)],
+                fill=(255, 176, 110))
 
-    # the number, as large as fits between the ring's inner edges
-    digits = number or name[:3].upper()
-    want = int(r * 1.32)
-    font = ImageFont.truetype(BOLD, want)
-    while d.textlength(digits, font=font) > r * 1.35:
-        want = int(want * 0.96)
-        font = ImageFont.truetype(BOLD, want)
-    bb = d.textbbox((0, 0), digits, font=font)
-    d.text(((s - (bb[2] - bb[0])) / 2 - bb[0],
-            (s - (bb[3] - bb[1])) / 2 - bb[1] - s * 0.045), digits,
-           font=font, fill=WHITE)
+    tape(im, max(2, int(s * 0.019)), 20)
 
-    # the name under it, small enough to read as a texture when the avatar is
-    # forty pixels wide and as a word when it is not
-    if number:
-        small = ImageFont.truetype(MONO, int(s * 0.062))
-        label = name.upper()
-        track = s * 0.022
-        wide = width_of(d, label, small, track)
-        tracked(d, ((s - wide) / 2, s * 0.615), label, small, GREEN, track)
+    # a vignette, so the disc still reads as a disc once Kick rounds it off
+    vg = Image.new("L", (s, s), 0)
+    ImageDraw.Draw(vg).ellipse([int(-s * 0.18)] * 2 + [int(s * 1.18)] * 2, fill=255)
+    vg = vg.filter(ImageFilter.GaussianBlur(s * 0.06))
+    im = Image.composite(im, Image.new("RGB", (s, s), (2, 3, 7)), vg)
 
     return im.resize((size, size), Image.LANCZOS)
 
 
 def banner(channel, width=2400, height=268):
-    """The strip across the top of the channel page.
+    """A day, twice over, with a playhead on it.
 
-    Kick's floor is 1200x134 and the shape is nearly nine to one, so this is a
-    line of type and nothing else. It says what the channel is in three words
-    and then says what it is not, because a rerun channel that does not say so
-    is a channel pretending to be live.
+    Nine to one is the shape of a timeline and of nothing else, so that is what
+    this is: the colour along the strip is the hour, the ticks are what hour,
+    and the playhead is where the channel happens to be. It never reaches the
+    end because there is not one.
     """
     w, h = width * SCALE, height * SCALE
-    im = Image.new("RGB", (w, h), BG)
-    d = ImageDraw.Draw(im)
     name, number = split_name(channel)
+    im = Image.new("RGB", (w, h), NIGHT)
+    d = ImageDraw.Draw(im)
 
-    # A tape running under the type, filling a strip that is nine times wider
-    # than it is tall and would otherwise be a hole in the middle. Ticks, with
-    # a taller one every sixth, because what this channel actually is, is a
-    # timeline that never stops. Dim on purpose: it is a texture, not a second
-    # headline.
-    pad = int(w * 0.042)
-    step = int(w * 0.0105)
-    for n, tx in enumerate(range(pad, w - pad, step)):
-        tall = (n % 6 == 0)
-        half = int(h * (0.085 if tall else 0.045))
-        d.rectangle([tx, int(h * 0.5) - half, tx + max(1, int(w * 0.0011)),
-                     int(h * 0.5) + half], fill=DIM)
+    # two and a half days across the strip, starting before dawn
+    cycle = [(0.00, NIGHT), (0.17, DEEP), (0.25, DAWN), (0.34, NOON),
+             (0.56, NOON), (0.68, DUSK), (0.78, DEEP), (1.00, NIGHT)]
+    days = 2.5
+    n = int(w * days)
+    row = ramp(cycle, int(w / days) + 1, vertical=False)[0]
+    strip = np.concatenate([row] * (int(days) + 1), axis=0)[:w]
+    top, bot = int(h * 0.50), int(h * 0.795)
+    im.paste(Image.fromarray(np.repeat(strip.reshape(1, w, 3), bot - top, axis=0)),
+             (0, top))
+    # crop() hands back a copy, so the lines have to be pasted back or they are
+    # drawn on an image nobody keeps
+    im.paste(tape(im.crop((0, top, w, bot)), max(2, int(h * 0.05)), 30), (0, top))
 
-    # the same left rule the standby card uses
-    rule = int(h * 0.012)
-    d.rectangle([pad, int(h * 0.20), pad + rule, int(h * 0.80)], fill=GREEN)
+    # hours under it, small, so the strip reads as a clock and not as a ribbon
+    hours = ImageFont.truetype(MONO, int(h * 0.072))
+    track = h * 0.03
+    per = w / days
+    for k in range(int(days * 4) + 1):
+        x = k * per / 4
+        if x > w - h * 0.1:
+            break
+        label = "%02d" % ((k % 4) * 6)
+        d.rectangle([x, bot, x + max(1, int(w * 0.0008)), bot + int(h * 0.045)],
+                    fill=(70, 62, 80))
+        tracked(d, (x + h * 0.03, bot + int(h * 0.075)), label, hours, MUTED, track)
 
-    x = pad + rule + int(w * 0.016)
-    title = ImageFont.truetype(BOLD, int(h * 0.30))
+    # the playhead: a line and a head, the only bright vertical thing here
+    px = int(w * 0.615)
+    d.rectangle([px, top - int(h * 0.06), px + max(2, int(w * 0.0016)), bot + int(h * 0.05)],
+                fill=WARM)
+    head = int(h * 0.055)
+    d.polygon([(px - head, top - int(h * 0.06)), (px + head, top - int(h * 0.06)),
+               (px, top + int(h * 0.02))], fill=WARM)
+
+    pad = int(w * 0.038)
+    title = display(int(h * 0.36))
     bb = d.textbbox((0, 0), name, font=title)
-    top = int(h * 0.22) - bb[1]
-    d.text((x, top), name, font=title, fill=WHITE)
+    d.text((pad, int(h * 0.055) - bb[1]), name, font=title, fill=WARM)
     if number:
-        d.text((x + d.textlength(name, font=title), top), number,
-               font=title, fill=GREEN)
+        d.text((pad + d.textlength(name, font=title), int(h * 0.055) - bb[1]),
+               number, font=title, fill=DAWN)
 
-    sub = ImageFont.truetype(BOLD, int(h * 0.155))
-    d.text((x, int(h * 0.575)), "VODs, around the clock", font=sub, fill=GREY)
-
-    # what it is not, kept to the right so it reads as a footnote rather than a
-    # headline, and in the mono the rest of the channel uses for machine talk
-    note = ImageFont.truetype(MONO, int(h * 0.085))
-    track = h * 0.028
-    for n, line in enumerate(("FAN-RUN REBROADCAST", "NOTHING HERE IS LIVE")):
-        wide = width_of(d, line, note, track)
-        tracked(d, (w - pad - wide, int(h * (0.34 + n * 0.22))), line, note,
-                GREY if n == 0 else GREEN, track)
+    # Set against the wordmark rather than floating above it: the first line
+    # sits on its baseline and the second under it, so the top half reads as one
+    # row and not as two things that happen to share a strip.
+    note = ImageFont.truetype(MONO, int(h * 0.082))
+    small = ImageFont.truetype(MONO, int(h * 0.068))
+    for k, (line, font, fill) in enumerate((
+            ("SOMEBODY ELSE'S DAYS, ON A LOOP", note, WARM),
+            ("FAN-RUN REBROADCAST. NOTHING HERE IS LIVE.", small, MUTED))):
+        wide = width_of(d, line, font, track)
+        tracked(d, (w - pad - wide, int(h * (0.13 + k * 0.155))), line, font,
+                fill, track)
 
     return im.resize((width, height), Image.LANCZOS)
 
