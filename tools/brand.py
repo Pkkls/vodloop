@@ -116,65 +116,68 @@ def width_of(d, text, font, tracking):
     return sum(d.textlength(c, font=font) + tracking for c in text) - tracking
 
 
-def avatar(channel, size=1024):
-    """A sunrise, drawn to the edges because Kick crops it to a circle.
+def hour_colour(hour):
+    """The colour of an hour of the day, 0 to 24.
 
-    No letters in it. The channel name is shown beside the avatar everywhere it
-    appears, so spending the mark on repeating it buys nothing, and at forty
-    pixels a word is a smudge while a warm band with a bright dot is still a
-    warm band with a bright dot.
+    One ramp, used by both surfaces: the banner is this unrolled and the avatar
+    is the same thing bent into a circle. Two marks built from one idea read as
+    one channel; two marks built from two ideas read as two.
+    """
+    cycle = [(0.00, NIGHT), (0.17, DEEP), (0.26, DAWN), (0.36, NOON),
+             (0.58, NOON), (0.70, DUSK), (0.80, DEEP), (1.00, NIGHT)]
+    row = ramp(cycle, 24 * 8, vertical=False)[0]
+    return tuple(int(v) for v in row[min(int(hour / 24 * 24 * 8), 24 * 8 - 1)])
+
+
+def avatar(channel, size=1024, now_hour=14.5):
+    """A day as a dial: twenty four blocks of an hour, and a mark on the one
+    that is playing.
+
+    The draft before this was a sunrise with scanlines over it. It was pretty
+    and it was stock: the same picture sits behind half the lo-fi channels on
+    the internet and said nothing about this one. Blocks say something. They
+    say the day is the unit here, which is exactly what a channel airing five
+    to fifteen hour streams is about.
+
+    Drawn edge to edge because Kick crops it to a circle. At the forty pixels
+    it becomes beside a chat message the blocks blur into one warm-to-dark ring
+    with a bright nick in it, which is still nobody else's avatar.
     """
     s = size * SCALE
-    # High, so the black below it stays a base and does not become half the
-    # mark: at forty pixels the useful part is the band, and a horizon at the
-    # middle left it two pixels tall.
-    horizon = 0.660
-
-    sky = Image.fromarray(np.repeat(ramp([
-        (0.000, NIGHT), (0.260, (12, 20, 50)), (0.440, DEEP),
-        (0.560, BLUE_HOUR), (0.614, DAWN), (horizon, GLOW),
-    ], s), s, axis=1))
-
-    im = sky.copy()
+    im = Image.new("RGB", (s, s), (6, 8, 16))
     d = ImageDraw.Draw(im)
 
-    # the sun, sitting in the horizon rather than above it: the land is drawn
-    # over its lower third a few lines down
-    r = int(s * 0.190)
-    cx, cy = int(s * 0.430), int(s * 0.600)
-    # the halo first, added rather than pasted, so it lights the sky instead of
-    # sitting on it as a grey disc
-    glow = Image.new("RGB", (s, s), (0, 0, 0))
-    ImageDraw.Draw(glow).ellipse([cx - r * 2.2, cy - r * 2.2, cx + r * 2.2, cy + r * 2.2],
-                                 fill=(96, 44, 20))
-    im = ImageChops.add(im, glow.filter(ImageFilter.GaussianBlur(s * 0.07)))
-    d = ImageDraw.Draw(im)
-    # the disc itself is not one flat colour: it cools towards the top and
-    # burns where it meets the haze, which is what keeps it from reading as a
-    # sticker
-    body = Image.fromarray(np.repeat(ramp([
-        (0.0, (255, 241, 214)), (0.6, NOON), (1.0, (255, 178, 104)),
-    ], 2 * r), 2 * r, axis=1))
-    disc = Image.new("L", (2 * r, 2 * r), 0)
-    ImageDraw.Draw(disc).ellipse([0, 0, 2 * r - 1, 2 * r - 1], fill=255)
-    im.paste(body, (cx - r, cy - r), disc)
+    outer = int(s * 0.412)
+    thick = int(s * 0.140)
+    box = [s // 2 - outer, s // 2 - outer, s // 2 + outer, s // 2 + outer]
+    gap = 1.6  # degrees, so the blocks read as blocks and not as a gradient
 
-    land = Image.fromarray(np.repeat(ramp([
-        (0.0, (14, 12, 20)), (0.25, LAND), (1.0, (3, 4, 8)),
-    ], s - int(s * horizon)), s, axis=1))
-    im.paste(land, (0, int(s * horizon)))
-    # the line itself, thin and bright, where the light stops
-    d.rectangle([0, int(s * horizon) - int(s * 0.004), s, int(s * horizon)],
-                fill=(255, 176, 110))
+    # midnight at the top, noon at the bottom, clockwise. PIL measures from
+    # three o'clock, hence the quarter turn.
+    for hour in range(24):
+        a0 = hour * 15 - 90 + gap / 2
+        d.arc(box, start=a0, end=a0 + 15 - gap, fill=hour_colour(hour + 0.5),
+              width=thick)
 
-    tape(im, max(2, int(s * 0.019)), 20)
+    # No glow in the middle. A blurred warm ellipse in there read as a stain on
+    # the lens rather than as light, and the dial is stronger as a clean ring
+    # around a hole.
 
-    # a vignette, so the disc still reads as a disc once Kick rounds it off
-    vg = Image.new("L", (s, s), 0)
-    ImageDraw.Draw(vg).ellipse([int(-s * 0.18)] * 2 + [int(s * 1.18)] * 2, fill=255)
-    vg = vg.filter(ImageFilter.GaussianBlur(s * 0.06))
-    im = Image.composite(im, Image.new("RGB", (s, s), (2, 3, 7)), vg)
+    # The playhead sits in the dark margin OUTSIDE the ring, not across it.
+    # Drawn through the blocks it was a white thread nobody could see, and
+    # colouring the current block white fails too: land it on a pale afternoon
+    # hour and it disappears into its neighbours. The margin is dark all the way
+    # round, so a warm mark there reads whatever hour it points at.
+    import math
+    a = math.radians(now_hour * 15 - 90)
+    side = math.radians(4.6)
+    tip, base = outer + s * 0.012, outer + s * 0.064
+    d.polygon([(s / 2 + tip * math.cos(a), s / 2 + tip * math.sin(a)),
+               (s / 2 + base * math.cos(a - side), s / 2 + base * math.sin(a - side)),
+               (s / 2 + base * math.cos(a + side), s / 2 + base * math.sin(a + side))],
+              fill=WARM)
 
+    tape(im, max(2, int(s * 0.024)), 9)
     return im.resize((size, size), Image.LANCZOS)
 
 
@@ -191,24 +194,25 @@ def banner(channel, width=2400, height=268):
     im = Image.new("RGB", (w, h), NIGHT)
     d = ImageDraw.Draw(im)
 
-    # two and a half days across the strip, starting before dawn
-    cycle = [(0.00, NIGHT), (0.17, DEEP), (0.25, DAWN), (0.34, NOON),
-             (0.56, NOON), (0.68, DUSK), (0.78, DEEP), (1.00, NIGHT)]
+    # Two and a half days, an hour to a block. Blocks rather than a smooth
+    # ramp, and the same twenty four the avatar is made of: a gradient is
+    # decoration and you read nothing off it, while blocks are a timetable and
+    # you can count them. Unrolled here, rolled up there, one idea twice.
     days = 2.5
-    n = int(w * days)
-    row = ramp(cycle, int(w / days) + 1, vertical=False)[0]
-    strip = np.concatenate([row] * (int(days) + 1), axis=0)[:w]
+    per = w / days
+    block = per / 24
+    gap = max(1, int(block * 0.11))
     top, bot = int(h * 0.50), int(h * 0.795)
-    im.paste(Image.fromarray(np.repeat(strip.reshape(1, w, 3), bot - top, axis=0)),
-             (0, top))
-    # crop() hands back a copy, so the lines have to be pasted back or they are
-    # drawn on an image nobody keeps
-    im.paste(tape(im.crop((0, top, w, bot)), max(2, int(h * 0.05)), 30), (0, top))
+    k = 0
+    while k * block < w:
+        x = k * block
+        d.rectangle([int(x), top, int(x + block) - gap, bot],
+                    fill=hour_colour(k % 24 + 0.5))
+        k += 1
 
     # hours under it, small, so the strip reads as a clock and not as a ribbon
     hours = ImageFont.truetype(MONO, int(h * 0.072))
     track = h * 0.03
-    per = w / days
     for k in range(int(days * 4) + 1):
         x = k * per / 4
         if x > w - h * 0.1:
@@ -218,13 +222,18 @@ def banner(channel, width=2400, height=268):
                     fill=(70, 62, 80))
         tracked(d, (x + h * 0.03, bot + int(h * 0.075)), label, hours, MUTED, track)
 
-    # the playhead: a line and a head, the only bright vertical thing here
-    px = int(w * 0.615)
-    d.rectangle([px, top - int(h * 0.06), px + max(2, int(w * 0.0016)), bot + int(h * 0.05)],
-                fill=WARM)
+    # The playhead marks the hour by ringing its block, not by drawing a line
+    # through it: run across a pale afternoon the line vanished, which is the
+    # same contrast problem the avatar's marker had. The head stays above, in
+    # the dark, where it is legible whatever colour the hour is.
+    which = int(w * 0.615 / block)
+    bx = which * block
     head = int(h * 0.055)
-    d.polygon([(px - head, top - int(h * 0.06)), (px + head, top - int(h * 0.06)),
-               (px, top + int(h * 0.02))], fill=WARM)
+    d.rectangle([int(bx), top, int(bx + block) - gap, bot],
+                outline=WARM, width=max(2, int(h * 0.022)))
+    mid = int(bx + (block - gap) / 2)
+    d.polygon([(mid - head, top - int(h * 0.10)), (mid + head, top - int(h * 0.10)),
+               (mid, top - int(h * 0.015))], fill=WARM)
 
     pad = int(w * 0.038)
     title = display(int(h * 0.36))
