@@ -64,6 +64,8 @@ POOL_FILE = common.STATE / "pool.json"
 HANDED_FILE = common.STATE / "handed.json"
 # Ids dont la source elle-meme est defectueuse. Ecrit par prep, lu ici.
 UNUSABLE_FILE = common.STATE / "unusable.json"
+# Combien de fois une cle a ete remise a la carte sans jamais arriver.
+LOST_FILE = common.STATE / "lost.json"
 
 # A ceiling, not the real limit: disk is. Set above what the disk can hold so
 # the equilibrium is decided by free space, which is the thing that actually
@@ -167,6 +169,23 @@ RANDOM_PICK = bool(os.environ.get("VODLOOP_RANDOM_PICK"))
 # 1080p, which puts the ceiling near three and a half hours. Unset, nothing is
 # refused for being long, which is what a channel taking parts wants.
 MAX_SECONDS = int(os.environ.get("VODLOOP_MAX_SECONDS") or 0)
+# A key handed to the board and still absent from both the library and what
+# prep has played did not arrive. It is not "offered recently", it is a
+# failure, and the refetch window was never meant for failures: it exists so a
+# video that PLAYED is not fetched again straight away.
+#
+# Left alone the two meanings collapse and the pool shrinks on every bad day
+# the board has. Measured 2026-09-14 on the second channel: seven of the
+# fifteen entries in the ledger were keys that never landed, held out of the
+# draw for twenty one days each. Nobody would ever have noticed: the channel
+# simply had fewer and fewer things it was allowed to ask for.
+LOST_AFTER_SECONDS = 6 * 3600
+# How many times a key may be lost before it is left alone for the full
+# window. Without it a key the board cannot fetch at all comes back every run,
+# and the board spends its day on six doomed attempts per offer. Three is
+# enough to ride out a wall day and short enough that a dead video stops
+# costing anything.
+MAX_LOSSES = 3
 
 # A channel whose sources are mostly streams of four to eleven hours cannot take
 # them whole: the board's card caps a file at 4 Go, and at 720p that is under
@@ -354,6 +373,49 @@ def estimate(key, durations, rate):
     worth, or an hour, is wrong in the safe direction.
     """
     return (durations.get(key) or PART_SECONDS or 3600) * rate
+
+
+def played_keys():
+    """Keys that reached the library at some point, from what prep has played.
+
+    A file still in the library is held; one that played and was retired is
+    gone from both, and only prep's history remembers it existed. Without this
+    a retired video would look exactly like one that never arrived.
+    """
+    seen = set()
+    for path in prep.load_history():
+        key = key_of(pathlib.Path(path))
+        if key:
+            seen.add(key)
+    return seen
+
+
+def free_the_lost(handed, held, now):
+    """Give back to the draw every key the board was asked for and never
+    delivered, and stop asking for the ones it keeps failing to deliver.
+
+    Returns the keys freed, having already written both ledgers: the next run
+    has to see this even if this one dies on the line after.
+    """
+    landed = held | played_keys()
+    losses = load(LOST_FILE, {})
+    freed = []
+    for key, at in list(handed.items()):
+        if key in landed or now - at <= LOST_AFTER_SECONDS:
+            continue
+        count = losses.get(key, 0) + 1
+        losses[key] = count
+        if count < MAX_LOSSES:
+            handed.pop(key, None)
+            freed.append(key)
+    if freed or losses:
+        # On garde les comptes AU plafond: ce sont eux qui bloquent. Les purger
+        # remettait le compteur a zero et la cle repartait pour trois pertes,
+        # donc le plafond ne plafonnait rien. Seules les cles finalement
+        # arrivees oublient leur ardoise.
+        save(LOST_FILE, {k: n for k, n in losses.items() if k not in landed})
+        save(HANDED_FILE, handed)
+    return freed
 
 
 def unusable_ids():
@@ -578,6 +640,14 @@ def main(argv):
     # A part is fetched, played and retired while its neighbours are still to
     # come, so on a source cut into parts the cooldown has to outlive the whole
     # stream: at six hours the channel loops on part one and never reaches two.
+    # Autonomous repair, before anything reads the ledger: a channel that is
+    # not being resupplied has to widen what it may ask for by itself. There is
+    # nobody to tell, the machine that would be told can be switched off, and
+    # the only two things running are this box and the board.
+    freed = free_the_lost(handed, library_ids(), now)
+    if freed:
+        print(f"{len(freed)} cle(s) remise(s) et jamais arrivee(s), rendue(s) au tirage")
+
     cooldown = REFETCH_SECONDS or HANDED_COOLDOWN_SECONDS
     recent = {k for k, at in handed.items() if now - at < cooldown}
     # Still on its way, which is a different question from may it be offered

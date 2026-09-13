@@ -469,6 +469,46 @@ try:
          collector.common.BUDGET_BYTES, collector.common.bytes_used,
          collector.prep.runway_seconds) = saved
 
+    print("a channel repairs its own ledger, with nobody watching")
+    # Mesure 2026-09-14: sept des quinze entrees du registre etaient des cles
+    # remises a la carte qui ne sont jamais arrivees, bloquees 21 jours chacune.
+    # La fenetre de refetch existe pour qu'une video DEJA JOUEE ne reparte pas
+    # tout de suite; s'en servir pour les echecs retrecit le tirage a chaque
+    # mauvaise journee de la carte, et personne ne le verrait jamais.
+    import time as _time
+    _now = _time.time()
+    real_lost, real_hist = collector.LOST_FILE, collector.prep.load_history
+    tmpdir = pathlib.Path(tempfile.mkdtemp())
+    try:
+        collector.LOST_FILE = tmpdir / "lost.json"
+        collector.HANDED_FILE = tmpdir / "handed.json"
+        collector.prep.load_history = lambda: {"/lib/deja joue-jouee123456.mkv": {"plays": 1}}
+        vieux = _now - collector.LOST_AFTER_SECONDS - 60
+        ledger = {"perdue00001": vieux, "jouee123456": vieux,
+                  "toutefraiche": _now, "enbiblio0001": vieux}
+        freed = collector.free_the_lost(ledger, {"enbiblio0001"}, _now)
+        check("la cle jamais arrivee revient au tirage", freed == ["perdue00001"],
+              str(freed))
+        check("celle qui est passee a l'antenne reste bloquee",
+              "jouee123456" in ledger)
+        check("celle qui est en bibliotheque aussi", "enbiblio0001" in ledger)
+        check("et celle d'il y a cinq minutes n'est pas declaree perdue",
+              "toutefraiche" in ledger)
+
+        # une cle que la carte n'arrive PAS a ramener ne doit pas revenir sans
+        # fin: trois pertes et on la laisse tranquille
+        for essai in range(2, 5):
+            ledger["perdue00001"] = vieux
+            freed = collector.free_the_lost(ledger, set(), _now)
+        check("apres trois pertes elle cesse d'etre reproposee",
+              freed == [] and "perdue00001" in ledger, str(freed))
+        # le temoin: une autre cle, elle, sort toujours
+        ledger["autre0000001"] = vieux
+        check("temoin: une cle qui n'a perdu qu'une fois sort quand meme",
+              collector.free_the_lost(ledger, set(), _now) == ["autre0000001"])
+    finally:
+        collector.LOST_FILE, collector.prep.load_history = real_lost, real_hist
+
     print("a channel that only wants whole hours")
     # Measured 2026-09-13 on the second channel, left with the defaults: the two
     # videos the collector chose for it were 38 and 21 minutes. Both rules were
