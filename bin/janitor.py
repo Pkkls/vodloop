@@ -31,7 +31,7 @@ sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 import common
 import prep
 
-LIBRARY = pathlib.Path("/home/ubuntu/videos")
+LIBRARY = common.LIBRARY_DIR
 MEDIA = (".mp4", ".mkv")
 # Comfortably above prep's MIN_FREE_BYTES: reaching prep's floor is the failure,
 # so the janitor has to act well before it. Lowered from 8G when the channel
@@ -44,6 +44,14 @@ MEDIA = (".mp4", ".mkv")
 # what this was until 2026-09-08, free space settled just under the collector's
 # threshold and no video was ever fetched again.
 TARGET_FREE_BYTES = 10 * 1024 ** 3
+# With a share of the disk (common.BUDGET_BYTES) the two numbers above change
+# meaning. Retiring is decided by this channel's own bytes, down to this far
+# under its share, which is the same 2 Go band below the collector's line that
+# 10 against 8 Go free was. Free space keeps only a floor, one Go above where
+# prep stops, because it belongs to both channels: set at 10 Go it would have
+# this retire its own files for the neighbour's arrivals.
+BUDGET_RETIRE_UNDER_BYTES = int(3.5 * 1024 ** 3)
+SHARED_FREE_FLOOR_BYTES = common.MIN_FREE_BYTES + 1024 ** 3
 # Below this much unplayed video, nothing more is retired whatever the disk
 # says: a full disk is a problem, dead air is the problem. Shared with prep,
 # which retires for a different reason and would empty the same library through
@@ -104,26 +112,37 @@ def main(argv):
     total = len([p for p in LIBRARY.iterdir()
                  if p.is_file() and p.suffix.lower() in MEDIA]) if LIBRARY.is_dir() else 0
 
-    over = max(0, total - MAX_LIBRARY_FILES)
-    print(f"libre={before / 1024 ** 3:.1f}G cible={TARGET_FREE_BYTES / 1024 ** 3:.1f}G "
+    budget = common.BUDGET_BYTES
+    target_free = SHARED_FREE_FLOOR_BYTES if budget else TARGET_FREE_BYTES
+    used = common.bytes_used(LIBRARY) if budget else 0
+    target_used = budget - BUDGET_RETIRE_UNDER_BYTES
+
+    def satisfied(freed, kept):
+        # keep going while the disk, the share or the ceiling asks for it
+        return (before + freed >= target_free
+                and (not budget or used - freed <= target_used)
+                and kept <= MAX_LIBRARY_FILES)
+
+    share = (f" part={used / 1024 ** 3:.1f}/{budget / 1024 ** 3:.1f}G "
+             f"cible<={target_used / 1024 ** 3:.1f}G" if budget else "")
+    print(f"libre={before / 1024 ** 3:.1f}G cible={target_free / 1024 ** 3:.1f}G{share} "
           f"bibliotheque={total} plafond={MAX_LIBRARY_FILES} "
           f"reserve={int(prep.runway_seconds() / 60)}min "
           f"plancher={MIN_RUNWAY_SECONDS // 60}min")
-    if before >= TARGET_FREE_BYTES and over == 0:
+    if satisfied(0, total):
         print("rien a faire")
         return 0
 
     freed = 0
     kept = total
     for path in retirable(queue):
-        # keep going while either the disk or the ceiling asks for it
-        if before + freed >= TARGET_FREE_BYTES and kept <= MAX_LIBRARY_FILES:
+        if satisfied(freed, kept):
             break
         left = prep.runway_seconds(ignoring=path)
         if left < MIN_RUNWAY_SECONDS:
             print(f"plancher atteint: sans {path.name[:40]} il resterait "
                   f"{int(left / 60)} min a diffuser, il manque encore "
-                  f"{(TARGET_FREE_BYTES - before - freed) / 1024 ** 3:.1f}G")
+                  f"{max(target_free - before - freed, used - freed - target_used if budget else 0) / 1024 ** 3:.1f}G")
             print("-> le disque ne peut pas etre tenu en retirant des VOD seuls")
             return 1
         size = path.stat().st_size

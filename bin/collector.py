@@ -34,6 +34,8 @@ first two, having been claimed off the inbox, so without the third it would be
 fetched twice.
 """
 import json
+import math
+import os
 import pathlib
 import re
 import shutil
@@ -46,8 +48,10 @@ sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 import common
 import prep
 
-LIBRARY = pathlib.Path("/home/ubuntu/videos")
-INBOX = pathlib.Path("/home/ubuntu/yt2oracle/inbox.txt")
+LIBRARY = common.LIBRARY_DIR
+# The board serves every channel from one inbox per library: inbox.txt for the
+# first, inbox-<name>.txt for a library named videos-<name>.
+INBOX = pathlib.Path(os.environ.get("VODLOOP_INBOX") or "/home/ubuntu/yt2oracle/inbox.txt")
 # What the board publishes about itself every five minutes. It is the only way
 # this side can see how deep the far side's queue is: the board is behind NAT
 # and nothing here can ask it anything.
@@ -128,6 +132,28 @@ MIN_USEFUL_SECONDS = 20 * 60
 VARIETY_MIN_SECONDS = 5 * 60
 VARIETY_MAX_SECONDS = 60 * 60
 
+# A channel whose sources are mostly streams of four to eleven hours cannot take
+# them whole: the board's card caps a file at 4 Go, and at 720p that is under
+# five hours, so 252 of the 369 videos of such a source would fall back to 480p
+# or 360p, and prep refuses 360p. Set, a video longer than this is queued as
+# parts of at most this long, each fetched on its own through
+# --download-sections. Unset, every video is queued whole, as before.
+PART_SECONDS = int(os.environ.get("VODLOOP_PART_SECONDS") or 0)
+# the tallest picture the board is asked for; unset keeps its own ladder
+MAX_HEIGHT = int(os.environ.get("VODLOOP_MAX_HEIGHT") or 0)
+# How long a video handed to the board stays out of the draw. The six hour
+# cooldown is right for a pool of thousands of short videos, where a retired
+# file coming back is a rerun. For a pool of long streams cut in parts it is a
+# loop: part one plays, is retired, and is fetched again before part two ever
+# comes. Unset keeps the cooldown.
+REFETCH_SECONDS = float(os.environ.get("VODLOOP_REFETCH_DAYS") or 0) * 86400
+# With a share of the disk, stop this far under it: the files already handed to
+# the board are counted at their estimated size, and the estimate can be short.
+BUDGET_HEADROOM_BYTES = int(1.5 * 1024 ** 3)
+# bytes per second assumed for a video when the library has nothing measured
+DEFAULT_RATE = 250_000
+PART_KEY = re.compile(r"-([A-Za-z0-9_-]{11})(?:\.(p\d+of\d+))?\.(?:mp4|mkv)$")
+
 # The optional part suffix is not decoration. A stream too long for the board's
 # card arrives as <title>-<id>.p02of04.mp4, and without this the id is not read
 # back off those names at all: library_ids() would come back empty, every video
@@ -191,17 +217,96 @@ def library_ids():
         return set()
     found = set()
     for path in LIBRARY.iterdir():
-        match = VIDEO_ID.search(path.name)
+        match = PART_KEY.search(path.name)
         if match:
             found.add(match.group(1))
+            if match.group(2):
+                found.add(f"{match.group(1)}.{match.group(2)}")
     return found
+
+
+def key_of(path):
+    """The key a library file was fetched under: its id, or id.pNNofMM."""
+    match = PART_KEY.search(pathlib.Path(path).name)
+    if not match:
+        return None
+    return f"{match.group(1)}.{match.group(2)}" if match.group(2) else match.group(1)
 
 
 def inbox_ids():
     try:
-        return set(re.findall(r"[A-Za-z0-9_-]{11}", INBOX.read_text()))
+        text = INBOX.read_text()
     except OSError:
         return set()
+    found = set(re.findall(r"[A-Za-z0-9_-]{11}", text))
+    # a part line names its video and its place in it, and the place is the key
+    for vid, part in re.findall(r"v=([A-Za-z0-9_-]{11})\S*\s+part=(p\d+of\d+)", text):
+        found.add(f"{vid}.{part}")
+    return found
+
+
+def parts_of(vid, secs):
+    """The keys a video is fetched under, each with its range in seconds.
+
+    A video that fits in one part, or whose length is unknown, is one key, the
+    id itself, with no range: fetched whole, exactly as before parts existed.
+    """
+    if not PART_SECONDS or not secs or secs <= PART_SECONDS:
+        return [(vid, None)]
+    count = math.ceil(secs / PART_SECONDS)
+    step = secs / count
+    return [(f"{vid}.p{k:02d}of{count:02d}", (round((k - 1) * step), round(k * step)))
+            for k in range(1, count + 1)]
+
+
+def catalogue():
+    """Each source's keys in order, with every key's duration and part range."""
+    cached = pool()
+    lists, durations, spans = [], {}, {}
+    for source in sources():
+        entry = cached.get(cache_key(source), {})
+        measured = entry.get("dur", {})
+        keys = []
+        for vid in entry.get("ids", []):
+            for key, span in parts_of(vid, measured.get(vid)):
+                keys.append(key)
+                if span:
+                    spans[key] = span
+                    durations[key] = span[1] - span[0]
+                elif vid in measured:
+                    durations[key] = measured[vid]
+        lists.append(keys)
+    return lists, durations, spans
+
+
+def line_for(key, spans):
+    """The inbox line for a key. A whole video without a height is the bare URL
+    the board has always been given."""
+    vid, _, part = key.partition(".")
+    line = f"https://www.youtube.com/watch?v={vid}"
+    if part:
+        start, end = spans[key]
+        line += f" part={part} range={start}-{end}"
+    if MAX_HEIGHT:
+        line += f" h={MAX_HEIGHT}"
+    return line
+
+
+def library_rate(durations):
+    """Bytes per second of what the library actually holds, measured on the
+    files whose duration the listing already gave. Used to size what is still
+    on its way, so a share of the disk is not overrun by a batch of arrivals."""
+    size = secs = 0
+    if LIBRARY.is_dir():
+        for path in LIBRARY.iterdir():
+            key = key_of(path)
+            if key and durations.get(key):
+                try:
+                    size += path.stat().st_size
+                except OSError:
+                    continue
+                secs += durations[key]
+    return size / secs if secs >= 3600 else DEFAULT_RATE
 
 
 def unusable_ids():

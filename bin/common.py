@@ -15,6 +15,38 @@ OFFSET = STATE / "offset"
 FIFO = ROOT / "pipe"
 ALLOWLIST = ROOT / "allowed_channels.json"
 
+# One code tree serves every channel on this server. A unit or a crontab line
+# says which channel it runs for through these, and left unset they name the
+# first channel, so nothing that predates a second one reads anything new.
+LIBRARY_DIR = pathlib.Path(os.environ.get("VODLOOP_LIBRARY") or "/home/ubuntu/videos")
+_UNIT = os.environ.get("VODLOOP_UNIT") or "vodloop-%s"
+# prefixed to what the Telegram bot says, since several channels share one chat
+LABEL = os.environ.get("VODLOOP_LABEL", "")
+# This channel's share of the disk, library and prepared chunks together. With
+# two channels on one filesystem, free space stops being a channel's own
+# measure: the neighbour's arrivals would have this one retire its files. 0 is
+# no share, and then the free-space rules decide alone, as they always did.
+BUDGET_BYTES = int(float(os.environ.get("VODLOOP_BUDGET_GB") or 0) * 1024 ** 3)
+
+
+def unit(role):
+    """This channel's systemd unit for a role: push, feed, prep, chat."""
+    return _UNIT % role
+
+
+def bytes_used(library=None):
+    """What this channel holds against its share: every file under its library,
+    arrivals still staged inside it included, and its prepared chunks."""
+    total = 0
+    for folder in (pathlib.Path(library or LIBRARY_DIR), SEGMENTS):
+        for path in folder.rglob("*"):
+            try:
+                if path.is_file():
+                    total += path.stat().st_size
+            except OSError:
+                continue  # removed between the listing and the stat
+    return total
+
 # These three used to be a promise every segment had to keep, and keeping it
 # meant re-encoding almost everything that ever arrived. As of 2026-09-08 they
 # are what an encode produces when there is no way around one, not what a file
@@ -361,7 +393,8 @@ def library():
 # What a downloader leaves on a filename and a reader does not want: the video
 # id it appends to keep names unique, the uploader handle, and the underscores
 # it uses because a space is awkward in a shell.
-_TRAILING_ID = re.compile(r"-[A-Za-z0-9_-]{11}$")
+# a part keeps its place in the video (".p02of04"), only the id goes
+_TRAILING_ID = re.compile(r"-[A-Za-z0-9_-]{11}(?=(?:\.p\d+of\d+)?$)")
 _TRAILING_HANDLE = re.compile(r"[-_]@[A-Za-z0-9_.-]+$")
 
 
