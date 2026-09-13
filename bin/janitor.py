@@ -51,7 +51,7 @@ TARGET_FREE_BYTES = 10 * 1024 ** 3
 # prep stops, because it belongs to both channels: set at 10 Go it would have
 # this retire its own files for the neighbour's arrivals.
 BUDGET_RETIRE_UNDER_BYTES = int(3.5 * 1024 ** 3)
-SHARED_FREE_FLOOR_BYTES = common.MIN_FREE_BYTES + 1024 ** 3
+SHARED_FREE_FLOOR_BYTES = common.SHARED_FREE_FLOOR_BYTES
 # Below this much unplayed video, nothing more is retired whatever the disk
 # says: a full disk is a problem, dead air is the problem. Shared with prep,
 # which retires for a different reason and would empty the same library through

@@ -11,8 +11,13 @@ different sources interleave, and the control below runs the same function over
 a single source to show the interleaving comes from the rotation and not from
 the order the ids happened to be in.
 """
+import contextlib
+import io
+import json
 import pathlib
 import sys
+import tempfile
+import time
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent / "bin"))
 
@@ -279,6 +284,155 @@ try:
                   now=1000 + collector.STATUS_STALE_SECONDS + 1) is None)
     finally:
         collector.load = real_load
+
+    print("one board, one inbox per channel")
+    # A single total would have each channel read its neighbour's backlog as
+    # its own: the busy one would hold the quiet one at want<=0 for ever while
+    # the quiet one's inbox sat empty.
+    two = {"queues": {"videos": 3, "videos-second": 6}, "at": 1000}
+    real_load, collector.load = collector.load, lambda *_a, **_k: two
+    real_lib, real_status = collector.LIBRARY, collector.STATUS_FILE
+    try:
+        collector.LIBRARY = pathlib.Path("/home/ubuntu/videos-second")
+        check("il lit la file de SA bibliotheque",
+              collector.board_queue(now=1060) == 6)
+        # the control: the same report, the same call, the other channel. If
+        # both came back 6 this would be measuring the fixture.
+        collector.LIBRARY = pathlib.Path("/home/ubuntu/videos")
+        check("temoin: l'autre chaine y lit la sienne, pas la meme",
+              collector.board_queue(now=1060) == 3)
+        collector.LIBRARY = pathlib.Path("/home/ubuntu/videos-absente")
+        check("une bibliotheque absente du rapport n'attend rien",
+              collector.board_queue(now=1060) == 0)
+        # and a board that only knows how to publish a total is still read
+        collector.load = lambda *_a, **_k: {"queue": 4, "at": 1000}
+        check("temoin: un rapport sans detail reste lu comme avant",
+              collector.board_queue(now=1060) == 4)
+    finally:
+        collector.load, collector.LIBRARY = real_load, real_lib
+        collector.STATUS_FILE = real_status
+
+    print("cutting a stream the board's card cannot hold whole")
+    LONG = "L0000000000"
+    collector.sources = lambda: [{"url": "src-a", "match": []}]
+    collector.pool = lambda: {"src-a": {"ids": [LONG], "dur": {LONG: 21600}}}
+    real_part, real_h = collector.PART_SECONDS, collector.MAX_HEIGHT
+    try:
+        collector.PART_SECONDS, collector.MAX_HEIGHT = 7200, 720
+        lists, _, spans = collector.catalogue()
+        check("un flux de 6 h devient trois morceaux",
+              lists[0] == [f"{LONG}.p01of03", f"{LONG}.p02of03", f"{LONG}.p03of03"],
+              str(lists[0]))
+        # a gap is video nobody ever fetches, an overlap is video fetched twice
+        check("les morceaux se suivent sans trou ni recouvrement",
+              [spans[k] for k in lists[0]] == [(0, 7200), (7200, 14400), (14400, 21600)],
+              str([spans[k] for k in lists[0]]))
+        got = collector.pick(2, {f"{LONG}.p01of03"})
+        check("un morceau deja tenu n'est pas repropose, les autres si",
+              got == [f"{LONG}.p02of03", f"{LONG}.p03of03"], str(got))
+        line = collector.line_for(f"{LONG}.p02of03", spans)
+        check("la ligne porte la place et la hauteur",
+              line == f"https://www.youtube.com/watch?v={LONG} "
+                      "part=p02of03 range=7200-14400 h=720", line)
+    finally:
+        collector.PART_SECONDS, collector.MAX_HEIGHT = real_part, real_h
+
+    # the control: unset, the same video stays whole and its line is the bare
+    # URL cx247's board has always been handed
+    lists, _, spans = collector.catalogue()
+    check("temoin: sans decoupage la video reste entiere", lists[0] == [LONG],
+          str(lists[0]))
+    check("temoin: et sa ligne est l'URL nue",
+          collector.line_for(LONG, spans) == f"https://www.youtube.com/watch?v={LONG}")
+
+    print("what the inbox already holds is read back")
+    tmp = pathlib.Path(tempfile.mkdtemp())
+    inbox = tmp / "inbox.txt"
+    inbox.write_text(f"https://www.youtube.com/watch?v={LONG} "
+                     "part=p01of03 range=0-7200 h=720\n")
+    real_inbox, collector.INBOX = collector.INBOX, inbox
+    try:
+        # without this a part in flight is invisible and gets queued again
+        check("une ligne de morceau se relit comme ce morceau",
+              f"{LONG}.p01of03" in collector.inbox_ids(), str(collector.inbox_ids()))
+        inbox.write_text(f"https://www.youtube.com/watch?v={LONG}\n")
+        check("temoin: une URL nue ne fabrique pas de morceau",
+              collector.inbox_ids() == {LONG}, str(collector.inbox_ids()))
+    finally:
+        collector.INBOX = real_inbox
+
+    print("the share of the disk, with two channels on one server")
+    # Free space stops being a channel's own measure the moment a second one
+    # writes to the same filesystem: the neighbour's arrivals would have this
+    # one refuse for ever, and its own arrivals would have the neighbour do
+    # the same. What bounds a channel is its share.
+    # wide enough that the ledger below can hold sixteen entries and still
+    # leave more candidates than a run can take: otherwise a short queue would
+    # be explained by an empty pool rather than by the share
+    POOL = ids("s", 40)
+    collector.sources = lambda: [{"url": "src-a", "match": []}]
+    collector.pool = lambda: {"src-a": {"ids": POOL, "dur": {v: 1800 for v in POOL}}}
+    lib = tmp / "videos-second"
+    lib.mkdir()
+    GB = 1024 ** 3
+    saved = (collector.LIBRARY, collector.INBOX, collector.HANDED_FILE,
+             collector.UNUSABLE_FILE, collector.STATUS_FILE, collector.shutil,
+             collector.common.BUDGET_BYTES, collector.common.bytes_used,
+             collector.prep.runway_seconds)
+
+    def run(free_gb, used_gb, handed=None, budget_gb=10.0):
+        """One --apply-less pass, with the disk and the ledger dictated."""
+        collector.HANDED_FILE.write_text(json.dumps(handed or {}))
+        collector.common.BUDGET_BYTES = int(budget_gb * GB)
+        collector.common.bytes_used = lambda *_a: int(used_gb * GB)
+        collector.shutil = type("S", (), {"disk_usage": staticmethod(
+            lambda _p: type("U", (), {"free": int(free_gb * GB)})())})
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            collector.main([])
+        return out.getvalue()
+
+    try:
+        collector.LIBRARY = lib
+        collector.INBOX = tmp / "inbox-absent.txt"
+        collector.HANDED_FILE = tmp / "handed.json"
+        collector.UNUSABLE_FILE = tmp / "absent.json"
+        collector.STATUS_FILE = tmp / "absent.json"
+        collector.prep.runway_seconds = lambda: 12 * 3600
+        # an empty library measures nothing, so DEFAULT_RATE applies: 250 ko/s,
+        # about 450 Mo for the 30 min videos above
+        check("la part pleine arrete tout", "rien ajoute" in run(20, 9.9),
+              run(20, 9.9).strip().splitlines()[-1])
+        # the control: the same disk, the same pool, a share with room in it
+        check("temoin: la meme passe avec de la place sert la carte",
+              run(20, 1.0).count("ajouterait") == collector.MAX_PER_RUN,
+              str(run(20, 1.0).count("ajouterait")))
+        # free space still counts, but only as the floor the janitor frees to,
+        # which is the one line both channels leave alone
+        check("un disque au plancher arrete tout malgre la part",
+              "rien ajoute" in run(5.2, 1.0), run(5.2, 1.0).strip().splitlines()[-1])
+
+        now = time.time()
+        flying = {v: now for v in POOL[:16]}
+        busy = run(20, 1.0, flying).count("ajouterait")
+        check("ce qui est en vol est deja depense sur la part",
+              busy < collector.MAX_PER_RUN, f"{busy} lignes au lieu de 8")
+        # the control: the same ledger, the same count of entries, old enough
+        # that nothing is in flight any more
+        stale = {v: now - 8 * 24 * 3600 for v in POOL[:16]}
+        check("temoin: les memes entrees, mais perimees, ne coutent rien",
+              run(20, 1.0, stale).count("ajouterait") == collector.MAX_PER_RUN,
+              str(run(20, 1.0, stale).count("ajouterait")))
+
+        # and with no share at all the old free-space rule is what decides
+        check("temoin: sans part, c'est le plancher de 8 Go qui tranche",
+              "rien ajoute" in run(7, 0, budget_gb=0)
+              and run(20, 0, budget_gb=0).count("ajouterait") == collector.MAX_PER_RUN)
+    finally:
+        (collector.LIBRARY, collector.INBOX, collector.HANDED_FILE,
+         collector.UNUSABLE_FILE, collector.STATUS_FILE, collector.shutil,
+         collector.common.BUDGET_BYTES, collector.common.bytes_used,
+         collector.prep.runway_seconds) = saved
 finally:
     collector.sources = real_sources
     collector.pool = real_pool

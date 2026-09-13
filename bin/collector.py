@@ -309,6 +309,17 @@ def library_rate(durations):
     return size / secs if secs >= 3600 else DEFAULT_RATE
 
 
+def estimate(key, durations, rate):
+    """What a candidate is expected to weigh once it lands.
+
+    An unmeasured video is not free. Charged nothing it would walk past the
+    share unnoticed and a pool with no durations at all would queue until the
+    disk said stop, which is the one thing a share exists to prevent. A part's
+    worth, or an hour, is wrong in the safe direction.
+    """
+    return (durations.get(key) or PART_SECONDS or 3600) * rate
+
+
 def unusable_ids():
     """Videos whose source itself is defective, and that must never be fetched
     again.
@@ -386,7 +397,7 @@ def pool():
 
 
 def pick_shortest(count, known, lists, durations):
-    """Up to count ids: the shortest videos that still pay for themselves.
+    """Up to count keys: the shortest candidates that still pay for themselves.
 
     Round robin is abandoned here on purpose. When air time is short the
     question is no longer which source deserves a turn, it is which video is
@@ -406,25 +417,24 @@ def pick_shortest(count, known, lists, durations):
     So the shortest candidate is chosen from those long enough to be worth the
     trip. Below the floor a fetch is a net loss of runway, not a small gain.
     """
-    candidates = {vid for ids in lists for vid in ids} - set(known)
-    rated = sorted((durations[v], v) for v in candidates if durations.get(v))
-    worth = [(secs, vid) for secs, vid in rated if secs >= MIN_USEFUL_SECONDS]
+    candidates = {key for keys in lists for key in keys} - set(known)
+    rated = sorted((durations[k], k) for k in candidates if durations.get(k))
+    worth = [(secs, key) for secs, key in rated if secs >= MIN_USEFUL_SECONDS]
     # nothing in the pool clears the floor: better a short video than none
-    return [vid for _, vid in (worth or rated)[:count]]
+    return [key for _, key in (worth or rated)[:count]]
 
 
-def pick(count, known, shortest=False):
-    """Up to count ids, one from each source in turn until the count is met.
+def pick(count, known, shortest=False, cat=None):
+    """Up to count keys, one from each source in turn until the count is met.
+
+    A key is a video id, or an id and its part when the video is too long to
+    be fetched whole. Either way it is one thing the board can be asked for.
 
     Round robin rather than in order. Draining the first playlist before
     touching the second would put days of one thing on air and then days of
     another, which reads as a much smaller library than it is.
     """
-    cached = pool()
-    lists = [list(cached.get(cache_key(s), {}).get("ids", [])) for s in sources()]
-    durations = {}
-    for source in sources():
-        durations.update(cached.get(cache_key(source), {}).get("dur", {}))
+    lists, durations, _ = cat if cat else catalogue()
     if shortest:
         chosen = pick_shortest(count, known, lists, durations)
         if chosen:
@@ -437,25 +447,25 @@ def pick(count, known, shortest=False):
         # source keeps its turn; what is filtered is what that turn may offer.
         # A source with nothing in the band keeps its whole list, so narrowing
         # can never silence a source altogether.
-        banded = [[v for v in ids
-                   if VARIETY_MIN_SECONDS <= (durations.get(v) or 0) < VARIETY_MAX_SECONDS]
-                  or ids
-                  for ids in lists]
+        banded = [[k for k in keys
+                   if VARIETY_MIN_SECONDS <= (durations.get(k) or 0) < VARIETY_MAX_SECONDS]
+                  or keys
+                  for keys in lists]
         lists = banded
     cursors = [0] * len(lists)
     chosen = []
     while len(chosen) < count:
         progressed = False
-        for n, ids in enumerate(lists):
+        for n, keys in enumerate(lists):
             if len(chosen) >= count:
                 break
             # each source keeps its place, so a later pass carries on rather
-            # than rescanning the ids it already rejected
-            while cursors[n] < len(ids):
-                vid = ids[cursors[n]]
+            # than rescanning the keys it already rejected
+            while cursors[n] < len(keys):
+                key = keys[cursors[n]]
                 cursors[n] += 1
-                if vid not in known and vid not in chosen:
-                    chosen.append(vid)
+                if key not in known and key not in chosen:
+                    chosen.append(key)
                     progressed = True
                     break
         if not progressed:
@@ -464,20 +474,36 @@ def pick(count, known, shortest=False):
 
 
 def board_queue(now=None):
-    """How many URLs the board is holding, or None if it has not said lately.
+    """How many URLs the board holds for THIS library, or None if it has not
+    said lately.
+
+    One board serves every channel, from one inbox each. A single total would
+    have each channel read its neighbour's backlog as its own and stop queueing
+    while its own inbox sat empty, so the per library counts are preferred. The
+    board only learned to publish them later than the total, so the total is
+    still read when it is all there is.
 
     None is the honest answer to a stale file and it is treated as one: the
     caller falls back to its own depth rule rather than reading a count from a
     board that may have been unreachable for a day.
     """
     status = load(STATUS_FILE, None)
-    if not isinstance(status, dict) or "queue" not in status:
+    if not isinstance(status, dict):
         return None
     age = (time.time() if now is None else now) - status.get("at", 0)
     if age > STATUS_STALE_SECONDS:
         return None
+    queues = status.get("queues")
+    if isinstance(queues, dict):
+        # a board that reports its queues and does not mention this library is
+        # holding nothing of ours, which is a measurement and not an unknown
+        value = queues.get(LIBRARY.name, 0)
+    elif "queue" in status:
+        value = status["queue"]
+    else:
+        return None
     try:
-        return int(status["queue"])
+        return int(value)
     except (TypeError, ValueError):
         return None
 
@@ -485,22 +511,46 @@ def board_queue(now=None):
 def main(argv):
     apply = "--apply" in argv
     free = shutil.disk_usage(LIBRARY).free
-    have = len(library_ids())
+    held = library_ids()
+    # Files, not keys: a part file answers to both its id and its part key, so
+    # counting keys would read a library of parts as twice the size it is and
+    # stop fetching at half the ceiling.
+    have = sum(1 for p in LIBRARY.iterdir() if key_of(p)) if LIBRARY.is_dir() else 0
     handed = load(HANDED_FILE, {})
     now = time.time()
-    recent = {v for v, at in handed.items() if now - at < HANDED_COOLDOWN_SECONDS}
+    # A part is fetched, played and retired while its neighbours are still to
+    # come, so on a source cut into parts the cooldown has to outlive the whole
+    # stream: at six hours the channel loops on part one and never reaches two.
+    cooldown = REFETCH_SECONDS or HANDED_COOLDOWN_SECONDS
+    recent = {k for k, at in handed.items() if now - at < cooldown}
     runway = prep.runway_seconds()
     urgent = runway < URGENT_RUNWAY_SECONDS
     board = board_queue(now)
+    budget = common.BUDGET_BYTES
+    used = common.bytes_used(LIBRARY) if budget else 0
 
-    print(f"bibliotheque={have}/{TARGET_LIBRARY_FILES} libre={free / 1024 ** 3:.1f}G "
-          f"sources={len(sources())} en_vol={len(recent)} "
+    share = (f" part={used / 1024 ** 3:.1f}/{budget / 1024 ** 3:.1f}G"
+             if budget else "")
+    print(f"bibliotheque={have}/{TARGET_LIBRARY_FILES} libre={free / 1024 ** 3:.1f}G"
+          f"{share} sources={len(sources())} en_vol={len(recent)} "
           f"antenne={runway / 3600:.1f}h{' URGENT' if urgent else ''} "
           f"carte={'?' if board is None else board}/{BOARD_QUEUE_DEPTH}")
 
-    if free < MIN_FREE_BYTES:
+    # With a share, free space is no longer this channel's own measure: the
+    # neighbour's arrivals move it, and refusing on the 8 Go line would have
+    # whichever channel is second to fill simply stop for good. What bounds
+    # this one is its share, and free space only as the floor the janitor
+    # frees to, which both channels leave alone.
+    if budget:
+        room = min(budget - BUDGET_HEADROOM_BYTES - used,
+                   free - common.SHARED_FREE_FLOOR_BYTES)
+        if room <= 0:
+            print("part servie ou disque trop juste: rien ajoute")
+            return 0
+    elif free < MIN_FREE_BYTES:
         print("disque trop juste, le concierge travaille: rien ajoute")
         return 0
+
     want = min(TARGET_LIBRARY_FILES - have, MAX_PER_RUN)
     if board is not None:
         want = min(want, BOARD_QUEUE_DEPTH - board)
@@ -508,24 +558,45 @@ def main(argv):
         print("bibliotheque pleine ou carte deja servie, rien a faire")
         return 0
 
-    unusable = unusable_ids()
-    known = library_ids() | inbox_ids() | recent | unusable
-    chosen = pick(want, known, shortest=urgent)
+    cat = catalogue()
+    durations, spans = cat[1], cat[2]
+    known = held | inbox_ids() | recent | unusable_ids()
+    chosen = pick(want, known, shortest=urgent, cat=cat)
     if not chosen:
         print("rien de nouveau dans les sources")
         return 0
 
-    for vid in chosen:
-        print(f"  {'ajoute' if apply else 'ajouterait'} https://www.youtube.com/watch?v={vid}")
+    if budget:
+        # What is already on its way counts against the share too. It is in
+        # neither the library nor the inbox, having been claimed off it, so
+        # without this a run queues into space the previous run already spent.
+        rate = library_rate(durations)
+        for key in recent - held:
+            room -= estimate(key, durations, rate)
+        keep = []
+        for key in chosen:
+            cost = estimate(key, durations, rate)
+            if cost > room:
+                break
+            keep.append(key)
+            room -= cost
+        if not keep:
+            print("la part ne laisse pas la place d'un fichier de plus: "
+                  "rien ajoute")
+            return 0
+        chosen = keep
+
+    for key in chosen:
+        print(f"  {'ajoute' if apply else 'ajouterait'} {line_for(key, spans)}")
     if apply:
         INBOX.parent.mkdir(parents=True, exist_ok=True)
         with INBOX.open("a", encoding="utf-8") as fh:
-            for vid in chosen:
-                fh.write(f"https://www.youtube.com/watch?v={vid}\n")
-        for vid in chosen:
-            handed[vid] = now
-        save(HANDED_FILE, {v: at for v, at in handed.items()
-                           if now - at < 7 * 24 * 3600})
+            for key in chosen:
+                fh.write(line_for(key, spans) + "\n")
+        for key in chosen:
+            handed[key] = now
+        save(HANDED_FILE, {k: at for k, at in handed.items()
+                           if now - at < max(7 * 24 * 3600, REFETCH_SECONDS)})
         print(f"{len(chosen)} URL(s) deposee(s) dans l'inbox")
     else:
         print("essai a blanc, l'inbox n'a pas ete touchee. --apply pour agir.")

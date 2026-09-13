@@ -178,6 +178,12 @@ MAX_BANNED = 500             # the ban list grows with distinct chatters
 FLUSH_INTERVAL_SECONDS = 1.0
 # refuse to prepare more video when the disk gets this low
 MIN_FREE_BYTES = 4 * 1024 ** 3
+# Where the janitor stops freeing and the collector stops filling once a
+# channel has a share of the disk. Free space belongs to every channel on the
+# server, so with a share it is a floor and nothing more: aiming higher would
+# have one channel retire its own files to make room for its neighbour's
+# arrivals. One definition, because the two sides only compose if they agree.
+SHARED_FREE_FLOOR_BYTES = MIN_FREE_BYTES + 1024 ** 3
 # How much unplayed video must remain after anything deletes anything. This is
 # the only thing standing between a self-emptying library and dead air, and it
 # is measured in time because time is what the channel actually consumes: one
