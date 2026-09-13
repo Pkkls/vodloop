@@ -433,6 +433,84 @@ try:
          collector.UNUSABLE_FILE, collector.STATUS_FILE, collector.shutil,
          collector.common.BUDGET_BYTES, collector.common.bytes_used,
          collector.prep.runway_seconds) = saved
+
+    print("a channel that only wants whole hours")
+    # Measured 2026-09-13 on the second channel, left with the defaults: the two
+    # videos the collector chose for it were 38 and 21 minutes. Both rules were
+    # working as written. The urgent path asks for the SHORTEST candidate above
+    # the twenty minute floor, and the variety band caps at sixty minutes, so a
+    # channel built on whole days got exactly the opposite of what it is for.
+    LONG = ids("h", 4)     # deux heures
+    MID = ids("m", 4)      # quarante minutes
+    TINY = ids("t", 4)     # six minutes
+    collector.sources = lambda: [{"url": "src-a", "match": []}]
+    collector.pool = lambda: {"src-a": {
+        "ids": LONG + MID + TINY,
+        "dur": dict([(v, 7200) for v in LONG] + [(v, 2400) for v in MID]
+                    + [(v, 360) for v in TINY])}}
+    real_min, real_rand = collector.MIN_SECONDS, collector.RANDOM_PICK
+    try:
+        collector.MIN_SECONDS = 3600
+        calm = collector.pick(6, set())
+        check("rien sous l'heure n'est propose",
+              all(v[0] == "h" for v in calm), str(calm))
+        check("et il en propose autant qu'il en existe",
+              len(calm) == len(LONG), str(len(calm)))
+        # en urgence le chemin est un autre, et il doit tenir le meme plancher
+        urgent = collector.pick(4, set(), shortest=True)
+        check("meme en urgence, rien sous l'heure",
+              all(v[0] == "h" for v in urgent), str(urgent))
+
+        # the control: same pool, same calls, floor removed. If these also came
+        # back all-h the checks above would be measuring the fixture.
+        collector.MIN_SECONDS = 0
+        loose = collector.pick(6, set())
+        check("temoin: sans plancher, les courtes reviennent",
+              any(v[0] in "mt" for v in loose), str(loose))
+        check("temoin: et en urgence c'est la plus courte utile qui gagne",
+              collector.pick(1, set(), shortest=True)[0][0] == "m",
+              str(collector.pick(1, set(), shortest=True)))
+
+        # un plancher pose expres est un contrat: mieux vaut ne rien proposer
+        # que de servir quarante minutes en esperant que personne ne regarde
+        collector.pool = lambda: {"src-a": {
+            "ids": MID + TINY,
+            "dur": dict([(v, 2400) for v in MID] + [(v, 360) for v in TINY])}}
+        collector.MIN_SECONDS = 3600
+        check("un pool entierement sous le plancher ne rend rien",
+              collector.pick(4, set(), shortest=True) == []
+              and collector.pick(4, set()) == [])
+        # the control: the old floor still falls back, because nobody asked for it
+        collector.MIN_SECONDS = 0
+        check("temoin: sans plancher explicite, le repli d'avant sert encore",
+              len(collector.pick(2, set(), shortest=True)) == 2)
+
+        print("and it wants them drawn, not read in order")
+        BIG = ids("b", 40)
+        collector.pool = lambda: {"src-a": {
+            "ids": BIG, "dur": {v: 7200 for v in BIG}}}
+        collector.MIN_SECONDS = 3600
+        collector.RANDOM_PICK = False
+        first = collector.pick(5, set())
+        check("sans tirage, c'est toujours le haut de la liste",
+              first == BIG[:5] and collector.pick(5, set()) == first, str(first))
+        collector.RANDOM_PICK = True
+        draws = [tuple(collector.pick(5, set())) for _ in range(6)]
+        check("avec tirage, deux passes ne donnent pas la meme chose",
+              len(set(draws)) > 1, f"{len(set(draws))} ordres differents sur 6")
+        check("et il pioche ailleurs que dans les cinq premiers",
+              any(k not in BIG[:5] for d in draws for k in d))
+        # the draw must not cost a source its turn: two sources, both served
+        collector.sources = lambda: [{"url": u, "match": []} for u in ("src-a", "src-b")]
+        OTHER = ids("o", 40)
+        collector.pool = lambda: {
+            "src-a": {"ids": BIG, "dur": {v: 7200 for v in BIG}},
+            "src-b": {"ids": OTHER, "dur": {v: 7200 for v in OTHER}}}
+        mixed = collector.pick(6, set())
+        check("le tirage ne prive aucune source de son tour",
+              {v[0] for v in mixed} == {"b", "o"}, str(mixed))
+    finally:
+        collector.MIN_SECONDS, collector.RANDOM_PICK = real_min, real_rand
 finally:
     collector.sources = real_sources
     collector.pool = real_pool

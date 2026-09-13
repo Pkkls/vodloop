@@ -37,6 +37,7 @@ import json
 import math
 import os
 import pathlib
+import random
 import re
 import shutil
 import subprocess
@@ -131,6 +132,26 @@ MIN_USEFUL_SECONDS = 20 * 60
 # than the disk can hold, so the band never runs the collector dry.
 VARIETY_MIN_SECONDS = 5 * 60
 VARIETY_MAX_SECONDS = 60 * 60
+
+# The shortest thing this channel will fetch at all, and a hard floor rather
+# than a preference. Unset, the two numbers above decide and the channel gets
+# many short videos, which is the widest rotation a fixed disk can hold.
+#
+# A channel built on whole days wants the opposite and says so here. Measured
+# 2026-09-13 on the second channel, which had been left with the defaults: the
+# two videos the collector chose for it were 38 and 21 minutes, because the
+# urgent path asks for the SHORTEST candidate above MIN_USEFUL_SECONDS and the
+# band above caps at sixty minutes. Both rules were working exactly as written
+# and both were wrong for that channel.
+#
+# An unmeasured duration cannot clear this. Fetching a video that might be
+# forty minutes is not honouring a floor, it is guessing.
+MIN_SECONDS = int(os.environ.get("VODLOOP_MIN_SECONDS") or 0)
+# Draw inside a source at random instead of reading its listing top down. A
+# listing is newest first, so in order means the same recent evenings every
+# pass, whatever else is in the archive: 369 videos of which the channel only
+# ever sees the newest handful.
+RANDOM_PICK = bool(os.environ.get("VODLOOP_RANDOM_PICK"))
 
 # A channel whose sources are mostly streams of four to eleven hours cannot take
 # them whole: the board's card caps a file at 4 Go, and at 720p that is under
@@ -419,9 +440,13 @@ def pick_shortest(count, known, lists, durations):
     """
     candidates = {key for keys in lists for key in keys} - set(known)
     rated = sorted((durations[k], k) for k in candidates if durations.get(k))
-    worth = [(secs, key) for secs, key in rated if secs >= MIN_USEFUL_SECONDS]
-    # nothing in the pool clears the floor: better a short video than none
-    return [key for _, key in (worth or rated)[:count]]
+    floor = max(MIN_USEFUL_SECONDS, MIN_SECONDS)
+    worth = [(secs, key) for secs, key in rated if secs >= floor]
+    # Nothing clears the floor: better a short video than none, EXCEPT when the
+    # floor was set deliberately. An operator asking for an hour minimum is
+    # stating a contract, and quietly serving forty minutes because the pool
+    # looked thin would break it in the one place nobody would look.
+    return [key for _, key in (worth if MIN_SECONDS else (worth or rated))[:count]]
 
 
 def pick(count, known, shortest=False, cat=None):
@@ -435,14 +460,28 @@ def pick(count, known, shortest=False, cat=None):
     another, which reads as a much smaller library than it is.
     """
     lists, durations, _ = cat if cat else catalogue()
-    if shortest:
+
+    # The floor comes first, so everything after it chooses among things that
+    # already clear it. Applied later it would be a filter on a decision
+    # already made, which is how a rule ends up looking enforced and not being.
+    if MIN_SECONDS:
+        lists = [[k for k in keys if (durations.get(k) or 0) >= MIN_SECONDS]
+                 for keys in lists]
+
+    if RANDOM_PICK:
+        # Shuffled once per pass, then read by the same round robin below, so
+        # each source still takes its turn and what it offers on that turn is a
+        # draw. Neither the shortest-first rule nor the band applies here: both
+        # exist to bias the choice, and this channel asked for no bias.
+        lists = [random.sample(keys, len(keys)) for keys in lists]
+    elif shortest:
         chosen = pick_shortest(count, known, lists, durations)
         if chosen:
             return chosen
         # nothing in the pool has a measured duration yet. Falling through to the
         # round robin queues something rather than nothing, and queueing nothing
         # is the one outcome a channel that is running dry cannot afford
-    else:
+    elif not MIN_SECONDS:
         # Not starving, so the question is variety rather than air time. Each
         # source keeps its turn; what is filtered is what that turn may offer.
         # A source with nothing in the band keeps its whole list, so narrowing
