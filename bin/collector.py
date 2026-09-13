@@ -595,10 +595,16 @@ def main(argv):
     budget = common.BUDGET_BYTES
     used = common.bytes_used(LIBRARY) if budget else 0
 
+    # Ce qui est facture a la part, pas ce qui a ete remis: la carte plafonne le
+    # compte plus bas, et afficher le brut annoncait onze quand trois etaient
+    # payees, ce qui envoie lire le mauvais chiffre pendant une panne.
+    charged = len(in_flight - held)
+    if board is not None:
+        charged = min(charged, board)
     share = (f" part={used / 1024 ** 3:.1f}/{budget / 1024 ** 3:.1f}G"
              if budget else "")
     print(f"bibliotheque={have}/{TARGET_LIBRARY_FILES} libre={free / 1024 ** 3:.1f}G"
-          f"{share} sources={len(sources())} en_vol={len(in_flight)} "
+          f"{share} sources={len(sources())} en_vol={charged} "
           f"antenne={runway / 3600:.1f}h{' URGENT' if urgent else ''} "
           f"carte={'?' if board is None else board}/{BOARD_QUEUE_DEPTH}")
 
