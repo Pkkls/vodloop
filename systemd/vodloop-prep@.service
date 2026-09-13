@@ -13,6 +13,11 @@ Environment=VODLOOP_ROOT=/home/ubuntu/%i
 # order, and it is also the only library this instance may ever touch.
 Environment=VODLOOP_LIBRARY=/home/ubuntu/videos-%i
 Environment=VODLOOP_UNIT=vodloop-%%s@%i
+# A channel fed by fifteen hour streams cut into eight files plays them back to
+# back without this: an afternoon of watching shows one evening and one source.
+# The parts keep their order, they just get the rest of the library between
+# them. The first channel does not set it, its long sources being rare.
+Environment=VODLOOP_SPREAD_PARTS=1
 ExecStart=/usr/bin/python3 /home/ubuntu/vodloop/bin/prep.py
 Restart=always
 RestartSec=10

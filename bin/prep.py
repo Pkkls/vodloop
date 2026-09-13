@@ -959,23 +959,54 @@ def video_of(path):
     return str(path), 0
 
 
-def shuffled_by_video(paths):
-    """Shuffle whole videos, never the pieces inside one.
+# Whether the parts of one long stream may have other videos between them.
+#
+# Unset, a video is emitted whole: its parts run back to back, in order. That
+# is right for a channel whose long sources are rare, and it is what the first
+# channel has always done.
+#
+# Set, the parts are spread through the pass instead, still in order. A channel
+# fed by fifteen hour Kick streams cut into eight needs this: measured on a
+# library of one such stream and ten short videos, the whole pass came out as
+# seven short ones, then fifteen consecutive hours of the same evening, then
+# three more. Nobody watching for an afternoon would have seen a second source.
+SPREAD_PARTS = bool(os.environ.get("VODLOOP_SPREAD_PARTS"))
 
-    random.shuffle over the files would scatter the parts of an eleven hour
-    stream through the rotation and play them out of order. Grouping first
-    means the draw picks videos and each one is emitted whole, in order.
+
+def shuffled_by_video(paths, spread=None):
+    """Draw the rotation at random, over videos rather than over files.
+
+    random.shuffle over the files would play hour nine of a stream before hour
+    one. Grouping by video first means the draw picks videos, and the pieces of
+    one keep their order whatever else happens to them.
+
+    With spread, a video's parts are dealt evenly across the whole pass instead
+    of consecutively: part i of a k part video is placed at (i + u) / k, for one
+    random u drawn per video. That key rises with i, so the parts stay in
+    order, and it is evenly spaced, so they cannot bunch. A single part video
+    gets a plain random key and lands anywhere between them.
     """
+    if spread is None:
+        spread = SPREAD_PARTS
     groups = {}
     for path in paths:
         video, index = video_of(path)
         groups.setdefault(video, []).append((index, path))
-    order = list(groups)
-    random.shuffle(order)
-    picked = []
-    for video in order:
-        picked.extend(path for _, path in sorted(groups[video], key=lambda x: x[0]))
-    return picked
+    for parts in groups.values():
+        parts.sort(key=lambda x: x[0])
+
+    if not spread:
+        order = list(groups)
+        random.shuffle(order)
+        return [path for video in order for _, path in groups[video]]
+
+    keyed = []
+    for parts in groups.values():
+        offset = random.random()
+        for n, (_, path) in enumerate(parts):
+            keyed.append(((n + offset) / len(parts), path))
+    keyed.sort(key=lambda x: x[0])
+    return [path for _, path in keyed]
 
 
 def refill_from_library(queue):

@@ -107,6 +107,46 @@ with tempfile.TemporaryDirectory() as tmp:
         order = chatlogic.playback_order({"items": plain_items + [voted]})
         check("without the vote it sinks to its added_at position",
               order[-1]["id"] == 99, f"tail id={order[-1]['id']}")
+        print("spreading the parts of one long stream through the pass")
+        # A channel fed by fifteen hour Kick streams cut into eight files plays
+        # them back to back: measured on this exact fixture, the pass was seven
+        # short videos, then fifteen consecutive hours of one evening, then
+        # three more. An afternoon of watching showed one source.
+        import pathlib as _pl
+        long_video = [_pl.Path("A long stream-kb97ce327e1.p%02dof08.mkv" % n)
+                      for n in range(1, 9)]
+        shorts = [_pl.Path("Short %d-yt%09d.mp4" % (n, n)) for n in range(1, 11)]
+
+        def part_numbers(order):
+            return [p.name.split(".p")[1][:2] for p in order if "-kb9" in p.name]
+
+        def positions(order):
+            return [n for n, p in enumerate(order) if "-kb9" in p.name]
+
+        random.seed(11)
+        spread = prep.shuffled_by_video(long_video + shorts, spread=True)
+        gaps = positions(spread)
+        check("les morceaux ne se suivent plus tous",
+              max(gaps) - min(gaps) > len(long_video), f"positions {gaps}")
+        # the one thing spreading must not break: hour nine before hour one
+        check("et ils restent dans l'ordre malgre le brassage",
+              part_numbers(spread) == ["%02d" % n for n in range(1, 9)],
+              str(part_numbers(spread)))
+        # the control: the same library, same call, without spreading. If this
+        # also came out scattered the check above would be measuring the fixture
+        random.seed(11)
+        tight = prep.shuffled_by_video(long_video + shorts, spread=False)
+        tightpos = positions(tight)
+        check("temoin: sans l'option ils restent colles",
+              tightpos == list(range(min(tightpos), min(tightpos) + 8)),
+              f"positions {tightpos}")
+        check("temoin: et la aussi ils sont dans l'ordre",
+              part_numbers(tight) == ["%02d" % n for n in range(1, 9)])
+        # a library with nothing cut into parts must be unaffected either way
+        random.seed(11)
+        check("une bibliotheque sans morceaux rend les memes fichiers",
+              sorted(p.name for p in prep.shuffled_by_video(shorts, spread=True))
+              == sorted(p.name for p in shorts))
     finally:
         prep.LIBRARY = real_lib
         prep.seconds_on_disk = real_disk
