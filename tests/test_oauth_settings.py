@@ -11,10 +11,12 @@ finds a key that exists only in bus.env". The control below reads .env alone and
 asserts it does NOT find that key: without it, the first check could pass on a
 lookup that never reached bus.env at all.
 """
+import json
 import os
 import pathlib
 import sys
 import tempfile
+import time
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent / "bin"))
 
@@ -67,6 +69,25 @@ with tempfile.TemporaryDirectory() as tmp:
         print("absent")
         check("a key in neither file returns the empty string, not None",
               oauth.setting("ABSENT_EVERYWHERE") == "")
+
+        print("finishing an authorisation by hand")
+        # A channel that does not serve the redirect URI reads its code out of
+        # the nginx log and finishes here. Wired wrong, this looks like a Kick
+        # refusal rather than a typo, and the code expires in fifteen minutes.
+        oauth.PENDING_FILE = root / "no_pending.json"
+        check("sans les deux arguments, il dit comment s'en servir",
+              oauth.main(["exchange", "seulement-le-code"]) == 2)
+        check("sans autorisation en cours, il echoue au lieu d'appeler Kick",
+              oauth.main(["exchange", "un-code", "un-etat"]) == 1)
+        # the control: the same call with a pending file whose state matches
+        # has to get PAST that check, and fail on the missing credentials
+        # instead, or the check above would pass for the wrong reason
+        oauth.PENDING_FILE = root / "pending.json"
+        oauth.PENDING_FILE.write_text(
+            json.dumps({"state": "un-etat", "at": time.time(), "verifier": "v"}))
+        ok, message = oauth.exchange("un-code", "un-etat")
+        check("temoin: avec l'etat qui correspond, il va plus loin",
+              not ok and "state mismatch" not in message, message)
 
         print("existing callers")
         check("env() with no argument still reads .env",

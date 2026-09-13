@@ -9,6 +9,14 @@ browser. That approval happens once; the refresh token then keeps it alive.
     python3 bin/oauth.py url      print the link to open
     python3 bin/oauth.py show     report what is stored, without printing secrets
     python3 bin/oauth.py refresh  renew the token now, for the timer to call
+    python3 bin/oauth.py exchange <code> <state>   finish it by hand
+
+The last one is for a channel that is not the one serving the redirect URI.
+There is one registered URI, the site root, and the first channel's dashboard
+answers it. Another channel's callback lands there, fails the state check, and
+is NOT consumed, so its code can be read out of the nginx access log and
+finished here, against that channel's own pending file. The code is good for
+fifteen minutes.
 """
 import base64
 import hashlib
@@ -187,6 +195,13 @@ def main(argv):
               f"{'refreshable' if stored.get('refresh_token') else 'no refresh token'}, "
               f"{left}s left on the current one")
         return 0
+    if action == "exchange":
+        if len(argv) != 3:
+            print("usage: oauth.py exchange <code> <state>")
+            return 2
+        ok, message = exchange(argv[1], argv[2])
+        print("autorisation enregistree" if ok else f"echec: {message}")
+        return 0 if ok else 1
     if action == "refresh":
         # Nothing else ever renews this on its own. access_token() is called
         # only when the bot has a reply to send, so a channel nobody talks in
