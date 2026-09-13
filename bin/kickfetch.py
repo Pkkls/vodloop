@@ -77,6 +77,16 @@ KICK_MAX_SHARE = 0.5
 # with the same letter. Ten hex digits behind a k is not a shape YouTube
 # produces, and a collision would at worst miscount a few megabytes of quota.
 KICK_KEY = re.compile(r"^k[0-9a-f]{10}$")
+# The tallest rung to take from Kick, which is not the same question as the
+# tallest to ask YouTube for, and sharing one ceiling answers it wrong either
+# way. Measured on this material: Kick serves 1080p at 7.62 Mbps against 2.44
+# for 720p, three times the disk, while YouTube's 1080p for the same streamer
+# measures 1.16 Go/h against about 0.66 for its 720p. One number for both
+# either pays Kick's premium or throws away YouTube's cheap picture.
+#
+# Unset, it follows VODLOOP_MAX_HEIGHT, so a channel that never says otherwise
+# behaves exactly as it did before there were two ceilings.
+MAX_HEIGHT = int(os.environ.get("VODLOOP_KICK_MAX_HEIGHT") or 0) or collector.MAX_HEIGHT
 # What a title may keep. What is dropped either breaks a path or is not text:
 # a slash is a directory, and emoji are not letters. Letters of any script
 # stay, as they already do on the files the board delivers.
@@ -175,7 +185,7 @@ def rendition(base):
         if not path or path.startswith("#") or not height:
             continue
         height = int(height.group(1))
-        if collector.MAX_HEIGHT and height > collector.MAX_HEIGHT:
+        if MAX_HEIGHT and height > MAX_HEIGHT:
             continue
         if not common.fps_supported(float(fps.group(1)) if fps else None):
             continue

@@ -113,9 +113,9 @@ try:
         kickfetch.get = served
 
     print("which rung is pulled")
-    real_h = collector.MAX_HEIGHT
+    real_h, real_ch = kickfetch.MAX_HEIGHT, collector.MAX_HEIGHT
     try:
-        collector.MAX_HEIGHT = 720
+        kickfetch.MAX_HEIGHT = 720
         rung = kickfetch.rendition(BASE)
         check("la plus haute dans la limite de la chaine",
               rung[0] == BASE + "/720p30/playlist.m3u8" and rung[1] == 720, str(rung))
@@ -125,14 +125,26 @@ try:
               rung[2] == 2439511 / 8, str(rung[2]))
         # the control: raise the ceiling and the same call takes 1080p, so the
         # check above measures the ceiling and not the order of the playlist
-        collector.MAX_HEIGHT = 1080
+        kickfetch.MAX_HEIGHT = 1080
         check("temoin: plafond releve, c'est le 1080p qui sort",
               kickfetch.rendition(BASE)[1] == 1080)
-        collector.MAX_HEIGHT = 300
+        kickfetch.MAX_HEIGHT = 300
         check("aucun palier assez petit ne rend rien",
               kickfetch.rendition(BASE) is None)
+
+        # Kick sert son 1080p a 7.62 Mbps contre 2.44 pour le 720p, trois fois
+        # le disque, la ou le 1080p YouTube de la meme matiere mesure 1.16 Go/h
+        # contre 0.66. Un seul plafond pour les deux paie la prime de Kick ou
+        # jette l'image bon marche de YouTube.
+        kickfetch.MAX_HEIGHT, collector.MAX_HEIGHT = 720, 1080
+        check("le plafond de Kick ne suit pas celui de YouTube",
+              kickfetch.rendition(BASE)[1] == 720, str(kickfetch.rendition(BASE)))
+        # le temoin: c'est bien la demande a YouTube qui porte 1080
+        check("temoin: et la ligne pour la carte demande toujours 1080",
+              collector.line_for("abcDEF12345", {}).endswith(" h=1080"),
+              collector.line_for("abcDEF12345", {}))
     finally:
-        collector.MAX_HEIGHT = real_h
+        kickfetch.MAX_HEIGHT, collector.MAX_HEIGHT = real_h, real_ch
 
     print("cutting the stream into parts")
     segs = kickfetch.segments(BASE + "/720p30/playlist.m3u8")
