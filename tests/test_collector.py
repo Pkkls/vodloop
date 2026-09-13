@@ -520,6 +520,29 @@ try:
         check("temoin: sans plancher explicite, le repli d'avant sert encore",
               len(collector.pick(2, set(), shortest=True)) == 2)
 
+        # Le plafond existe parce que la carte ne rend RIEN par plage. Mesure
+        # 2026-09-14 sur tout son historique: 55 livraisons, aucune part, contre
+        # 5 tentatives et 10 HTTP 403 de googlevideo. Une chaine qui veut du
+        # long doit donc viser ce qui rentre entier sous les 4 Go de la carte.
+        collector.pool = lambda: {"src-a": {
+            "ids": LONG + MID + TINY,
+            "dur": dict([(v, 7200) for v in LONG] + [(v, 2400) for v in MID]
+                        + [(v, 360) for v in TINY])}}
+        real_max = collector.MAX_SECONDS
+        try:
+            collector.MIN_SECONDS, collector.MAX_SECONDS = 1800, 3000
+            band = collector.pick(8, set())
+            check("seule la bande demandee sort",
+                  all(v[0] == "m" for v in band) and band, str(band))
+            check("meme en urgence, le plafond tient",
+                  all(v[0] == "m" for v in collector.pick(4, set(), shortest=True)))
+            # le temoin: sans plafond, les deux heures repassent devant
+            collector.MAX_SECONDS = 0
+            check("temoin: sans plafond, le trop long revient",
+                  any(v[0] == "h" for v in collector.pick(8, set())))
+        finally:
+            collector.MAX_SECONDS = real_max
+
         print("and it wants them drawn, not read in order")
         BIG = ids("b", 40)
         collector.pool = lambda: {"src-a": {

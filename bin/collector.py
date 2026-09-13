@@ -152,6 +152,21 @@ MIN_SECONDS = int(os.environ.get("VODLOOP_MIN_SECONDS") or 0)
 # pass, whatever else is in the archive: 369 videos of which the channel only
 # ever sees the newest handful.
 RANDOM_PICK = bool(os.environ.get("VODLOOP_RANDOM_PICK"))
+# The longest thing the board can bring back WHOLE, which is the only way it
+# brings anything back at all.
+#
+# Measured 2026-09-14 over the board's whole history: 55 successful deliveries,
+# none of them a part, against 5 attempts at one and 10 HTTP 403 from
+# googlevideo. --download-sections hands the ranged request to ffmpeg, which
+# makes it without yt-dlp's headers, and YouTube refuses it. Whole videos were
+# landing the same hour, so this is not the anti-bot wall, it is the ranged
+# path specifically.
+#
+# So a channel asking for long videos has to ask for ones that fit whole. The
+# board aborts past MAX_FILESIZE=4G and this material measures 1.16 Go/h at
+# 1080p, which puts the ceiling near three and a half hours. Unset, nothing is
+# refused for being long, which is what a channel taking parts wants.
+MAX_SECONDS = int(os.environ.get("VODLOOP_MAX_SECONDS") or 0)
 
 # A channel whose sources are mostly streams of four to eleven hours cannot take
 # them whole: the board's card caps a file at 4 Go, and at 720p that is under
@@ -441,7 +456,8 @@ def pick_shortest(count, known, lists, durations):
     candidates = {key for keys in lists for key in keys} - set(known)
     rated = sorted((durations[k], k) for k in candidates if durations.get(k))
     floor = max(MIN_USEFUL_SECONDS, MIN_SECONDS)
-    worth = [(secs, key) for secs, key in rated if secs >= floor]
+    worth = [(secs, key) for secs, key in rated
+             if secs >= floor and (not MAX_SECONDS or secs <= MAX_SECONDS)]
     # Nothing clears the floor: better a short video than none, EXCEPT when the
     # floor was set deliberately. An operator asking for an hour minimum is
     # stating a contract, and quietly serving forty minutes because the pool
@@ -464,8 +480,10 @@ def pick(count, known, shortest=False, cat=None):
     # The floor comes first, so everything after it chooses among things that
     # already clear it. Applied later it would be a filter on a decision
     # already made, which is how a rule ends up looking enforced and not being.
-    if MIN_SECONDS:
-        lists = [[k for k in keys if (durations.get(k) or 0) >= MIN_SECONDS]
+    if MIN_SECONDS or MAX_SECONDS:
+        lists = [[k for k in keys
+                  if (durations.get(k) or 0) >= MIN_SECONDS
+                  and (not MAX_SECONDS or (durations.get(k) or 0) <= MAX_SECONDS)]
                  for keys in lists]
 
     if RANDOM_PICK:
@@ -481,7 +499,7 @@ def pick(count, known, shortest=False, cat=None):
         # nothing in the pool has a measured duration yet. Falling through to the
         # round robin queues something rather than nothing, and queueing nothing
         # is the one outcome a channel that is running dry cannot afford
-    elif not MIN_SECONDS:
+    elif not (MIN_SECONDS or MAX_SECONDS):
         # Not starving, so the question is variety rather than air time. Each
         # source keeps its turn; what is filtered is what that turn may offer.
         # A source with nothing in the band keeps its whole list, so narrowing
