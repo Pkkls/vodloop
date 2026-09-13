@@ -1,0 +1,18 @@
+[Unit]
+Description=vodloop chunk feeder (%i)
+After=vodloop-push@%i.service
+BindsTo=vodloop-push@%i.service
+
+[Service]
+Type=exec
+User=ubuntu
+WorkingDirectory=/home/ubuntu/vodloop
+Environment=VODLOOP_ROOT=/home/ubuntu/%i
+Environment=VODLOOP_LIBRARY=/home/ubuntu/videos-%i
+Environment=VODLOOP_UNIT=vodloop-%%s@%i
+ExecStart=/usr/bin/python3 /home/ubuntu/vodloop/bin/feeder.py
+Restart=always
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,37 @@
+[Unit]
+# A second kickbus, for its subscription repair loop and nothing else.
+#
+# Kick's webhooks all land on the one public endpoint, which is the first bus,
+# and it republishes every broadcaster it receives on its own SSE feed. What it
+# does NOT do is keep another channel's subscriptions alive: the repair loop
+# follows the single broadcaster the instance was started with, so a second
+# channel whose subscriptions lapse simply stops receiving chat, quietly.
+#
+# Hence the port: 127.0.0.1:0 is whatever the kernel hands out, because nothing
+# ever connects to it. This instance exists to talk to Kick's API, not to serve.
+Description=kickbus subscription keeper (%i)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=exec
+User=ubuntu
+WorkingDirectory=/home/ubuntu/vodloop
+EnvironmentFile=/home/ubuntu/%i/bus.env
+# the broadcaster id is public, unlike the credentials above; it comes from this
+# channel's own .env so the instance name is the only thing that has to be right
+EnvironmentFile=/home/ubuntu/%i/.env
+ExecStart=/home/ubuntu/vodloop/bin/kickbus -addr 127.0.0.1:0 -broadcaster ${KICK_USER_ID}
+Restart=always
+RestartSec=5
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=/home/ubuntu/%i
+# it holds no state worth writing and only listens on loopback
+PrivateDevices=yes
+RestrictAddressFamilies=AF_INET AF_INET6
+
+[Install]
+WantedBy=multi-user.target

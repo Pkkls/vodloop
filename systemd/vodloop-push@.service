@@ -1,0 +1,42 @@
+[Unit]
+# The connection to Kick for a channel other than the first. Restarting this
+# unit ends that channel's live stream, starts a new VOD and drops every
+# viewer, so deployments must never touch it. The placeholder FIFO writer lives
+# in this cgroup on purpose: systemd kills a whole control group on restart, and
+# if that writer sat in the feeder unit instead, every feeder restart would take
+# the stream down with it.
+#
+# The name is what keeps the channels apart. medic kills any ffmpeg with no
+# parent that sits outside a cgroup matching vodloop-, so an instance named
+# anything else would have the first channel's medic kill this channel's pusher
+# within the quarter hour.
+Description=vodloop RTMPS pusher (%i)
+After=network-online.target
+Wants=network-online.target
+# The feeder is BindsTo= this unit, and BindsTo only ever propagates a stop. So
+# a pusher crash took the feeder down with it, Restart= brought the pusher back
+# alone, and the channel stayed dark until someone looked. Pulling the feeder in
+# on every start closes that. Not Upholds=, which would also undo the deliberate
+# feeder stop behind "vodloopctl pause".
+Wants=vodloop-feed@%i.service
+
+[Service]
+Type=exec
+User=ubuntu
+WorkingDirectory=/home/ubuntu/vodloop
+# One code tree, one root per channel. pusher.sh reads its ingest and its stream
+# key out of this root's own .env, which is the only place the key exists.
+Environment=VODLOOP_ROOT=/home/ubuntu/%i
+Environment=VODLOOP_LIBRARY=/home/ubuntu/videos-%i
+Environment=VODLOOP_UNIT=vodloop-%%s@%i
+ExecStart=/home/ubuntu/vodloop/bin/pusher.sh
+Restart=always
+RestartSec=5
+# a stall on the wire should not be mistaken for a crash
+TimeoutStopSec=20
+# ffmpeg exits 255 when it is asked to stop mid-session. Without this, every
+# deliberate stop leaves the unit in "failed" and a real failure stops standing out.
+SuccessExitStatus=255
+
+[Install]
+WantedBy=multi-user.target

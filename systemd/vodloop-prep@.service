@@ -1,0 +1,25 @@
+[Unit]
+Description=vodloop chunk preparation (%i)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=exec
+User=ubuntu
+WorkingDirectory=/home/ubuntu/vodloop
+Environment=VODLOOP_ROOT=/home/ubuntu/%i
+# Once everything queued has been played, the queue runs dry and the channel
+# sits on the standby clip. This folder is what it falls back on, replayed in
+# order, and it is also the only library this instance may ever touch.
+Environment=VODLOOP_LIBRARY=/home/ubuntu/videos-%i
+Environment=VODLOOP_UNIT=vodloop-%%s@%i
+ExecStart=/usr/bin/python3 /home/ubuntu/vodloop/bin/prep.py
+Restart=always
+RestartSec=10
+# encoding competes with the pusher for two vCPUs; the stream wins, and with a
+# second channel there are two streams in front of it
+Nice=10
+CPUWeight=20
+
+[Install]
+WantedBy=multi-user.target

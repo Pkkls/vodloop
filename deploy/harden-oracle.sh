@@ -86,6 +86,12 @@ dropin vodloop-web  "$V/state $V/segments"
 # meets one in the wrong shape. Without the write it retries that encode on
 # every pass forever, which this box cannot afford.
 dropin vodloop-prep "$V/state $V/segments $V/incoming /home/ubuntu/videos"
+# The template every channel after the first runs from. %i is the instance name,
+# so one drop-in covers all of them and each one can still only write inside its
+# own root and its own library. Without this, a second channel would be the one
+# unsandboxed unit on the box, which is the hole this whole section closed.
+dropin "vodloop-prep@" \
+  "/home/ubuntu/%i/state /home/ubuntu/%i/segments /home/ubuntu/%i/incoming /home/ubuntu/videos-%i"
 dropin kickvods     "/home/ubuntu/kickvods"
 if [ "$APPLY" = 1 ] && [ "$changed" = 1 ]; then
     sudo systemctl daemon-reload
