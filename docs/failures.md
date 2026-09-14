@@ -394,6 +394,51 @@ per arrival, and until it exists the failure mode is silent by construction.
 
 ---
 
+## 2026-09-14 Fetching in a burst cost the address
+
+**Looked like** the downloader breaking: every request refused with a demand to
+sign in and confirm you are not a bot, four retries each, nothing succeeding.
+
+**Was** the address being flagged after a burst. The timeline settles it:
+
+    13:15:56  OK 4.27 Go, the ninth video of the day
+    13:23     first refusal, and every request after it
+
+Successes ran uninterrupted until 13:15:56 and nothing succeeded after. About 28
+Go had been pulled in ten hours.
+
+**Measured, to rule out the downloader**: its version was already the current
+published release, fetched and compared. The `android`, `ios` and `tv` player
+clients were refused identically, and a client-specific block would not hit all
+three. So the refusal follows the address, not the request.
+
+**What earned it** was a setting, not bad luck. The board that limits how many
+fetches are outstanding had been filled to its full depth of 8 deliberately, to
+make the library grow faster. It did: nine large downloads back to back, which is
+exactly the shape that gets an address flagged.
+
+**Fix**: the board depth is now a setting, `VODLOOP_BOARD_DEPTH`, defaulting to 3.
+A channel eats about 24 hours of video a day and that has to be fetched whatever
+the depth, so this is not a limit on volume. It is a limit on **shape**: a shallow
+board spaces the same fetches out instead of bursting them.
+
+**The other half of the fix is to stop hammering once refused.** Each queued item
+retries four times, so eleven items waiting is forty four requests that keep the
+flag alive. Emptying the fetch queue is the first thing to do, before any
+diagnosis: the flag decays on its own, and only if nothing keeps poking it.
+
+**What it costs while it lasts**: nothing immediately. With one play per file and
+a fallback to the whole library, a channel that runs out of unseen material
+repeats rather than showing the standby clip. Measured at the time: 21 files,
+15.2 h, of which 14.2 h unseen.
+
+**Control**: none automatic, and it is worth naming as a gap. Nothing watches the
+success-to-refusal ratio of the fetcher, so the first sign was a human looking. A
+check on "no arrival in six hours" exists and would have caught it, six hours
+late.
+
+---
+
 ## Standing hazards that have not bitten yet
 
 **Chunks written into `segments/` without a matching queue item are deleted
