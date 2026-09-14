@@ -260,7 +260,11 @@ def status_text():
     wire = ("pas de pusher" if moved is None
             else f"{moved * 8 / 2 / 1000:.0f} kbps" if moved else "MUET")
     return (
-        f"vodloop\n"
+        # the channel this answer is about. A hardcoded "vodloop" was fine
+        # while there was one channel; with two it put the wrong name on
+        # every alarm, and the label is already how the rest of this file
+        # says which channel is speaking.
+        f"{common.LABEL or 'vodloop'}\n"
         f"sur le fil   {wire}\n"
         f"tampon       {backlog}s ({backlog // common.CHUNK_SECONDS} chunks)\n"
         f"bibliotheque {playable} jouables / {total}\n"
