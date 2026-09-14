@@ -46,7 +46,7 @@ def duration_of(path):
 # What the standby clip says. A flat dark field was indistinguishable from a dead
 # stream, for viewers and for whoever was diagnosing it, and the only way to tell
 # them apart was to measure the luma. Words remove that whole class of question.
-FILLER_TEXT = os.environ.get("VODLOOP_FILLER_TEXT", "switching vod...")
+FILLER_TEXT = os.environ.get("VODLOOP_FILLER_TEXT", "vod loading...")
 FILLER_FONT = os.environ.get(
     "VODLOOP_FILLER_FONT", "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf")
 

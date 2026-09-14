@@ -621,6 +621,31 @@ finally:
     collector.sources = real_sources
     collector.pool = real_pool
 
+print("ce qu un candidat est cense peser")
+# The rate is learned from the library, so a library of short videos teaches a
+# rate that is wrong for long ones: measured 1.50 Go/h against a real 0.31 for
+# the long streams this pool is mostly made of. An eleven hour video came out at
+# 16.5 Go against a real 3.4 and every long candidate was refused on arithmetic.
+# Nothing can land heavier than what the fetcher will fetch, so that ceiling
+# bounds the error by something true.
+taux = 446037.0
+long_s = 11 * 3600
+brut = long_s * taux
+check("sans plafond l estimation d une longue video est absurde",
+      brut > 3 * collector.MAX_FETCH_BYTES,
+      f"{brut / 1024 ** 3:.1f} Go contre un plafond de "
+      f"{collector.MAX_FETCH_BYTES / 1024 ** 3:.1f} Go")
+check("l estimation ne depasse jamais ce que le fetcher accepte",
+      collector.estimate("x", {"x": long_s}, taux) == collector.MAX_FETCH_BYTES)
+# the control: a short candidate is still charged its real weight, not the cap,
+# or the cap would have replaced the estimate instead of bounding it
+court = collector.estimate("y", {"y": 1800}, taux)
+check("temoin: une video courte est toujours chiffree a son poids",
+      court == 1800 * taux and court < collector.MAX_FETCH_BYTES,
+      f"{court / 1024 ** 3:.2f} Go")
+check("et une duree inconnue reste chiffree, jamais gratuite",
+      collector.estimate("z", {}, taux) > 0)
+
 print()
 if failures:
     print(f"{len(failures)} failed: " + ", ".join(failures))

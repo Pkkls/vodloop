@@ -218,6 +218,25 @@ REFETCH_SECONDS = float(os.environ.get("VODLOOP_REFETCH_DAYS") or 0) * 86400
 # With a share of the disk, stop this far under it: the files already handed to
 # the board are counted at their estimated size, and the estimate can be short.
 BUDGET_HEADROOM_BYTES = int(1.5 * 1024 ** 3)
+
+# Nothing can land heavier than what the fetching machine is willing to
+# fetch: it is given a hard size ceiling and refuses anything above it
+# before the first byte. So an estimate above that ceiling is not caution,
+# it is a number that cannot happen, and charging it reserves bytes for a
+# file that would never have arrived at that size anyway.
+#
+# Measured 2026-09-14, and this is why it matters: the rate learned from
+# the library was 1.50 Go/h, because the library held only short videos,
+# which this source serves thick. The long IRL streams that make up most
+# of the catalogue are served at 690 kbps, or 0.31 Go/h. An eleven hour
+# video was therefore estimated at 16.5 Go against a real 3.4, and every
+# long candidate was refused on arithmetic alone, with 390 of them out of
+# reach for a day.
+#
+# The cap does not fix the rate, and is not meant to. It bounds the error
+# by something true. The rate corrects itself as soon as one long file
+# lands and joins the measurement.
+MAX_FETCH_BYTES = int(os.environ.get("VODLOOP_MAX_FETCH_BYTES") or 0) or int(5.5 * 1000 ** 3)
 # bytes per second assumed for a video when the library has nothing measured
 DEFAULT_RATE = 250_000
 PART_KEY = re.compile(r"-([A-Za-z0-9_-]{11})(?:\.(p\d+of\d+))?\.(?:mp4|mkv)$")
@@ -385,7 +404,7 @@ def estimate(key, durations, rate):
     disk said stop, which is the one thing a share exists to prevent. A part's
     worth, or an hour, is wrong in the safe direction.
     """
-    return (durations.get(key) or PART_SECONDS or 3600) * rate
+    return min((durations.get(key) or PART_SECONDS or 3600) * rate, MAX_FETCH_BYTES)
 
 
 def played_keys():
