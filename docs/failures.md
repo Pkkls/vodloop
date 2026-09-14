@@ -364,9 +364,26 @@ until the API reports offline, then start it. Measured 2026-09-14: the session
 closed after about two minutes, and the whole outage was 2 min 14 s with a new
 recording opened at the end of it.
 
-Whether that is worth doing is the channel owner's call, not a technical one. It
-costs a real outage and splits the recording, and on this channel the answer was
-that 720p60 is fine. The monitoring threshold was then set to 720 rather than
+**Then the explanation itself failed, measured the same day.** A genuinely new
+session was opened at 10:41 while 1920x1080 chunks were going out, and the ladder
+still topped out at 1280x720 at 60 fps. So "the session was opened below the
+broadcast" does not cover this case: the ceiling followed the channel, not the
+session. Most likely an account tier. The code still carries that older wording
+in `ladder_error`, and it is a hypothesis rather than a finding until something
+measures a 1080p ladder on this account at all.
+
+The practical consequence is the useful part, and it points the other way from
+where this entry started. If the wire tops out at 720p60 whatever is pushed, then
+fetching at 1080p buys nothing a viewer can see and costs 1.70 Go per hour
+against 1.02. At a fixed disk share that is the difference between 16 and 27
+hours of rotation, and it decides how many distinct videos fit. The channel was
+moved to fetching 720p60 on 2026-09-14 for exactly that reason, which also let
+the duration ceiling go from three hours to five: 141 eligible videos in the
+catalogue instead of 62.
+
+Whether chasing a higher ladder is worth doing is the channel owner's call, not a
+technical one. It costs a real outage and splits the recording, and on this
+channel the answer was that 720p60 is fine. The monitoring threshold was then set to 720 rather than
 1080, so it stays quiet about an accepted condition and still speaks if the
 ladder ever drops below it. **An alarm for something the owner has accepted is
 noise, and noise is how the useful alarm gets missed.**
