@@ -94,6 +94,31 @@ channel spent twenty minutes on the standby clip.
 Enumerate, then subtract. Never assemble a total from a list you wrote from
 memory.
 
+**A rate measured on one file, applied to a different kind of file.** Sizing the
+duration ceiling, I measured 1.02 Go per hour from a 2.74 h video and multiplied.
+That put a ten hour source at 10.2 Go, over twice what the fetching board's card
+could hold, and I refused the whole long half of the catalogue on it: 141 videos
+eligible out of 531, three times over, each time citing my own arithmetic back as
+if it were evidence.
+
+It was wrong by a factor of three. Long IRL streams are not short videos scaled
+up: the platform serves them far thinner. The measurement was already written
+down in this repository, in a comment in `quality.py`:
+
+> A 720p30 stream at 690 kbps, which is what YouTube serves for the long IRL
+> VODs in this pool, is outbid by Kick's 720p60 rung on every sample of every one
+> of its eleven hours.
+
+690 kbps is 0.31 Go per hour. An eleven hour source is 3.4 Go, not 11. The
+ceiling went to twelve hours and the pool went from 141 to 531 with no pipeline
+change at all, because there had never been anything in the way.
+
+Two lessons, and the second is the one that cost the time. A rate is a property
+of a kind of content, not a constant: check it on the kind you are about to
+apply it to. And **before building a workaround for a limit, re-measure the
+limit** — I had designed a whole streaming fetch to get around a wall that was
+not there.
+
 ## The probe ran the wrong command
 
 **Reproducing the failure with a shortcut reproduces nothing.** A library file
