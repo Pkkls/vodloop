@@ -138,8 +138,12 @@ def remux_is_safe(path):
     Nothing on the reading side helps. Measured against a reproduced bad chunk,
     +genpts, +igndts and +discardcorrupt all still exit 1, and dropping
     -reset_timestamps or adding -copyts changes nothing on the writing side
-    either. Re-encoding is the only thing that produced a clean chunk, so the
-    only useful question is which files need it, and that is what this answers.
+    either. What does work is common.DROP_SEI, which takes the offending unit out
+    before the muxer ever sees it: measured 2026-09-14, a chunk that went from 50
+    timestamp-less packets to 0 and the pusher from exit 1 to exit 0, pixels
+    untouched. So this probe now remuxes exactly the way the real job does,
+    filter included, and what it still refuses is what genuinely needs a
+    re-encode.
 
     The source itself probes clean, so this has to remux to find out rather than
     inspect the original.
@@ -151,7 +155,7 @@ def remux_is_safe(path):
              "-t", str(REMUX_PROBE_SECONDS), "-i", str(path),
              # audio is transcoded on both paths, so it cannot be what differs;
              # dropping it keeps the probe to about a second
-             "-c:v", "copy", "-an", "-f", "mpegts", "-y", str(probe)],
+             "-c:v", "copy", "-an"] + common.DROP_SEI + ["-f", "mpegts", "-y", str(probe)],
             capture_output=True, timeout=120)
         if done.returncode != 0:
             # None, not False: this is "could not measure", and the caller that
@@ -610,7 +614,7 @@ def prepare(item, upcoming=None, watchdog=True):
                 # carries aac as it is, so this costs nothing and stops the loss
                 # dead. Measured on the whole library the same day: 38 of 38 files
                 # are aac LC 44100 stereo, so this is the path they all take.
-                encode = ["-c:v", "copy", "-c:a", "copy"]
+                encode = ["-c:v", "copy", "-c:a", "copy"] + common.DROP_SEI
 
     # the muxer's own record of what it wrote. Counting the files instead would
     # be wrong: the feeder deletes each chunk as it plays it, and on a dry queue

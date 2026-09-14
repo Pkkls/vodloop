@@ -153,7 +153,18 @@ ENCODE = [
 # probed at 159507. prepare() now copies aac outright and this is only reached
 # by a source carrying something else, where matching ENCODE is what stops one
 # file sounding different depending on which path prepared it.
-REMUX = ["-c:v", "copy", "-c:a", "aac", "-b:a", "160k", "-ar", "44100", "-ac", "2"]
+# YouTube hands out 1080p60 AVC with an SEI unit on every keyframe, and the
+# transport stream muxer emits that unit as a packet of its own carrying no
+# timestamp at all. The flv muxer at the far end refuses the first one and the
+# pusher exits, which is the 1298 restarts of 2026-09-05. Dropping SEI removes
+# that packet and nothing else. Measured 2026-09-14 on a refused file: a five
+# minute chunk went from 50 timestamp-less packets to 0 and the pusher from
+# exit 1 to exit 0, while the framemd5 over 959 decoded frames is identical
+# with and without. Re-encoding also fixes it, at 0.06x realtime this box
+# cannot pay for.
+DROP_SEI = ["-bsf:v", "filter_units=remove_types=6"]
+
+REMUX = ["-c:v", "copy", "-c:a", "aac", "-b:a", "160k", "-ar", "44100", "-ac", "2"] + DROP_SEI
 CHUNK_SECONDS = 300
 # stop preparing once this much unplayed video is on disk
 AHEAD_LIMIT_SECONDS = 2 * 3600
