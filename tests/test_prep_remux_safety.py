@@ -150,6 +150,67 @@ check("and a refused file falls back to the full encode, not to nothing",
 check("the probe is short enough to run on every item",
       0 < prep.REMUX_PROBE_SECONDS <= 30, f"{prep.REMUX_PROBE_SECONDS}s")
 
+# What the probe refused for months was not a broken file, it was an SEI unit
+# the transport stream muxer hands out as a packet of its own with no timestamp,
+# one behind every keyframe. Dropping SEI is what made those files copyable, so
+# the copy paths and the probe all have to carry the same filter: a probe that
+# measured a different command than the job runs is worth nothing.
+print("the filter that makes the copy playable")
+check("it drops SEI, and only SEI",
+      prep.common.DROP_SEI == ["-bsf:v", "filter_units=remove_types=6"],
+      str(prep.common.DROP_SEI))
+check("the probe remuxes the way the job copies",
+      '"-an"] + common.DROP_SEI + [' in source)
+check("the video-copy path carries it",
+      prep.common.REMUX[-2:] == prep.common.DROP_SEI, str(prep.common.REMUX[-2:]))
+check("so does the path that copies sound too",
+      '["-c:v", "copy", "-c:a", "copy"] + common.DROP_SEI' in source)
+
+# The pair that matters, against real ffmpeg. x264 writes SEI of its own, so a
+# filtered elementary stream MUST come out smaller: that is the control proving
+# the filter fires at all, without which "pixels unchanged" would also pass on a
+# filter that did nothing whatsoever.
+with tempfile.TemporaryDirectory() as tmp:
+    tmp = pathlib.Path(tmp)
+    clip = tmp / "clip.mp4"
+    subprocess.run(
+        ["ffmpeg", "-hide_banner", "-loglevel", "error",
+         "-f", "lavfi", "-t", "3", "-i", "testsrc=s=320x180:r=25",
+         "-c:v", "libx264", "-preset", "ultrafast", "-g", "25", "-y", str(clip)],
+        check=True, capture_output=True)
+
+    # MPEG-TS, because that is what prep writes. A raw h264 elementary stream
+    # comes out of this filter undecodable ("non-existing PPS 0 referenced"),
+    # which says nothing about the job and everything about the container: TS
+    # carries the parameter sets in band ahead of every keyframe.
+    def chunk(name, extra):
+        out = tmp / name
+        subprocess.run(
+            ["ffmpeg", "-hide_banner", "-loglevel", "error", "-i", str(clip),
+             "-an", "-c:v", "copy"] + extra + ["-f", "mpegts", "-y", str(out)],
+            check=True, capture_output=True)
+        return out
+
+    def pixels(path):
+        # framemd5 goes to a file, not to a pipe: ffmpeg refuses the pipe here
+        # on Windows and the test has to run wherever the repo is checked out
+        sink = path.with_suffix(".framemd5")
+        subprocess.run(
+            ["ffmpeg", "-v", "error", "-i", str(path), "-an",
+             "-f", "framemd5", "-y", str(sink)],
+            check=True, capture_output=True)
+        return [l for l in sink.read_text().splitlines()
+                if l and not l.startswith("#")]
+
+    plain = chunk("plain.ts", [])
+    filtered = chunk("filtered.ts", list(prep.common.DROP_SEI))
+    check("the filter really takes bytes out",
+          filtered.stat().st_size < plain.stat().st_size,
+          f"{plain.stat().st_size} -> {filtered.stat().st_size}")
+    before, after = pixels(plain), pixels(filtered)
+    check("and every decoded frame survives it untouched",
+          before == after and len(before) > 0, f"{len(before)} frames")
+
 print()
 if failures:
     print(f"{len(failures)} failed: " + ", ".join(failures))
