@@ -8,6 +8,12 @@ the broadcast.
 Every number below was measured on the machines that run it. Where a figure is
 load bearing, the measurement is given with it.
 
+This page is how it is built. **[docs/](docs/) is how it breaks**: a symptom
+index, the catalogue of every fault it has had with the measurement that proved
+each one, and a page on the probes that gave confident wrong answers. Read
+[docs/probes-that-lie.md](docs/probes-that-lie.md) before debugging anything
+here; it is the page that saves the most time.
+
 ## The rule everything else follows from: never encode
 
 The server is two vCPU and they already carry the live push. A full re-encode
