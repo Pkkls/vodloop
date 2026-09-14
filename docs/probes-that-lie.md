@@ -61,11 +61,19 @@ RTMP session and sends the standby clip, so the channel reads live, with
 viewers, while the screen is grey. `live.py` returning `EN LIGNE` is a statement
 about the socket, not about the content.
 
-The only verdict on the picture is the luma a viewer receives. The standby clip
-is generated from `color=c=0x101014`, which is a flat luma of 17.3: min, max and
-average all equal, and two frames five seconds apart identical. A real picture
-spreads. Measured on recovery from the 2026-09-14 outage: min=5 max=225 avg=86.
-The `/black` command does this from the viewer side.
+The only verdict on the picture is what a viewer receives, which `/black` fetches
+and measures. It answers "is the picture black", and for a long time that was
+also how the standby clip was recognised: generated from `color=c=0x101014`, it
+was a flat luma of 17.3, min, max and average all equal, two frames five seconds
+apart identical. Real content spreads, for example min=5 max=225 avg=86.
+
+**That shortcut died on 2026-09-14**, deliberately. The clip now carries the words
+`switching vod...`, so it spreads too: measured, 11912 bright pixels, all of them
+inside the centre band and none in the corners. `/black` will call it real, which
+it is. Recognising the standby clip is now `ls segments/*.ts | wc -l` returning
+zero, or reading the words. Both are better than a luma heuristic, and the reason
+for the change is the same reason this page exists: a viewer and an operator
+could not tell an empty queue from a dead stream without instrumentation.
 
 **Reading a field without checking the HTTP status.** The first version of the
 liveness probe read `livestream` straight off the response body. On 2026-09-06

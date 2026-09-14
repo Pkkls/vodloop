@@ -20,10 +20,21 @@ viewer receives.
 
     /black
 
-The standby clip is a flat dark field: min, max and average luma all equal at
-about 17, and two frames five seconds apart identical. A real picture spreads,
-for example min=5 max=225 avg=86. If it is a real picture, the fault is in the
-viewer's player or their session, not here. Tell them to reload.
+**Since 2026-09-14 the standby clip says so in words**: it carries the text
+`switching vod...` centred on the same dark field. If you can read that, the
+queue is empty and the rest of this section applies. That replaced a flat field
+whose only tell was its luma, which meant the difference between "nothing to
+play" and "dead stream" could only be settled by measuring.
+
+The older tell still works on a channel whose clip has not been regenerated: a
+flat field reads min, max and average all equal at about 17, with two frames five
+seconds apart identical. A real picture spreads, for example min=5 max=225
+avg=86. Note that the clip with text also spreads, so **luma alone no longer
+separates the standby clip from real content**. The unambiguous check is the
+chunk count below.
+
+If it is real content, the fault is in the viewer's player or their session, not
+here. Tell them to reload.
 
 **2. If it is the standby clip, the chunk queue is empty.** Confirm:
 

@@ -55,6 +55,36 @@ standby clip on air, which is the thing you were trying to avoid.
 session drops with it, the recording is split in two. It recovers on its own. Say
 so before doing it rather than after.
 
+## Long sources are cut into parts
+
+Most of what these channels are fed runs six to twelve hours. Aired whole, one of
+them is most of a day on the same evening, and a viewer who comes back twice sees
+the same stream both times. `bin/slice.py` cuts anything long into even parts of
+at most fifty minutes, named `<title>-<id>.pNNofMM.mkv`, and everything
+downstream treats a part as an ordinary library file.
+
+Two settings make it work as intended, and the second is easy to forget:
+
+- `VODLOOP_SLICE_SECONDS`, the ceiling per part, 3000 by default. Parts are cut
+  even rather than at a flat ceiling with a stub at the end: a 2.56 h source
+  becomes four parts of 38 minutes, not three of 50 and one of 3.
+- `VODLOOP_SPREAD_PARTS` on the **prep unit**, not in the cron line, because the
+  draw runs inside prep. Without it a video's parts play back to back and the
+  channel airs one whole evening in a row, which is the thing the cutting was
+  supposed to prevent. Measured on the live library: without it, up to four parts
+  of the same video run consecutively; with it, never two.
+
+The cut is a copy, roughly ten times real time, and it refuses more than it does:
+never a file that is on air or holding chunks, never a delete of the original
+until every part it produced has been probed and measured against it, and never a
+job the disk cannot hold. If any part comes out in a shape prep cannot copy, the
+parts are removed and the original is kept.
+
+The reason this happens after the download rather than during it is in
+[failures.md](failures.md#2026-09-14-ranged-fetch-always-fails): asking the
+downloader for a byte range gets the request refused every time, so a long video
+has to arrive whole whatever else is true.
+
 ## Pausing a channel
 
 Stopping the units is not enough. Two things will fight the pause.

@@ -43,19 +43,65 @@ def duration_of(path):
         return 0.0
 
 
+# What the standby clip says. A flat dark field was indistinguishable from a dead
+# stream, for viewers and for whoever was diagnosing it, and the only way to tell
+# them apart was to measure the luma. Words remove that whole class of question.
+FILLER_TEXT = os.environ.get("VODLOOP_FILLER_TEXT", "switching vod...")
+FILLER_FONT = os.environ.get(
+    "VODLOOP_FILLER_FONT", "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf")
+
+
+def filler_matches(path):
+    """Whether an existing standby clip still has the shape the channel sends.
+
+    The one found on 2026-09-14 was 1280x720 at 30 fps against a target of
+    1920x1080: left over from an older profile, and nothing regenerated it
+    because the old check only asked whether the file existed. A clip of the
+    wrong shape is a resolution change on the wire at the worst moment.
+    """
+    try:
+        out = subprocess.run(
+            ["ffprobe", "-v", "error", "-select_streams", "v:0", "-show_entries",
+             "stream=width,height", "-of", "csv=p=0", str(path)],
+            capture_output=True, text=True, timeout=30).stdout.strip()
+        w, h = (int(x) for x in out.split(",")[:2])
+    except (OSError, ValueError, subprocess.SubprocessError):
+        return False
+    return w == common.WIDTH and h == common.HEIGHT
+
+
 def ensure_filler():
     """A short standby clip, used when the queue runs dry so the feeder always
     has something to send. Identical encode settings to every other chunk."""
     filler = common.ROOT / "filler.ts"
-    if filler.exists():
+    if filler.exists() and filler_matches(filler):
         return filler
-    subprocess.run(
+    # drawn on the lavfi source rather than through -vf, because ENCODE already
+    # carries its own filter chain and two of them cannot both be passed
+    fond = (f"color=c=0x101014:s={common.WIDTH}x{common.HEIGHT}"
+            f",drawtext=fontfile={FILLER_FONT}:text='{FILLER_TEXT}'"
+            f":fontcolor=white@0.82:fontsize=h/16"
+            f":x=(w-text_w)/2:y=(h-text_h)/2")
+    done = subprocess.run(
         ["ffmpeg", "-hide_banner", "-loglevel", "error",
-         "-f", "lavfi", "-t", "20", "-i", f"color=c=0x101014:s={common.WIDTH}x{common.HEIGHT}",
+         "-f", "lavfi", "-t", "20", "-i", fond,
          "-f", "lavfi", "-t", "20", "-i", "anullsrc=channel_layout=stereo:sample_rate=44100"]
         + common.ENCODE + ["-f", "mpegts", "-y", str(filler)],
-        check=True,
-    )
+        capture_output=True, text=True)
+    if done.returncode != 0 or not filler.exists():
+        # a missing font must never cost the channel its standby clip: fall back
+        # to the plain field rather than leaving the feeder with nothing to send
+        print(f"filler: texte impossible ({(done.stderr or '').strip()[-120:]}), "
+              "repli sur un fond uni", flush=True)
+        subprocess.run(
+            ["ffmpeg", "-hide_banner", "-loglevel", "error",
+             "-f", "lavfi", "-t", "20", "-i",
+             f"color=c=0x101014:s={common.WIDTH}x{common.HEIGHT}",
+             "-f", "lavfi", "-t", "20", "-i",
+             "anullsrc=channel_layout=stereo:sample_rate=44100"]
+            + common.ENCODE + ["-f", "mpegts", "-y", str(filler)],
+            check=True,
+        )
     return filler
 
 
