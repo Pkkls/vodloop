@@ -429,7 +429,14 @@ try:
         # reserves sur une part de dix-huit, et la chaine refusait chaque passe
         # avec trois fichiers en bibliotheque.
         real_bq = collector.board_queue
+        # This is about what the board charges, not about how deep it is, so the
+        # depth is pinned here rather than inherited. Left to the default it
+        # dominates the arithmetic and the comparison below measures nothing: a
+        # depth of three against a board holding two allows exactly one line
+        # whatever the charging does.
+        real_depth = collector.BOARD_QUEUE_DEPTH
         try:
+            collector.BOARD_QUEUE_DEPTH = 8
             collector.board_queue = lambda now=None: 2
             capped = run(20, 1.0, {v: now for v in POOL[:16]}).count("ajouterait")
             collector.board_queue = lambda now=None: None
@@ -438,6 +445,7 @@ try:
                   capped > uncapped, f"{capped} lignes avec plafond, {uncapped} sans")
         finally:
             collector.board_queue = real_bq
+            collector.BOARD_QUEUE_DEPTH = real_depth
 
         real_refetch = collector.REFETCH_SECONDS
         try:

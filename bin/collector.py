@@ -102,7 +102,20 @@ MIN_FREE_BYTES = 8 * 1024 ** 3
 # Deep is not free. A 49 entry queue built before the variety rule existed held
 # 35 subathons of two hours and more and blocked every later decision for days,
 # which is the state that had the channel looping one video on 2026-09-09.
-BOARD_QUEUE_DEPTH = 8
+# How many fetches the board may hold at once, which is the only throttle on
+# how fast the fetching machine pulls from the source.
+#
+# Filled to 8 on 2026-09-14, it pulled nine videos back to back, about 28 Go
+# in ten hours, and the source started refusing every request with a bot
+# check at 13:23, minutes after a 4.27 Go download completed. Nothing was
+# wrong with the downloader: its version was current and every player client
+# was refused alike, so it was the address that had been flagged, by a burst
+# this depth allowed.
+#
+# A channel eats about 24 hours of video a day and that has to be fetched
+# whatever the depth, so the throttle is not about volume, it is about shape:
+# a shallow board spaces the same fetches out instead of bursting them.
+BOARD_QUEUE_DEPTH = int(os.environ.get("VODLOOP_BOARD_DEPTH") or 3)
 # The board publishes its state on a five minute tick. Past this the file is not
 # reporting the board, it is reporting the last time the board could be reached,
 # and a count read off it would be a guess. Then this falls back to the depth
