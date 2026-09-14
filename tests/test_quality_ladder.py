@@ -189,6 +189,33 @@ check("1080p on air in that session is reported, every viewer is downscaled",
 check("temoin: with nothing known about the chunk, nothing is claimed",
       not served_pushed(NO_PASSTHROUGH, None).get("ladder_error"))
 
+print("the height the channel asked for")
+# The downloader falls through to a lower rendition when the wanted one is too
+# large for the fetching board. The fallback works, so nothing calls it an error,
+# and four of ten library files were 720p before anyone noticed. This says so.
+essai = {"rung_width": 1280, "rung_height": 720, "rung_fps": 60,
+         "rung_bps": 2277000, "rung_count": 5, "rung_best_smaller_bps": None}
+avant = quality.WANTED_HEIGHT
+try:
+    quality.WANTED_HEIGHT = 1080
+    dit = quality.faults({"chunk": "x.ts", "duration": 0, **essai})
+    check("720p on the wire when 1080p was asked for is a fault",
+          any("720p" in f and "1080p" in f for f in dit), str(dit))
+
+    # the control, twice: the same sample at the wanted height is silent, and so
+    # is any sample when the channel has stated no preference. Without these the
+    # check above would pass on a function that complains about everything.
+    bon = dict(essai, rung_width=1920, rung_height=1080)
+    check("temoin: the same sample at 1080p says nothing",
+          not quality.faults({"chunk": "x.ts", "duration": 0, **bon}),
+          str(quality.faults({"chunk": "x.ts", "duration": 0, **bon})))
+    quality.WANTED_HEIGHT = 0
+    check("temoin: with no height asked for it stays quiet",
+          not quality.faults({"chunk": "x.ts", "duration": 0, **essai}),
+          str(quality.faults({"chunk": "x.ts", "duration": 0, **essai})))
+finally:
+    quality.WANTED_HEIGHT = avant
+
 print("the floors, against a source that is simply thin")
 # Measured 2026-09-08: an 11 h 15 IRL stream is served by YouTube at 690 kbps in
 # 720p30, so the catastrophe floor of 1 Mbps sits above a real, untouched

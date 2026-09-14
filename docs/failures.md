@@ -308,6 +308,75 @@ cases.
 
 ---
 
+## 2026-09-14 Half the library was the wrong resolution and nothing said so
+
+**Looked like** the sources only offering 720p for some streams. Four of ten
+library files were 1280x720 while the channel is configured for 1080p, and every
+one of them passed the shape check, so nothing anywhere reported a problem.
+
+**Was** the downloader's own size cap. The format selector asks for
+`avc1` at `height<=1080` **and** `filesize_approx` under the cap, then falls
+through to a `height<=720` branch, then 480, then 360. A long stream's 1080p
+rendition exceeds the cap, the first branch matches nothing, and the second one
+quietly succeeds. There is no warning: a fallback that works is not an error.
+
+**Measured by** asking the source what it actually offers, for a file that had
+arrived at 720p:
+
+    yt-dlp -F <url> | grep avc1
+
+    311  1280x720   60  ~4.36GiB  3799k  m3u8
+    298  1280x720   60   2.61GiB  2277k  https
+    312  1920x1080  60  ~6.90GiB  6015k  m3u8
+    299  1920x1080  60   4.62GiB  4029k  https
+
+The 1080p rendition existed and was 4.62 GiB against a cap of 4 Go, which is
+3.73 GiB. Then the same selector run at both caps, which is the control that
+turns a plausible story into a cause:
+
+    cap 4000000000  ->  298+140  720p   2.96 GB
+    cap 5500000000  ->  299+140  1080p  5.12 GB
+
+**Fix**: raise the cap. These sources run about 1.7 Go per hour at 1080p60, so
+5500M covers everything up to the three hour ceiling the collector already
+enforces, and the lower branches stay in place so a heavier source degrades
+rather than fetching nothing.
+
+**The cap is not arbitrary and is not about taste.** The fetching board has a 15
+Go card, and the downloader writes video and audio separately then merges, so
+peak usage is about twice the final size. 5500M peaks near 11 Go against 13 Go
+free. Raising it further needs a larger card, not a larger number. That is the
+whole reason a cap exists at all, and anyone raising it should check the card
+first.
+
+**And fixing the files does not fix the wire.** The platform decides its rung
+ladder when the session opens and keeps that decision for the whole session. A
+session opened while a 720p video was on air tops out at the platform's own 720p
+encode and never gains a source rung, however many 1080p chunks are pushed into
+it afterwards. Measured 2026-09-12, and again on 2026-09-14 after the library had
+been made entirely 1080p: the samples still read `rung_height: 720` against
+`width: 1920` on the pushed chunk.
+
+Restarting the pusher is not enough either. The ingest holds the session across a
+reconnect, so the timestamp the API reports does not change and the ladder does
+not move. Only letting the session actually expire works: stop the pusher, poll
+until the API reports offline, then start it. Measured 2026-09-14: the session
+closed after about two minutes, and the whole outage was 2 min 14 s with a new
+recording opened at the end of it.
+
+Whether that is worth doing is the channel owner's call, not a technical one. It
+costs a real outage and splits the recording, and on this channel the answer was
+that 720p60 is fine. The monitoring threshold was then set to 720 rather than
+1080, so it stays quiet about an accepted condition and still speaks if the
+ladder ever drops below it. **An alarm for something the owner has accepted is
+noise, and noise is how the useful alarm gets missed.**
+
+**Control**: none automatic, and this is a gap worth naming. Nothing asserts that
+what arrives matches the height the channel asked for. The check is one ffprobe
+per arrival, and until it exists the failure mode is silent by construction.
+
+---
+
 ## Standing hazards that have not bitten yet
 
 **Chunks written into `segments/` without a matching queue item are deleted

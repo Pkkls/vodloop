@@ -104,6 +104,36 @@ check("un fichier depose dans incoming l'est",
 check("temoin: le repertoire seul decide, pas le nom",
       prep.consumable(str(inc / "a.mp4")) and not prep.consumable(str(library / "a.mp4")))
 
+# --- un seul passage par video, et le filet dessous ----------------------
+# MAX_PLAYS vaut 1: une video deja diffusee sort du tirage tant qu'il reste
+# quelque chose d'inedit. Ce qui compte autant, c'est ce qui arrive quand il ne
+# reste rien: le tirage doit rendre la bibliotheque entiere plutot que rien du
+# tout, sinon la chaine se repose sur le clip d'attente au lieu de se repeter.
+histoire = {}
+prep.load_history = lambda: dict(histoire)
+prep.save_history = lambda h: histoire.update(h)
+
+check("le reglage est bien d'un seul passage", common.MAX_PLAYS == 1, common.MAX_PLAYS)
+
+(library / "c.mp4").write_text("video")
+histoire[str(library / "a.mp4")] = {"at": 0.0, "plays": 1}
+tirage = {"seq": 0, "items": []}
+prep.refill_from_library(tirage)
+tires = sorted(pathlib.Path(i["path"]).name for i in tirage["items"])
+check("une video deja diffusee reste en dehors du tirage",
+      "a.mp4" not in tires, tires)
+check("temoin: les inedites, elles, y sont", tires == ["b.mp4", "c.mp4"], tires)
+
+for nom in ("a.mp4", "b.mp4", "c.mp4"):
+    histoire[str(library / nom)] = {"at": 0.0, "plays": 1}
+tirage = {"seq": 0, "items": []}
+combien = prep.refill_from_library(tirage)
+check("tout ayant ete diffuse, le repli rend quand meme la bibliotheque",
+      combien == 3, combien)
+
+(library / "c.mp4").unlink()
+histoire.clear()
+
 # --- unset means the old behaviour, exactly ------------------------------
 prep.LIBRARY = None
 check("sans VODLOOP_LIBRARY, la fonction ne fait rien",

@@ -61,6 +61,17 @@ STANDING_COOLDOWN_SECONDS = 6 * 3600
 # read it from and nothing to keep in step.
 STANDING_PREFIX = "RUNG:"
 
+# The height the channel asked the downloader for. An arrival below it is a
+# silent fault by construction: the format selector falls through to a lower
+# branch when the wanted one is too large for the fetching board, the fallback
+# succeeds, and nothing anywhere calls a working fallback an error. Four of ten
+# library files were 720p on 2026-09-14 and nothing had reported it.
+#
+# Compared against what is actually on the wire rather than against the files,
+# because that is the thing being promised, and it costs nothing: the sample
+# already carries it. Unset means the channel has no opinion and this is quiet.
+WANTED_HEIGHT = int(os.environ.get("VODLOOP_MAX_HEIGHT") or 0)
+
 # A catastrophe net, and deliberately nothing finer than that. The real question
 # is asked against the source a few functions down; these two only catch the
 # stream collapsing to something no source could explain. Measured 2026-09-08:
@@ -500,6 +511,9 @@ def append(row):
 def faults(row):
     """Everything wrong with one sample, named. Empty means nothing is."""
     found = []
+    aired = row.get("rung_height")
+    if WANTED_HEIGHT and aired and aired < WANTED_HEIGHT:
+        found.append(f"diffusion en {aired}p alors que {WANTED_HEIGHT}p est demande")
     if not row.get("chunk"):
         found.append("aucun chunk sur le disque")
     elif row.get("chunk_error"):

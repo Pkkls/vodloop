@@ -36,7 +36,7 @@ WORK="/root/yt"
 # Mesure du 2026-09-08 : les trois telechargements restes en travers sur la carte
 # etaient f399, f303 et f136+f251. avc1 pese un peu plus sur le fil que l'AV1, et
 # c'est tout ce que ce choix coute.
-QUALITY="bv*[vcodec^=avc1][height<=1080][filesize_approx<4000000000]+ba[acodec^=mp4a]/bv*[vcodec^=avc1][height<=720][filesize_approx<4000000000]+ba[acodec^=mp4a]/bv*[vcodec^=avc1][height<=480][filesize_approx<4000000000]+ba[acodec^=mp4a]/bv*[vcodec^=avc1][height<=360]+ba[acodec^=mp4a]"
+QUALITY="bv*[vcodec^=avc1][height<=1080][filesize_approx<5500000000]+ba[acodec^=mp4a]/bv*[vcodec^=avc1][height<=720][filesize_approx<5500000000]+ba[acodec^=mp4a]/bv*[vcodec^=avc1][height<=480][filesize_approx<5500000000]+ba[acodec^=mp4a]/bv*[vcodec^=avc1][height<=360]+ba[acodec^=mp4a]"
 # Le Claw a 13 Go utiles. Une VOD de six heures en 1080p en fait huit et remplit
 # la carte avant d'avoir fini : c'est exactement ce qui a mis /root a 100% et
 # fait echouer les 54 telechargements suivants, sans que rien ne le signale.
@@ -48,7 +48,18 @@ QUALITY="bv*[vcodec^=avc1][height<=1080][filesize_approx<4000000000]+ba[acodec^=
 # approximate size YouTube reports and that is missing often enough to matter:
 # a 12h VOD was seen picking 1080p60 through it on 2026-09-08. This is the hard
 # stop, and it aborts before the bytes land rather than after.
-MAX_FILESIZE=4G
+# 4G refused the 1080p rendition of anything past about two hours and the
+# selector fell through to 720p, silently. Measured 2026-09-14 on a 2.74 h
+# source: 1080p60 is 4.62 GiB against 2.61 for 720p, so the cap was exactly
+# what chose the lower one. At about 1.7 Go per hour, 5500M covers 1080p up
+# to the three hour ceiling the collector already enforces, and the selector
+# still falls back for the rare heavier source rather than fetching nothing.
+#
+# The board's card bounds this, not taste: the download writes the video and
+# the audio separately and then merges, so peak usage is about twice the
+# final size. 5500M peaks near 11 Go against 13 Go free. Raising it further
+# needs a larger card, not a larger number.
+MAX_FILESIZE=5500M
 MAX_DURATION=86400
 KEEP_FREE_MB=2048
 # Une ligne, la sortie a emprunter, par exemple socks5://127.0.0.1:1080 ou
@@ -199,7 +210,7 @@ if [ -n "$PART" ]; then
   OUTTMPL="%(title).120B-%(id)s.$PART.%(ext)s"
   QUALITY="bv*[vcodec^=avc1][height<=${MAXH:-720}]+ba[acodec^=mp4a]/bv*[vcodec^=avc1][height<=480]+ba[acodec^=mp4a]/bv*[vcodec^=avc1][height<=360]+ba[acodec^=mp4a]"
 elif [ -n "$MAXH" ] && [ "$MAXH" -lt 1080 ]; then
-  QUALITY="bv*[vcodec^=avc1][height<=$MAXH][filesize_approx<4000000000]+ba[acodec^=mp4a]/bv*[vcodec^=avc1][height<=480][filesize_approx<4000000000]+ba[acodec^=mp4a]/bv*[vcodec^=avc1][height<=360]+ba[acodec^=mp4a]"
+  QUALITY="bv*[vcodec^=avc1][height<=$MAXH][filesize_approx<5500000000]+ba[acodec^=mp4a]/bv*[vcodec^=avc1][height<=480][filesize_approx<5500000000]+ba[acodec^=mp4a]/bv*[vcodec^=avc1][height<=360]+ba[acodec^=mp4a]"
 fi
 
 # --restrict-filenames : noms reduits a [A-Za-z0-9._-], donc plus aucun probleme de

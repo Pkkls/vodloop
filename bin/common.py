@@ -227,7 +227,17 @@ MIN_RUNWAY_SECONDS = 60 * 60
 # 450 Mo an hour of 720p, what the janitor keeps is a day or two of rotation.
 # That is the difference between a supply outage costing repeats and costing
 # silence.
-MAX_PLAYS = 2
+# One play per file. The channel is a rerun channel, not a loop: a viewer who
+# comes back should not meet the same video again while anything unseen is on
+# the disk. Set to 1 on 2026-09-14 at the owner's request.
+#
+# This is a preference in the draw, not a rule about deletion. The selector
+# falls back to the whole pool when every file has had its play, so a library
+# that has been fully seen replays rather than showing the standby clip, and
+# nothing here deletes anything: that belongs to the janitor and to disk
+# pressure alone. Retiring on play is what emptied the library on 2026-09-08
+# when the supply stopped for a day.
+MAX_PLAYS = 1
 # a wall clock on one encode, so a single hostile input cannot pin the machine
 # and stall everything behind it. Scaled by the video's own length.
 ENCODE_TIMEOUT_FACTOR = 4
