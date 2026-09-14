@@ -21,7 +21,9 @@ Every one of them follows the same shape, learned the hard way today:
     never broke, and the difference matters when it happens nightly.
 """
 import json
+import os
 import pathlib
+import shutil
 import subprocess
 import sys
 import time
@@ -46,6 +48,24 @@ SILENT_PUSHER_COOLDOWN = 20 * 60
 # channel has been on the standby clip for three passes running.
 DRY_PASSES_BEFORE_RESTART = 3
 PREP_RESTART_COOLDOWN = 30 * 60
+
+# The floor that makes the restart above pointless. On 2026-09-14 prep was
+# restarted onto a disk holding 3.8 Go free, three passes running:
+# disk_is_tight() stops it before it writes a single chunk, so the buffer never
+# refilled, cx247 sat on the standby clip for half an hour, and the repair fired
+# again and again with nothing to repair. Space first, then the restart has
+# something to do.
+#
+# 4.5 Go of that disk was diagnostic scratch left in /tmp, mine. That half is
+# free to give back and it goes first, because it costs the channel nothing.
+SCRATCH_MIN_AGE_SECONDS = 2 * 3600
+SCRATCH_MIN_BYTES = 64 * 1024 ** 2
+DISK_REPAIR_COOLDOWN = 15 * 60
+# The expensive half. A library file is given up only once the disk is already
+# under the floor, and never below what the channel needs to rotate at all: a
+# grey screen now is worse than less variety later, but an empty library is the
+# same grey screen tomorrow.
+KEEP_PLAYABLE_FILES = 3
 
 
 def load():
@@ -116,6 +136,90 @@ def wire_bytes(seconds=8):
     return None if second is None else first + second
 
 
+def tree_bytes(path):
+    """Bytes a file or a directory holds. Unreadable parts count as nothing."""
+    try:
+        if path.is_file():
+            return path.stat().st_size
+    except OSError:
+        return 0
+    total = 0
+    try:
+        for sub in path.rglob("*"):
+            try:
+                if sub.is_file():
+                    total += sub.stat().st_size
+            except OSError:
+                pass
+    except OSError:
+        pass
+    return total
+
+
+def scratch_debris(now, where="/tmp"):
+    """Old, large leftovers under /tmp that belong to us, biggest first.
+
+    The cron locks and prep's own remux probes are excluded by name: both are in
+    use by definition, and a repair that shoots a lock is a worse fault than the
+    one it came to fix. Ownership and age do the rest, so nothing another
+    service is holding is ever a candidate.
+    """
+    out = []
+    try:
+        entries = list(pathlib.Path(where).iterdir())
+    except OSError:
+        return out
+    for item in entries:
+        if item.name.endswith(".lock") or item.name.startswith("remuxprobe_"):
+            continue
+        try:
+            st = item.stat()
+        except OSError:
+            continue
+        # ownership keeps us off anything another account put here. Windows has
+        # no getuid, and the test suite has to run wherever the repo is cloned,
+        # so there the filter simply does not apply.
+        mine = getattr(os, "getuid", None)
+        if mine is not None and st.st_uid != mine():
+            continue
+        if now - st.st_mtime < SCRATCH_MIN_AGE_SECONDS:
+            continue
+        size = tree_bytes(item)
+        if size >= SCRATCH_MIN_BYTES:
+            out.append((item, size))
+    return sorted(out, key=lambda pair: -pair[1])
+
+
+def spare_library_file():
+    """The biggest library file this channel can give up now, or None.
+
+    Played at least once, holding no chunks on the disk, and never one of the
+    last few. The janitor already retires on budget and refuses when every file
+    is protected, which is correct for a healthy disk and is exactly what left
+    this one full. This is the emergency underneath it, not a second policy.
+    """
+    try:
+        queue = json.loads((common.STATE / "queue.json").read_text())
+        items = queue.get("items", []) if isinstance(queue, dict) else queue
+    except (OSError, ValueError):
+        items = []
+    busy = {i["path"] for i in items
+            if i.get("path") and list(common.SEGMENTS.glob("%05d_*.ts" % i["id"]))}
+    try:
+        playable = [f for f in common.LIBRARY_DIR.iterdir()
+                    if f.is_file() and f.suffix.lower() in prep.MEDIA_SUFFIXES]
+    except OSError:
+        return None
+    if len(playable) <= KEEP_PLAYABLE_FILES:
+        return None
+    history = prep.load_history()
+    spare = [f for f in playable
+             if str(f) not in busy and prep.played_count(history, f) > 0]
+    if not spare:
+        return None
+    return max(spare, key=lambda f: f.stat().st_size)
+
+
 def act(apply, note, command):
     if not apply:
         print(f"  ferait: {note}")
@@ -156,7 +260,33 @@ def main(argv):
     else:
         print(f"  pusher emet ({moved} octets)")
 
-    # 3. a channel that has been on the standby clip for several passes
+    # 3. the disk floor. Nothing below this point can work without it.
+    free = shutil.disk_usage(common.ROOT).free
+    if free >= common.MIN_FREE_BYTES:
+        print(f"  disque {free / 1024 ** 3:.1f}G libres")
+    elif now - data.get("disk_freed", 0) < DISK_REPAIR_COOLDOWN:
+        print("  disque sous le plancher, deja degage recemment, on attend")
+    else:
+        debris = scratch_debris(now)
+        spare = None if debris else spare_library_file()
+        if debris:
+            gained = sum(size for _, size in debris)
+            if act(apply,
+                   "disque sous le plancher, %d reste(s) de diagnostic effaces"
+                   " dans /tmp (%.1fG rendus)" % (len(debris), gained / 1024 ** 3),
+                   ["rm", "-rf"] + [str(item) for item, _ in debris]):
+                data["disk_freed"] = now
+                did += 1
+        elif spare is None:
+            print("  disque sous le plancher et rien a rendre sans casser la rotation")
+        elif act(apply,
+                 "disque sous le plancher, %s retire (%.1fG, deja diffuse)"
+                 % (spare.name, spare.stat().st_size / 1024 ** 3),
+                 ["rm", "-f", str(spare)]):
+            data["disk_freed"] = now
+            did += 1
+
+    # 4. a channel that has been on the standby clip for several passes
     backlog = prep.seconds_on_disk()
     dry = data.get("dry_passes", 0) + 1 if backlog == 0 else 0
     data["dry_passes"] = dry

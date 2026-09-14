@@ -125,6 +125,83 @@ finally:
     medic.prep.seconds_on_disk = real_disk
     medic.tgbot.say = real_say
 
+# The repair that was missing on 2026-09-14. prep was restarted three passes
+# running onto a disk with 3.8 Go free, and disk_is_tight() stops it before it
+# writes a chunk, so the buffer never refilled and the channel sat on the standby
+# clip for half an hour while the restart above fired uselessly. Freeing the disk
+# is the repair; the danger is that it frees the wrong thing.
+print("clearing the disk, and what it must never touch")
+import json  # noqa: E402
+import os  # noqa: E402
+
+with tempfile.TemporaryDirectory() as tmp:
+    tmp = pathlib.Path(tmp)
+    scratch = tmp / "scratch"
+    scratch.mkdir()
+    old = time.time() - 3 * 3600
+
+    def put(name, mo, aged=True):
+        f = scratch / name
+        f.write_bytes(b"0" * (mo * 1024 * 1024))
+        if aged:
+            os.utime(f, (old, old))
+        return f
+
+    put("debris.ts", 70)
+    put("cron.lock", 70)
+    put("remuxprobe_99.ts", 70)
+    put("crumb.ts", 1)
+    put("fresh.ts", 70, aged=False)
+
+    found = sorted(f.name for f, _ in medic.scratch_debris(time.time(), where=str(scratch)))
+    # the control first: without this the four checks below would all pass on a
+    # function that returned an empty list whatever it was handed
+    check("it does find the old, large leftover", found == ["debris.ts"], str(found))
+    check("a cron lock is never a candidate", "cron.lock" not in found)
+    check("nor is a probe prep is holding", "remuxprobe_99.ts" not in found)
+    check("nor is a file written minutes ago", "fresh.ts" not in found)
+    check("nor is something too small to matter", "crumb.ts" not in found)
+    check("a directory it cannot read is not a crash",
+          medic.scratch_debris(time.time(), where=str(tmp / "absent")) == [])
+
+    # spare_library_file: the emergency under the janitor, and the one place
+    # this repair can cost the channel something
+    lib, seg, state = tmp / "lib", tmp / "seg", tmp / "state"
+    for d in (lib, seg, state):
+        d.mkdir()
+    sizes = {"a.mkv": 5, "b.mkv": 9, "c.mkv": 7, "d.mkv": 3, "e.mkv": 4}
+    for name, mo in sizes.items():
+        (lib / name).write_bytes(b"0" * (mo * 1024 * 1024))
+    (seg / "00007_00000.ts").write_bytes(b"0")
+    (state / "queue.json").write_text(json.dumps({"items": [
+        {"id": 7, "path": str(lib / "b.mkv")},
+        {"id": 8, "path": str(lib / "c.mkv")},
+    ]}))
+    history = {str(lib / n): {"plays": 1} for n in ("b.mkv", "c.mkv", "d.mkv")}
+
+    real = (medic.common.LIBRARY_DIR, medic.common.SEGMENTS, medic.common.STATE,
+            medic.prep.load_history)
+    medic.common.LIBRARY_DIR, medic.common.SEGMENTS, medic.common.STATE = lib, seg, state
+    medic.prep.load_history = lambda: history
+    try:
+        picked = medic.spare_library_file()
+        # b is bigger but it is the one holding chunks, so c is the answer
+        check("it gives up the biggest file that has already played",
+              picked is not None and picked.name == "c.mkv",
+              picked.name if picked else "None")
+        check("and never one still holding chunks on the disk",
+              picked is None or picked.name != "b.mkv")
+        check("and never one that has not been on air yet",
+              picked is None or picked.name not in ("a.mkv", "e.mkv"))
+
+        for name in ("a.mkv", "e.mkv"):
+            (lib / name).unlink()
+        check("below the rotation floor it gives up nothing at all",
+              medic.spare_library_file() is None)
+    finally:
+        (medic.common.LIBRARY_DIR, medic.common.SEGMENTS, medic.common.STATE,
+         medic.prep.load_history) = real
+
 print()
 if failures:
     print(f"{len(failures)} failed: " + ", ".join(failures))
