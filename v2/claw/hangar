@@ -39,7 +39,9 @@ DRY=""
 [ "${1:-}" = "--dry" ] && DRY=1
 OSSH="ssh -i $KEY -o BatchMode=yes -o ConnectTimeout=20 -o StrictHostKeyChecking=accept-new"
 ts() { date '+%Y-%m-%d %H:%M:%S'; }
-log() { echo "$(ts) $*" >> "$LOG"; [ -z "$DRY" ] || echo "$*"; }
+# a dry run says what it would do on the terminal and leaves the log alone:
+# its lines read exactly like real ones the next morning
+log() { [ -z "$DRY" ] || { echo "$*"; return; }; echo "$(ts) $*" >> "$LOG"; }
 num() { case "$1" in "" | *[!0-9]*) echo 0 ;; *) echo "$1" ;; esac; }
 field() { printf '%s' "$2" | sed -n "s/.*\"$1\": *\([0-9]*\).*/\1/p" | head -1; }
 bytes() { ls -ln "$1" 2>/dev/null | awk '{print $5}'; }
