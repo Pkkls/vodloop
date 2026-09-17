@@ -81,6 +81,29 @@ check("sources carry their words",
       supply.parse_sources("# note\nhttps://a/videos\nhttps://b/search | Nana, IRL\n")
       == [("https://a/videos", []), ("https://b/search", ["nana", "irl"])])
 
+print("supply: how long a video the board may be asked for")
+real_duration, real_size = chan.duration, chan.size_of
+try:
+    lengths = {"a": 3600.0, "b": 7200.0}
+    sizes = {"a": 800 * 1024 ** 2, "b": 1600 * 1024 ** 2}
+    chan.duration = lambda p, cache=None: lengths[str(p)]
+    chan.size_of = lambda p: sizes[str(p)]
+    rate = supply.measured_rate(["a", "b"], {})
+    check("the rate is measured on what landed", round(rate / 1e6, 2) == 0.23, rate)
+    chan.duration = lambda p, cache=None: 30.0
+    check("control: too little measured falls back",
+          supply.measured_rate(["a"], {}) == 250_000)
+finally:
+    chan.duration, chan.size_of = real_duration, real_size
+check("a thick channel may only be asked for short videos",
+      supply.fetch_ceiling(1e6) == int(10 * G / 1e6), supply.fetch_ceiling(1e6))
+check("control: a thin one is bounded by the band, not by the card",
+      supply.fetch_ceiling(233016) == chan.MAX_SECONDS)
+supply.CATALOG.parent.mkdir(parents=True, exist_ok=True)
+supply.CATALOG.write_text("dQw4w9WgXcQ\t7200\nbroken00001\tNA\n")
+check("the catalogue comes back with numbers, not text",
+      supply.read_catalog() == [("dQw4w9WgXcQ", 7200)], supply.read_catalog())
+
 print("supply: what the board is not offered again")
 (chan.STATE).mkdir(parents=True, exist_ok=True)
 now = 1789000000

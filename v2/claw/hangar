@@ -154,6 +154,14 @@ fill() {
   maxh=$(num "$(field maxh "$want")")
   case "$maxh" in 1080 | 720 | 480) ;; *) maxh=720 ;; esac
   cands=$($OSSH "$ORACLE" "cat $V2/$chan/state/candidates.tsv" 2>/dev/null) || return 1
+  # A channel with an empty queue is on its standby clip right now, and the
+  # question stops being which video deserves a turn: it is which one is on the
+  # air soonest. A fetch costs about the same whatever it brings back, so the
+  # shortest candidates go first until something is queued.
+  if [ "$(num "$(field queue_files "$want")")" -eq 0 ]; then
+    cands=$(printf '%s\n' "$cands" | sort -k2 -n | head -20)
+    log "$chan: file vide, tirage parmi les 20 plus courtes"
+  fi
   skip=$( { ls "$dir" | sed -n 's/.*-\([A-Za-z0-9_-]\{11\}\)\.[a-z0-9]*$/\1/p'
             awk -v t=$((now - 7 * 86400)) -v m="$MAX_FAILS" \
               '$1 >= t { c[$2]++ } END { for (k in c) if (c[k] >= m) print k }' "$BASE/failed.tsv" 2>/dev/null

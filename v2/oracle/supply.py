@@ -63,6 +63,43 @@ def plan(queue_bytes, queued_seconds, other_bytes, aired, free, budget=chan.BUDG
     return need, max(0, offer), evict
 
 
+def measured_rate(paths, durations, fallback=250_000):
+    """Bytes per second of what this channel actually receives.
+
+    Measured, because the two channels differ by a factor of three: 720p VODs
+    land at about 0.22 MB/s while long IRL streams are served at 690 kbps. It
+    decides how long a video the board may be asked for at all.
+    """
+    size = secs = 0
+    for path in paths:
+        length = chan.duration(path, durations)
+        if length > 60:
+            size += chan.size_of(path)
+            secs += length
+    return size / secs if secs >= 3600 else fallback
+
+
+def read_catalog():
+    """(id, seconds) of the catalogue on disk. Seconds come back as text, and
+    comparing that to a ceiling is a TypeError that only fires in production."""
+    rows = []
+    try:
+        for line in CATALOG.read_text().splitlines():
+            vid, _, secs = line.partition("\t")
+            try:
+                rows.append((vid, int(secs)))
+            except ValueError:
+                continue
+    except OSError:
+        pass
+    return rows
+
+
+def fetch_ceiling(rate):
+    """The longest video the board can bring back whole, at that rate."""
+    return min(chan.MAX_SECONDS, int(chan.MAX_FILE_BYTES / rate))
+
+
 def parse_sources(text):
     out = []
     for line in text.splitlines():
@@ -166,9 +203,11 @@ def main(argv):
     durations = chan.read_json(chan.STATE / "durations.json", {})
     queue = chan.media(chan.QUEUE)
     queued = sum(chan.duration(p, durations) for p in queue)
+    held = queue + chan.media(chan.AIRED) + chan.media(chan.CURRENT)
+    rate = measured_rate(held, durations)
     chan.write_json(chan.STATE / "durations.json",
                     {k: v for k, v in durations.items()
-                     if any(k.startswith(p.name + ":") for p in queue)})
+                     if any(k.startswith(p.name + ":") for p in held)})
     aired = []
     for p in chan.media(chan.AIRED):
         try:
@@ -186,21 +225,27 @@ def main(argv):
             path.unlink(missing_ok=True)
 
     skip = excluded(now)
-    try:
-        catalog = [line.split("\t") for line in CATALOG.read_text().splitlines()]
-    except OSError:
-        catalog = []
-    candidates = [(vid, secs) for vid, secs in catalog if vid not in skip]
+    catalog = read_catalog()
+    # A video the board cannot bring back whole is not a candidate. Its merge is
+    # what breaks first: 211 Mo of RAM on that card, and a 9 h 30 stream of
+    # 6.7 Go died in ffmpeg at the end of it on 2026-09-17, after three hours of
+    # downloading. The ceiling is the file size the card survives, read back as
+    # a duration through the rate this channel actually receives.
+    fetch_seconds = fetch_ceiling(rate)
+    candidates = [(vid, secs) for vid, secs in catalog
+                  if vid not in skip and secs <= fetch_seconds]
     chan.log(f"file {len(queue)} ({queued / 3600:.1f} h), diffuses {len(aired) - len(evict)}, "
              f"besoin {need / 3600:.1f} h, offre {offer / chan.GIB:.1f} Go, "
-             f"libre {free / chan.GIB:.1f} Go, candidats {len(candidates)}/{len(catalog)}")
+             f"libre {free / chan.GIB:.1f} Go, candidats {len(candidates)}/{len(catalog)} "
+             f"(<= {fetch_seconds / 3600:.1f} h a {rate / 1e6:.2f} Mo/s)")
     if apply:
         tmp = CANDIDATES.with_suffix(".tmp")
         tmp.write_text("".join(f"{vid}\t{secs}\n" for vid, secs in candidates))
         tmp.replace(CANDIDATES)
         chan.write_json(WANT, {"need_seconds": need, "offer_bytes": offer, "maxh": chan.MAXH,
                                "queue_files": len(queue), "queue_hours": round(queued / 3600, 1),
-                               "candidates": len(candidates), "at": int(now)})
+                               "candidates": len(candidates), "max_seconds": fetch_seconds,
+                               "rate_bps": int(rate), "at": int(now)})
     return 0
 
 
