@@ -10,3 +10,5 @@ vodloopctl text eol=lf
 # S98vodloopwatch had already slipped through these rules. The directory is the
 # rule, so nothing added to it later has to remember to ask.
 claw/*     text eol=lf
+# v2: the board runs these through busybox sh, which refuses CRLF outright.
+v2/claw/*  text eol=lf
