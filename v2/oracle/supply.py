@@ -126,18 +126,32 @@ def refresh_catalog(apply):
         tmp.replace(CATALOG)
 
 
+FORGIVEN_FAILURES = 1
+
+
+def ledger_ids(name):
+    rows = []
+    try:
+        for line in (chan.STATE / name).read_text().splitlines():
+            fields = line.split("\t")
+            if len(fields) >= 2:
+                rows.append((int(fields[0]), fields[1]))
+    except (OSError, ValueError):
+        pass
+    return rows
+
+
 def excluded(now):
+    """Everything the board must not be offered: held here, aired lately,
+    refused for what it is, or failed to cut more than once."""
     ids = {chan.video_id(p) for folder in (chan.QUEUE, chan.CURRENT, chan.AIRED, chan.UPLOAD)
            for p in chan.media(folder)}
-    for name in ("aired.tsv", "rejected.tsv"):
-        try:
-            for line in (chan.STATE / name).read_text().splitlines():
-                fields = line.split("\t")
-                if len(fields) >= 2 and (name == "rejected.tsv"
-                                         or now - int(fields[0]) < chan.REFETCH_SECONDS):
-                    ids.add(fields[1])
-        except (OSError, ValueError):
-            continue
+    ids |= {vid for at, vid in ledger_ids("aired.tsv") if now - at < chan.REFETCH_SECONDS}
+    ids |= {vid for _, vid in ledger_ids("rejected.tsv")}
+    failures = {}
+    for _, vid in ledger_ids("failed.tsv"):
+        failures[vid] = failures.get(vid, 0) + 1
+    ids |= {vid for vid, count in failures.items() if count > FORGIVEN_FAILURES}
     ids.discard(None)
     return ids
 

@@ -81,6 +81,29 @@ check("sources carry their words",
       supply.parse_sources("# note\nhttps://a/videos\nhttps://b/search | Nana, IRL\n")
       == [("https://a/videos", []), ("https://b/search", ["nana", "irl"])])
 
+print("supply: what the board is not offered again")
+(chan.STATE).mkdir(parents=True, exist_ok=True)
+now = 1789000000
+rows = {"aired.tsv": [(now - 3600, "aired000001"), (now - 40 * 86400, "olddvideo01")],
+        "rejected.tsv": [(now - 86400, "refused0001")],
+        "failed.tsv": [(now - 86400, "flaky000001")]}
+def write_ledgers(rows):
+    for name, entries in rows.items():
+        (chan.STATE / name).write_text(
+            "".join("%d\t%s\tnote\n" % (at, vid) for at, vid in entries))
+
+
+write_ledgers(rows)
+skip = supply.excluded(now)
+check("aired within the refetch window stays out", "aired000001" in skip)
+check("aired long ago comes back", "olddvideo01" not in skip, sorted(skip))
+check("a shape the wire refuses never comes back", "refused0001" in skip)
+check("one ffmpeg failure is forgiven", "flaky000001" not in skip)
+write_ledgers({"failed.tsv": [(now - 86400, "flaky000001"), (now, "flaky000001")]})
+check("control: twice is not", "flaky000001" in supply.excluded(now))
+for name in ("aired.tsv", "rejected.tsv", "failed.tsv"):
+    (chan.STATE / name).unlink()
+
 print("cut: what airs next")
 files = [(f"f{n}", 1000 + n) for n in range(6)]
 

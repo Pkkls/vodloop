@@ -97,10 +97,18 @@ def settle(source, origin):
             ledger.write(f"{int(time.time())}\t{chan.video_id(target) or target.name}\n")
 
 
-def reject(source, reason):
+def reject(source, reason, forever=True):
+    """Drop a file, and say whether its video is worth fetching again.
+
+    A shape the wire cannot carry, or a copy that loses its timestamps, is a
+    property of the source: asking for it again wastes an hour of the board's
+    paced budget for the same answer. An ffmpeg that fell over is not: that one
+    goes to failed.tsv, where supply.py forgives it once.
+    """
     chan.log(f"refuse {source.name}: {reason}")
-    with (chan.STATE / "rejected.tsv").open("a") as ledger:
-        ledger.write(f"{int(time.time())}\t{chan.video_id(source) or source.name}\t{reason}\n")
+    ledger = "rejected.tsv" if forever else "failed.tsv"
+    with (chan.STATE / ledger).open("a") as fh:
+        fh.write(f"{int(time.time())}\t{chan.video_id(source) or source.name}\t{reason}\n")
     source.unlink(missing_ok=True)
     chan.telegram(f"video refusee ({reason}): {source.name[:80]}")
 
@@ -167,7 +175,7 @@ def run_job(source, origin, skip):
         stale.unlink(missing_ok=True)
     JOB.unlink(missing_ok=True)
     if job.returncode != 0 and moved == 0:
-        reject(source, (error.splitlines() or ["ffmpeg a echoue"])[-1][:120])
+        reject(source, (error.splitlines() or ["ffmpeg a echoue"])[-1][:120], forever=False)
         return True
     if job.returncode != 0:
         chan.log(f"decoupe interrompue apres {moved} chunks: {error[-200:]}")
