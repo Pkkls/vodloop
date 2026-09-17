@@ -52,6 +52,26 @@ mkdir -p "$BASE"
 if [ -f "$LOG" ] && [ "$(wc -c < "$LOG")" -gt 5000000 ]; then
   tail -n 2000 "$LOG" > "$LOG.tmp" && mv "$LOG.tmp" "$LOG"
 fi
+# --- report ----------------------------------------------------------------
+# A beacon, sent on every tick even when another run holds the lock: a fetch
+# takes the best part of an hour, and without this the watcher on the far side
+# reads a board that has not spoken since it started and calls it dead.
+report() {
+  [ -z "$DRY" ] || return 0
+  free=$(df -Pm "$BASE" | tail -1 | awk '{print $4}')
+  parts=""
+  for chan in $CHANNELS; do
+    n=$(ls "$BASE/hangar/$chan" 2>/dev/null | grep -c '\.m[kp][v4]$')
+    mb=$(du -sm "$BASE/hangar/$chan" 2>/dev/null | cut -f1)
+    parts="$parts${parts:+,}\"$chan\":{\"files\":$(num "$n"),\"mb\":$(num "$mb")}"
+  done
+  last_at=0; last_res=none
+  [ -f "$BASE/last" ] && read -r last_at last_res < "$BASE/last"
+  printf '{"at":%s,"free_mb":%s,"last_fetch":%s,"last_result":"%s","hangar":{%s}}'     "$(date +%s)" "$(num "$free")" "$(num "$last_at")" "$last_res" "$parts"     | $OSSH "$ORACLE" "cat > $V2/board.json.tmp && mv $V2/board.json.tmp $V2/board.json" 2>/dev/null
+}
+
+report
+
 if [ -z "$DRY" ]; then
   # the owner's pid, not the lock's age, says whether a run is still alive:
   # an age threshold once declared an eleven hour download orphaned mid-merge
@@ -175,19 +195,5 @@ fill() {
 
 for chan in $CHANNELS; do ship "$chan"; done
 for chan in $CHANNELS; do fill "$chan" && break; done
-
-# --- report ----------------------------------------------------------------
-[ -z "$DRY" ] || exit 0
-free=$(df -Pm "$BASE" | tail -1 | awk '{print $4}')
-parts=""
-for chan in $CHANNELS; do
-  n=$(ls "$BASE/hangar/$chan" 2>/dev/null | grep -c '\.m[kp][v4]$')
-  mb=$(du -sm "$BASE/hangar/$chan" 2>/dev/null | cut -f1)
-  parts="$parts${parts:+,}\"$chan\":{\"files\":$(num "$n"),\"mb\":$(num "$mb")}"
-done
-last_at=0; last_res=none
-[ -f "$BASE/last" ] && read -r last_at last_res < "$BASE/last"
-printf '{"at":%s,"free_mb":%s,"last_fetch":%s,"last_result":"%s","hangar":{%s}}' \
-  "$(date +%s)" "$(num "$free")" "$(num "$last_at")" "$last_res" "$parts" \
-  | $OSSH "$ORACLE" "cat > $V2/board.json.tmp && mv $V2/board.json.tmp $V2/board.json" 2>/dev/null
+report
 exit 0
