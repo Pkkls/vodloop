@@ -47,6 +47,11 @@ field() { printf '%s' "$2" | sed -n "s/.*\"$1\": *\([0-9]*\).*/\1/p" | head -1; 
 bytes() { ls -ln "$1" 2>/dev/null | awk '{print $5}'; }
 
 mkdir -p "$BASE"
+# yt-dlp writes into this log, so it grows by megabytes a day on a card that
+# also holds the hangar. Kept to its last two thousand lines.
+if [ -f "$LOG" ] && [ "$(wc -c < "$LOG")" -gt 5000000 ]; then
+  tail -n 2000 "$LOG" > "$LOG.tmp" && mv "$LOG.tmp" "$LOG"
+fi
 if [ -z "$DRY" ]; then
   # the owner's pid, not the lock's age, says whether a run is still alive:
   # an age threshold once declared an eleven hour download orphaned mid-merge
