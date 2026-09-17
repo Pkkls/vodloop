@@ -1,0 +1,186 @@
+#!/bin/sh
+# hangar - the board's side of vodloop v2. From cron, every five minutes.
+#
+#   hangar          ship what a channel asks for, then fill the hangar
+#   hangar --dry    say what it would do, touch nothing
+#
+# The board has the home address, which YouTube lets through, and a 128 Go
+# card. Oracle has neither, and sits behind no NAT, so the board always asks:
+#   ship: state/want.json says how short the channel's queue is and how heavy a
+#         delivery may be. A random file of the hangar that fits goes up to
+#         upload/, is checked byte for byte, and enters queue/ in one mv.
+#   fill: state/candidates.tsv is the channel's catalogue minus what Oracle has
+#         or aired lately. One random candidate is downloaded, whole, avc1+mp4a.
+# Shipping never touches YouTube, so it is not paced. Filling is, because the
+# address is what gets flagged: 28 Go in ten hours had it refused on 2026-09-14.
+#
+# sh and awk only: one RISC-V core and 211 Mo of RAM, and python3 on top of a
+# download starves sshd for a quarter of an hour.
+set -u
+
+BASE=/root/v2
+CONF=$BASE/hangar.conf
+LOCK=/tmp/hangar.lock
+LOG=$BASE/hangar.log
+V2=/home/ubuntu/v2
+ORACLE=ubuntu@89.168.60.67
+KEY=/root/.ssh/oracle_key
+CHANNELS=""
+GAP_MIN=90
+FAIL_GAP_MIN=180
+DAY_MB=16000
+KEEP_FREE_MB=12000
+HANGAR_MB=80000
+MAX_FILE_MB=10000
+MAX_FAILS=3
+[ -f "$CONF" ] && . "$CONF"
+
+DRY=""
+[ "${1:-}" = "--dry" ] && DRY=1
+OSSH="ssh -i $KEY -o BatchMode=yes -o ConnectTimeout=20 -o StrictHostKeyChecking=accept-new"
+ts() { date '+%Y-%m-%d %H:%M:%S'; }
+log() { echo "$(ts) $*" >> "$LOG"; [ -z "$DRY" ] || echo "$*"; }
+num() { case "$1" in "" | *[!0-9]*) echo 0 ;; *) echo "$1" ;; esac; }
+field() { printf '%s' "$2" | sed -n "s/.*\"$1\": *\([0-9]*\).*/\1/p" | head -1; }
+bytes() { ls -ln "$1" 2>/dev/null | awk '{print $5}'; }
+
+mkdir -p "$BASE"
+if [ -z "$DRY" ]; then
+  # the owner's pid, not the lock's age, says whether a run is still alive:
+  # an age threshold once declared an eleven hour download orphaned mid-merge
+  if [ -d "$LOCK" ]; then
+    owner=$(cat "$LOCK/pid" 2>/dev/null)
+    [ -n "$owner" ] && [ -d "/proc/$owner" ] && exit 0
+    rm -rf "$LOCK"
+  fi
+  mkdir "$LOCK" 2>/dev/null || exit 0
+  echo $$ > "$LOCK/pid"
+  trap 'rm -rf "$LOCK"' EXIT INT TERM
+fi
+
+for chan in $CHANNELS; do
+  case "$chan" in *[!a-z0-9-]*) log "canal refuse: $chan"; exit 1 ;; esac
+done
+
+# --- ship ------------------------------------------------------------------
+ship() {
+  chan=$1
+  dir=$BASE/hangar/$chan
+  want=$($OSSH "$ORACLE" "cat $V2/$chan/state/want.json" 2>/dev/null) || { log "$chan: Oracle injoignable"; return 1; }
+  need=$(num "$(field need_seconds "$want")")
+  offer=$(num "$(field offer_bytes "$want")")
+  at=$(num "$(field at "$want")")
+  shipped=$(num "$(cat "$BASE/$chan.shipped" 2>/dev/null)")
+  now=$(date +%s)
+  [ "$need" -gt 0 ] || return 0
+  # an offer written before the last delivery landed does not know about it
+  [ "$at" -gt "$shipped" ] || return 0
+  [ $((now - at)) -lt 1800 ] || { log "$chan: want.json perime ($((now - at)) s)"; return 0; }
+  pick=$(for f in "$dir"/*.mkv "$dir"/*.mp4; do
+           [ -f "$f" ] && echo "$(bytes "$f") $f"
+         done | awk -v max="$offer" 'BEGIN { srand() } $1 > 0 && $1 <= max { c[++k] = $2 }
+                                     END { if (k) print c[int(rand() * k) + 1] }')
+  if [ -z "$pick" ]; then
+    [ -z "$DRY" ] || log "$chan: besoin $((need / 3600)) h mais rien au hangar sous $((offer / 1048576)) Mo"
+    return 0
+  fi
+  name=$(basename "$pick")
+  size=$(bytes "$pick")
+  log "$chan: envoi $name ($((size / 1048576)) Mo), besoin $((need / 3600)) h"
+  [ -z "$DRY" ] || return 0
+  scp -i "$KEY" -o BatchMode=yes -o StrictHostKeyChecking=accept-new "$pick" "$ORACLE:$V2/$chan/upload/" >> "$LOG" 2>&1 \
+    || { log "$chan: scp a echoue"; return 1; }
+  remote=$($OSSH "$ORACLE" "stat -c %s '$V2/$chan/upload/$name'" 2>/dev/null)
+  if [ "$remote" != "$size" ]; then
+    $OSSH "$ORACLE" "rm -f '$V2/$chan/upload/$name'" 2>/dev/null
+    log "$chan: taille distante $remote contre $size, envoi annule, copie gardee"
+    return 1
+  fi
+  $OSSH "$ORACLE" "mv '$V2/$chan/upload/$name' '$V2/$chan/queue/$now-$name'" \
+    || { log "$chan: mise en file impossible"; return 1; }
+  rm -f "$pick"
+  date +%s > "$BASE/$chan.shipped"
+  echo "$(date +%s) $chan $name" >> "$BASE/shipped.tsv"
+  log "$chan: en file $now-$name"
+}
+
+# --- fill ------------------------------------------------------------------
+fill() {
+  chan=$1
+  dir=$BASE/hangar/$chan
+  mkdir -p "$dir/.part"
+  now=$(date +%s)
+  held=$(du -sm "$dir" | cut -f1)
+  [ "$held" -lt "$HANGAR_MB" ] || { [ -z "$DRY" ] || log "$chan: hangar plein ($held Mo)"; return 1; }
+  free=$(df -Pm "$BASE" | tail -1 | awk '{print $4}')
+  [ "$free" -gt "$KEEP_FREE_MB" ] || { log "$chan: carte a $free Mo libres"; return 1; }
+  last_at=0; last_res=ok
+  [ -f "$BASE/last" ] && read -r last_at last_res < "$BASE/last"
+  gap=$GAP_MIN
+  [ "$last_res" = fail ] && gap=$FAIL_GAP_MIN
+  wait_s=$(( $(num "$last_at") + gap * 60 - now ))
+  [ "$wait_s" -le 0 ] || { [ -z "$DRY" ] || log "prochain telechargement dans $((wait_s / 60 + 1)) min"; return 1; }
+  day_kb=$(awk -v t=$((now - 86400)) '$1 >= t { s += $2 } END { print s + 0 }' "$BASE/fetched.tsv" 2>/dev/null)
+  [ "$(num "$day_kb")" -lt $((DAY_MB * 1024)) ] || { log "plafond 24 h atteint ($((day_kb / 1024)) Mo)"; return 1; }
+
+  want=$($OSSH "$ORACLE" "cat $V2/$chan/state/want.json" 2>/dev/null) || return 1
+  maxh=$(num "$(field maxh "$want")")
+  case "$maxh" in 1080 | 720 | 480) ;; *) maxh=720 ;; esac
+  cands=$($OSSH "$ORACLE" "cat $V2/$chan/state/candidates.tsv" 2>/dev/null) || return 1
+  skip=$( { ls "$dir" | sed -n 's/.*-\([A-Za-z0-9_-]\{11\}\)\.[a-z0-9]*$/\1/p'
+            awk -v t=$((now - 7 * 86400)) -v m="$MAX_FAILS" \
+              '$1 >= t { c[$2]++ } END { for (k in c) if (c[k] >= m) print k }' "$BASE/failed.tsv" 2>/dev/null
+          } | tr '\n' ' ')
+  vid=$(printf '%s\n' "$cands" | awk -v skip="$skip" '
+    BEGIN { n = split(skip, s, " "); for (i = 1; i <= n; i++) x[s[i]] = 1; srand() }
+    NF >= 2 && length($1) == 11 && !($1 in x) { c[++k] = $1 }
+    END { if (k) print c[int(rand() * k) + 1] }')
+  [ -n "$vid" ] || { log "$chan: aucun candidat"; echo "$now ok" > "$BASE/last"; return 1; }
+  log "$chan: telecharge $vid en ${maxh}p (hangar $held Mo, 24 h $((day_kb / 1024)) Mo)"
+  [ -z "$DRY" ] || return 0
+
+  rm -f "$dir/.part"/*
+  cookies=""
+  [ -s "$BASE/cookies.txt" ] && cookies="$BASE/cookies.txt"
+  if yt-dlp --force-ipv4 ${cookies:+--cookies "$cookies"} --no-playlist --restrict-filenames \
+       --no-progress --max-filesize "${MAX_FILE_MB}M" \
+       -f "bv*[vcodec^=avc1][height<=$maxh]+ba[acodec^=mp4a]/bv*[vcodec^=avc1][height<=480]+ba[acodec^=mp4a]" \
+       --merge-output-format mkv -P "$dir/.part" -o '%(title).80B-%(id)s.%(ext)s' \
+       "https://www.youtube.com/watch?v=$vid" >> "$LOG" 2>&1; then
+    got=$(ls "$dir/.part"/*-"$vid".mkv 2>/dev/null | head -1)
+  else
+    got=""
+  fi
+  if [ -n "$got" ] && [ -f "$got" ]; then
+    kb=$(( $(bytes "$got") / 1024 ))
+    mv "$got" "$dir/"
+    echo "$(date +%s) $kb $vid $chan" >> "$BASE/fetched.tsv"
+    echo "$(date +%s) ok" > "$BASE/last"
+    log "$chan: range $vid ($((kb / 1024)) Mo)"
+  else
+    echo "$(date +%s) $vid $chan" >> "$BASE/failed.tsv"
+    echo "$(date +%s) fail" > "$BASE/last"
+    log "$chan: echec $vid, pas de nouvel essai avant $FAIL_GAP_MIN min"
+  fi
+  rm -f "$dir/.part"/*
+  return 0
+}
+
+for chan in $CHANNELS; do ship "$chan"; done
+for chan in $CHANNELS; do fill "$chan" && break; done
+
+# --- report ----------------------------------------------------------------
+[ -z "$DRY" ] || exit 0
+free=$(df -Pm "$BASE" | tail -1 | awk '{print $4}')
+parts=""
+for chan in $CHANNELS; do
+  n=$(ls "$BASE/hangar/$chan" 2>/dev/null | grep -c '\.m[kp][v4]$')
+  mb=$(du -sm "$BASE/hangar/$chan" 2>/dev/null | cut -f1)
+  parts="$parts${parts:+,}\"$chan\":{\"files\":$(num "$n"),\"mb\":$(num "$mb")}"
+done
+last_at=0; last_res=none
+[ -f "$BASE/last" ] && read -r last_at last_res < "$BASE/last"
+printf '{"at":%s,"free_mb":%s,"last_fetch":%s,"last_result":"%s","hangar":{%s}}' \
+  "$(date +%s)" "$(num "$free")" "$(num "$last_at")" "$last_res" "$parts" \
+  | $OSSH "$ORACLE" "cat > $V2/board.json.tmp && mv $V2/board.json.tmp $V2/board.json" 2>/dev/null
+exit 0

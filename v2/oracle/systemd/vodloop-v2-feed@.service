@@ -1,0 +1,19 @@
+[Unit]
+Description=vodloop v2 feeder (%i)
+After=vodloop-v2-push@%i.service
+BindsTo=vodloop-v2-push@%i.service
+
+[Service]
+Type=exec
+User=ubuntu
+Environment=CHAN_ROOT=/home/ubuntu/v2/%i
+ExecStart=/usr/bin/python3 /home/ubuntu/v2/bin/feed.py
+Restart=always
+RestartSec=2
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=/home/ubuntu/v2/%i
+
+[Install]
+WantedBy=multi-user.target

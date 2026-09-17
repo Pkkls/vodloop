@@ -1,0 +1,23 @@
+[Unit]
+# The connection to Kick. Restarting it ends the live and splits the VOD.
+Description=vodloop v2 pusher (%i)
+After=network-online.target
+Wants=network-online.target vodloop-v2-feed@%i.service
+
+[Service]
+Type=exec
+User=ubuntu
+Environment=CHAN_ROOT=/home/ubuntu/v2/%i
+ExecStart=/home/ubuntu/v2/bin/push.sh
+Restart=always
+RestartSec=5
+TimeoutStopSec=20
+# ffmpeg exits 255 when asked to stop mid-session
+SuccessExitStatus=255
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=/home/ubuntu/v2/%i
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,22 @@
+[Unit]
+Description=vodloop v2 cutter (%i)
+After=network-online.target
+
+[Service]
+Type=exec
+User=ubuntu
+Environment=CHAN_ROOT=/home/ubuntu/v2/%i
+ExecStart=/usr/bin/python3 /home/ubuntu/v2/bin/cut.py
+Restart=always
+RestartSec=10
+TimeoutStopSec=15
+Nice=10
+CPUWeight=20
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=/home/ubuntu/v2/%i
+
+[Install]
+WantedBy=multi-user.target
