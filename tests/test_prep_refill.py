@@ -134,6 +134,43 @@ check("tout ayant ete diffuse, le repli rend quand meme la bibliotheque",
 (library / "c.mp4").unlink()
 histoire.clear()
 
+# --- une inedite arrivee pendant une repasse passe devant -----------------
+# 2026-09-17: tout avait ete diffuse, la repasse de 33 h tenait la file, et les
+# videos arrivees entre-temps attendaient qu'elle finisse.
+for nom in ("a.mp4", "b.mp4"):
+    histoire[str(library / nom)] = {"at": 0.0, "plays": 1}
+
+
+def repasse():
+    return {"seq": 2, "items": [
+        {"id": 1, "status": "pending", "by": "file", "path": str(library / "a.mp4")},
+        {"id": 2, "status": "pending", "by": "file", "path": str(library / "b.mp4")},
+    ]}
+
+
+check("temoin: sans arrivee, la repasse n'est pas touchee",
+      prep.refill_from_library(repasse()) == 0)
+(library / "d.mp4").write_text("video")
+file = repasse()
+combien = prep.refill_from_library(file)
+en_file = [pathlib.Path(i["path"]).name for i in file["items"] if i["status"] == "pending"]
+check("une inedite arrivee pendant la repasse relance le tirage", combien == 1, combien)
+check("et la file ne tient plus qu'elle", en_file == ["d.mp4"], en_file)
+
+file = repasse()
+file["items"].append({"id": 3, "status": "pending", "by": "file", "path": str(library / "c.mp4")})
+check("une passe qui tient deja de l'inedit n'est pas retiree",
+      prep.refill_from_library(file) == 0)
+file = repasse()
+file["items"].append({"id": 3, "status": "pending", "by": "chat", "path": str(library / "a.mp4")})
+check("une demande du chat en attente n'est pas balayee",
+      prep.refill_from_library(file) == 0)
+histoire[str(library / "d.mp4")] = {"at": 0.0, "plays": 1}
+check("temoin: la meme arrivee deja diffusee ne relance rien",
+      prep.refill_from_library(repasse()) == 0)
+(library / "d.mp4").unlink()
+histoire.clear()
+
 # --- unset means the old behaviour, exactly ------------------------------
 prep.LIBRARY = None
 check("sans VODLOOP_LIBRARY, la fonction ne fait rien",

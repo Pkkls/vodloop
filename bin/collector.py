@@ -659,6 +659,42 @@ def board_queue(now=None):
         return None
 
 
+def board_stock(now=None):
+    """Video ids the board already keeps on its own card for THIS library.
+
+    Since the board moved to a 128 Go card it downloads ahead, slowly, into a
+    stock of its own. A stocked video lands as an upload of a few minutes and
+    never asks the source again, so a day the source walls the board off no
+    longer starves the channel. A stale or absent report is no stock at all,
+    which is exactly how this behaved before the board had one.
+    """
+    status = load(STATUS_FILE, None)
+    if not isinstance(status, dict):
+        return set()
+    if (time.time() if now is None else now) - status.get("at", 0) > STATUS_STALE_SECONDS:
+        return set()
+    stock = status.get("stock")
+    ids = stock.get(LIBRARY.name) if isinstance(stock, dict) else None
+    if not isinstance(ids, list):
+        return set()
+    return {i for i in ids if isinstance(i, str) and common.VIDEO_ID.match(i)}
+
+
+def stocked_first(want, known, cat, stocked):
+    """Up to want keys the board already holds, drawn at random.
+
+    Taken from the catalogue and its duration band only: the stock may reorder
+    the choice, it can never widen it. A part key is never in the stock, which
+    only ever holds whole videos, so a channel cut in parts is unaffected.
+    """
+    lists, durations, _ = cat
+    keys = {k for ks in lists for k in ks
+            if k in stocked and k not in known
+            and (durations.get(k) or 0) >= MIN_SECONDS
+            and (not MAX_SECONDS or (durations.get(k) or 0) <= MAX_SECONDS)}
+    return random.sample(sorted(keys), min(want, len(keys)))
+
+
 def main(argv):
     apply = "--apply" in argv
     free = shutil.disk_usage(LIBRARY).free
@@ -735,7 +771,12 @@ def main(argv):
     cat = catalogue()
     durations, spans = cat[1], cat[2]
     known = held | inbox_ids() | recent | unusable_ids()
-    chosen = pick(want, known, shortest=urgent, cat=cat)
+    # What the board already has on its card goes first: it arrives as an
+    # upload, not a fetch, and it is the fastest runway there is, urgent or not.
+    first = stocked_first(want, known, cat, board_stock(now))
+    if first:
+        print(f"  stock de la carte: {len(first)} video(s) servie(s) d'abord")
+    chosen = first + pick(want - len(first), known | set(first), shortest=urgent, cat=cat)
     if not chosen:
         print("rien de nouveau dans les sources")
         return 0
@@ -764,8 +805,9 @@ def main(argv):
         keep = []
         for key in chosen:
             cost = estimate(key, durations, rate)
+            # a heavier draw does not stop a lighter one behind it from fitting
             if cost > room:
-                break
+                continue
             keep.append(key)
             room -= cost
         if not keep:

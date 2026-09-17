@@ -1013,6 +1013,29 @@ def shuffled_by_video(paths, spread=None):
     return [path for _, path in keyed]
 
 
+def fresh_arrival(queue, waiting, media):
+    """Whether a video nobody has seen yet is stuck behind a pass of reruns.
+
+    With nothing new left the refill queues the whole library again, and it
+    only fires once that pass is spent: 33 h on 2026-09-17, while the videos
+    that landed in the meantime sat on the disk unseen. So a pass made only of
+    videos already on air gives way as soon as an unseen one arrives. A pass
+    that already holds something new, anything a person queued, or an item
+    being prepared is left alone, which also means this fires once per
+    arrival and not on every loop.
+    """
+    if any(i["status"] == "preparing" or i.get("by") != "file" for i in waiting):
+        return False
+    named = {i.get("path") for i in queue["items"]}
+    unnamed = [p for p in media if str(p) not in named]
+    if not unnamed:
+        return False
+    history = load_history()
+    if any(played_count(history, i.get("path")) == 0 for i in waiting):
+        return False
+    return any(played_count(history, p) == 0 and remux_verdict(p) for p in unnamed)
+
+
 def refill_from_library(queue):
     """Put the library back in the queue once it has been played through.
 
@@ -1027,7 +1050,13 @@ def refill_from_library(queue):
     if LIBRARY is None or not LIBRARY.is_dir():
         return 0
     waiting = [i for i in queue["items"] if i["status"] in ("pending", "preparing")]
-    if waiting or seconds_on_disk() >= REFILL_BELOW_SECONDS:
+    media = [p for p in LIBRARY.iterdir()
+             if p.is_file() and p.suffix.lower() in MEDIA_SUFFIXES]
+    if waiting:
+        if not fresh_arrival(queue, waiting, media):
+            return 0
+        print("video inedite arrivee pendant une repasse: nouveau tirage", flush=True)
+    elif seconds_on_disk() >= REFILL_BELOW_SECONDS:
         return 0
 
     # Only what can be remuxed. This is the invariant the channel lives by: the
@@ -1040,8 +1069,6 @@ def refill_from_library(queue):
     # ten were an encode, and refill could not even fire because it waits for an
     # empty pending list and those items never cleared. Files that need work go
     # to normalise.py, and rejoin here once it has done it.
-    media = [p for p in LIBRARY.iterdir()
-             if p.is_file() and p.suffix.lower() in MEDIA_SUFFIXES]
     sources = sorted(p for p in media if remux_verdict(p))
     if not sources:
         print("aucun fichier remuxable en bibliotheque: normalise.py a du retard",

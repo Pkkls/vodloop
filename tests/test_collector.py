@@ -646,6 +646,48 @@ check("temoin: une video courte est toujours chiffree a son poids",
 check("et une duree inconnue reste chiffree, jamais gratuite",
       collector.estimate("z", {}, taux) > 0)
 
+print("le stock de la carte passe devant")
+# Since the board moved to a 128 Go card it keeps videos it downloaded ahead. A
+# stocked candidate lands as an upload of minutes, so it is served first, but
+# only from inside the catalogue and the duration band: the stock may reorder
+# the choice, never widen it.
+real_status = collector.STATUS_FILE
+with tempfile.TemporaryDirectory() as tmp:
+    collector.STATUS_FILE = pathlib.Path(tmp) / "status.json"
+    lib = collector.LIBRARY.name
+    try:
+        collector.STATUS_FILE.write_text(json.dumps({"at": time.time(), "stock": {
+            lib: ["abcdefghijk", "bad id", 5], "videos-autre": ["qqqqqqqqqqq"]}}))
+        check("seuls les ids bien formes de cette bibliotheque sont lus",
+              collector.board_stock() == {"abcdefghijk"}, str(collector.board_stock()))
+        collector.STATUS_FILE.write_text(json.dumps(
+            {"at": time.time() - 3600, "stock": {lib: ["abcdefghijk"]}}))
+        check("un rapport perime ne vaut aucun stock", collector.board_stock() == set())
+        collector.STATUS_FILE.write_text(json.dumps({"at": time.time(), "queue": 0}))
+        check("temoin: une carte d avant le stock n en annonce aucun",
+              collector.board_stock() == set())
+    finally:
+        collector.STATUS_FILE = real_status
+
+real_band = collector.MIN_SECONDS, collector.MAX_SECONDS
+collector.MIN_SECONDS, collector.MAX_SECONDS = 3600, 43200
+try:
+    cat = ([["aaaaaaaaaaa", "bbbbbbbbbbb", "ccccccccccc"], ["ddddddddddd", "eeeeeeeeeee.p01of02"]],
+           {"aaaaaaaaaaa": 7200, "bbbbbbbbbbb": 600, "ccccccccccc": 50000,
+            "ddddddddddd": 4000, "eeeeeeeeeee.p01of02": 5000}, {})
+    stocked = {"aaaaaaaaaaa", "bbbbbbbbbbb", "ccccccccccc", "ddddddddddd",
+               "xxxxxxxxxxx", "eeeeeeeeeee"}
+    got = collector.stocked_first(5, set(), cat, stocked)
+    check("le stock ne sert que le catalogue, dans la bande de duree, et jamais un morceau",
+          sorted(got) == ["aaaaaaaaaaa", "ddddddddddd"], str(got))
+    check("ce qui est deja connu n est pas resservi",
+          collector.stocked_first(5, {"aaaaaaaaaaa"}, cat, stocked) == ["ddddddddddd"])
+    check("jamais plus que demande", len(collector.stocked_first(1, set(), cat, stocked)) == 1)
+    check("temoin: sans stock, rien ne passe devant",
+          collector.stocked_first(5, set(), cat, set()) == [])
+finally:
+    collector.MIN_SECONDS, collector.MAX_SECONDS = real_band
+
 print()
 if failures:
     print(f"{len(failures)} failed: " + ", ".join(failures))

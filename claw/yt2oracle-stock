@@ -1,0 +1,182 @@
+#!/bin/sh
+# yt2oracle-stock - remplit le stock de la carte depuis le catalogue d'une
+# chaine, a un rythme qui ne fait pas signaler l'adresse.
+#
+# Depuis la carte de 128 Go (2026-09-16), le Claw a bien plus de place que la
+# part d'Oracle n'en aura jamais. Le collector ne demande une video que quand
+# Oracle a la place de la recevoir, et chaque demande repassait par YouTube au
+# moment meme ou il la fallait: un jour de mur anti-bot, plus rien n'arrivait.
+# Le stock decouple les deux. Ce script telecharge d'avance, lentement, et une
+# demande du collector pour une video deja la devient un simple envoi.
+#
+# Le rythme est la contrainte, pas la place. Le 2026-09-14, neuf telechargements
+# d'affilee (28 Go en dix heures) ont fait refuser l'adresse par YouTube. Donc un
+# essai a la fois, jamais pendant une livraison ni devant elle, un ecart minimum
+# entre deux essais, un plafond sur 24 h glissantes, et un recul plus long apres
+# un refus.
+#
+# ponytail: pas de daemon, pas d'ordonnanceur. Un cron, le verrou de la file,
+# un fichier de reglages. Le plafond assume: une video par creneau.
+#
+#   yt2oracle-stock         un creneau: tente au plus une video
+#   yt2oracle-stock --dry   dit ce qu'il ferait, sans verrou ni telechargement
+set -u
+
+CONF=/root/yt/stock.conf
+STOCK=/root/yt/stock
+QUEUE=/root/yt/urls.txt
+LOCK=/tmp/yt2oracle-queue.lock
+LAST=$STOCK/.last
+LEDGER=$STOCK/ledger.txt
+FAILS=$STOCK/failed.txt
+KEY=/root/.ssh/oracle_key
+ORACLE=ubuntu@89.168.60.67
+OSSH="ssh -i $KEY -o BatchMode=yes -o ConnectTimeout=20 -o StrictHostKeyChecking=accept-new"
+
+# La chaine servie n'a pas de valeur par defaut: elle vient du fichier de
+# reglages, pas du code. Sans elle le stock est simplement desactive.
+DEST=""
+MAXH=720
+MIN_SECONDS=3600
+MAX_SECONDS=43200
+GAP_MIN=90
+FAIL_GAP_MIN=180
+DAY_MB=16000
+KEEP_FREE_MB=12000
+MAX_FAILS=3
+[ -f "$CONF" ] && . "$CONF"
+
+DRY=""
+[ "${1:-}" = "--dry" ] && DRY=1
+ts() { date '+%Y-%m-%d %H:%M:%S'; }
+say() { echo "$(ts) stock: $*"; }
+# Un creneau refuse est la norme, pas un evenement: il ne s'ecrit qu'a sec,
+# sinon le journal prendrait une ligne toutes les cinq minutes pour rien.
+quiet() { [ -z "$DRY" ] || say "$*"; exit 0; }
+
+case "$DEST" in
+  "") quiet "aucune chaine configuree dans $CONF" ;;
+  videos | videos-*) case "${DEST#videos}" in *[!a-z0-9-]*) say "DEST refuse: $DEST"; exit 1 ;; esac ;;
+  *) say "DEST refuse: $DEST"; exit 1 ;;
+esac
+for v in "$MAXH" "$MIN_SECONDS" "$MAX_SECONDS" "$GAP_MIN" "$FAIL_GAP_MIN" "$DAY_MB" "$KEEP_FREE_MB" "$MAX_FAILS"; do
+  case "$v" in "" | *[!0-9]*) say "reglage non numerique: '$v'"; exit 1 ;; esac
+done
+
+mkdir -p "$STOCK"
+now=$(date +%s)
+live() { grep -qvE '^[[:space:]]*(#|$)' "$QUEUE" 2>/dev/null; }
+
+# Une livraison passe toujours devant: file non vide ou verrou pris, on laisse.
+live && quiet "file live non vide"
+[ -d "$LOCK" ] && quiet "verrou pris (livraison en cours)"
+
+last_at=0
+last_res=ok
+[ -f "$LAST" ] && read -r last_at last_res < "$LAST"
+case "$last_at" in "" | *[!0-9]*) last_at=0 ;; esac
+gap=$GAP_MIN
+[ "$last_res" = fail ] && gap=$FAIL_GAP_MIN
+wait_s=$((last_at + gap * 60 - now))
+# Une livraison qui a du passer par YouTube compte aussi: yt2oracle note l'heure
+# de chaque appel, et l'ecart minimum court aussi depuis celui-la.
+fetch_at=$(date -r "$STOCK/.last_fetch" +%s 2>/dev/null) || fetch_at=0
+[ $((fetch_at + GAP_MIN * 60 - now)) -le "$wait_s" ] || wait_s=$((fetch_at + GAP_MIN * 60 - now))
+[ "$wait_s" -le 0 ] || quiet "prochain creneau dans $((wait_s / 60 + 1)) min (dernier: $last_res)"
+
+day_kb=$(awk -v t=$((now - 86400)) '$1 >= t { s += $2 } END { print s + 0 }' "$LEDGER" 2>/dev/null)
+: "${day_kb:=0}"
+[ "$day_kb" -lt $((DAY_MB * 1024)) ] || quiet "plafond 24 h atteint: $((day_kb / 1024)) Mo sur $DAY_MB"
+
+free_mb=$(df -Pm /root | tail -1 | awk '{print $4}')
+[ "$free_mb" -gt "$KEEP_FREE_MB" ] || quiet "place: $free_mb Mo libres, plancher $KEEP_FREE_MB Mo"
+
+# Les candidats: le catalogue de la chaine tel que le collector le voit (ses
+# sources, leurs durees), moins ce qu'Oracle a deja, a remis recemment ou sait
+# inutilisable. Un aller-retour, en lecture seule, sans rien lister a nouveau.
+remote_py() {
+  cat <<'PY'
+import json, os, re, sys
+dest, lo, hi = sys.argv[1], int(sys.argv[2]), int(sys.argv[3])
+name = dest[len("videos-"):] if dest.startswith("videos-") else "vodloop"
+state = "/home/ubuntu/%s/state/" % name
+lib = "/home/ubuntu/" + dest
+def load(f, d):
+    try:
+        with open(state + f) as fh:
+            return json.load(fh)
+    except (OSError, ValueError):
+        return d
+wanted = set()
+for s in load("sources.json", []):
+    if isinstance(s, str):
+        wanted.add(s)
+    elif isinstance(s, dict) and s.get("url"):
+        m = [w.lower() for w in s.get("match", [])]
+        wanted.add(s["url"] + ("|" + ",".join(m) if m else ""))
+skip = set()
+if os.path.isdir(lib):
+    for n in os.listdir(lib):
+        hit = re.search(r"-([A-Za-z0-9_-]{11})(?:\.p\d+of\d+)?\.(?:mp4|mkv)$", n)
+        if hit:
+            skip.add(hit.group(1))
+skip |= {k.split(".")[0] for k in load("handed.json", {})}
+skip |= set(load("unusable.json", []))
+skip |= {k.split(".")[0] for k, n in load("lost.json", {}).items() if n >= 3}
+seen = set()
+for key, entry in load("pool.json", {}).items():
+    if key not in wanted or not isinstance(entry, dict):
+        continue
+    dur = entry.get("dur", {})
+    for vid in entry.get("ids", []):
+        secs = dur.get(vid)
+        if vid in seen or vid in skip or not isinstance(secs, int) or not lo <= secs <= hi:
+            continue
+        seen.add(vid)
+        print(vid, secs)
+PY
+}
+cands=$(remote_py | $OSSH "$ORACLE" "python3 - $DEST $MIN_SECONDS $MAX_SECONDS" 2>/dev/null) \
+  || quiet "Oracle injoignable"
+ncands=$(printf '%s\n' "$cands" | grep -c .)
+
+# Ce que la carte a deja, et ce qui a trop echoue ici cette semaine.
+have=$(find "$STOCK" -type f \( -name '*.mkv' -o -name '*.mp4' -o -name '*.webm' \) \
+       | sed -n 's/.*-\([A-Za-z0-9_-]\{11\}\)\.[a-z0-9]*$/\1/p')
+bad=$(awk -v t=$((now - 7 * 86400)) -v m="$MAX_FAILS" \
+      '$1 >= t { c[$2]++ } END { for (k in c) if (c[k] >= m) print k }' "$FAILS" 2>/dev/null)
+pick=$(printf '%s\n' "$cands" | awk -v skip="$(printf '%s\n%s\n' "$have" "$bad" | tr '\n' ' ')" '
+  BEGIN { n = split(skip, s, " "); for (i = 1; i <= n; i++) x[s[i]] = 1; srand() }
+  NF == 2 && !($1 in x) { c[++k] = $0 }
+  END { if (k) print c[int(rand() * k) + 1] }')
+if [ -z "$pick" ]; then
+  # rien a prendre n'est pas un echec: on repasse au prochain ecart normal
+  [ -n "$DRY" ] || echo "$now idle" > "$LAST"
+  quiet "aucun candidat ($ncands au catalogue, tous deja la ou exclus)"
+fi
+vid=${pick% *}
+secs=${pick#* }
+stock_mb=$(du -sm "$STOCK" | cut -f1)
+[ -z "$DRY" ] || quiet "prendrait $vid ($((secs / 60)) min) pour $DEST h$MAXH; $ncands candidats, stock $stock_mb Mo, 24 h: $((day_kb / 1024))/$DAY_MB Mo, libre $free_mb Mo"
+
+# Meme verrou et meme protocole que yt2oracle-queue: un seul telechargement a la
+# fois sur ce coeur et cette adresse, et la file sait lire un proprietaire vivant.
+mkdir "$LOCK" 2>/dev/null || exit 0
+echo $$ > "$LOCK/pid"
+trap 'rm -rf "$LOCK"' EXIT INT TERM
+# la file a pu se remplir entre le controle et le verrou
+live && exit 0
+
+say "essai $vid ($((secs / 60)) min) pour $DEST h$MAXH, stock $stock_mb Mo"
+if STOCK_ONLY=1 DEST_DIR="/home/ubuntu/$DEST" MAXH="$MAXH" /bin/yt2oracle "https://www.youtube.com/watch?v=$vid" >/dev/null 2>&1; then
+  f=$(find "$STOCK/$DEST/h$MAXH" -type f -name "*-$vid.*" | head -1)
+  kb=$(du -sk "$f" 2>/dev/null | cut -f1)
+  : "${kb:=0}"
+  echo "$(date +%s) $kb $vid" >> "$LEDGER"
+  echo "$(date +%s) ok" > "$LAST"
+  say "range $vid, $((kb / 1024)) Mo, stock $(du -sm "$STOCK" | cut -f1) Mo"
+else
+  echo "$(date +%s) $vid" >> "$FAILS"
+  echo "$(date +%s) fail" > "$LAST"
+  say "echec $vid, prochain essai dans $FAIL_GAP_MIN min (details dans /root/yt/yt2oracle.log)"
+fi

@@ -111,6 +111,52 @@ try:
         queue = {"items": [{"path": str(made["u1.mp4"]), "status": "ready"}]}
         check("a file a queue entry still needs is not retired",
               [p.name for p in janitor.retirable(queue)] == ["u2.mp4"])
+
+    print("a rerun pass does not pin what has already been on air")
+    with tempfile.TemporaryDirectory() as tmp:
+        lib, made = build(tmp, ["seen.mp4", "new.mp4", "zz.mp4"], [])
+        janitor.LIBRARY = lib
+        prep.remux_verdict = lambda p: True
+        # the newest, zz, is held by the floor and stays out of the question
+        janitor.MIN_PLAYABLE_FILES = 1
+        history = {str(made["seen.mp4"]): {"at": 5.0, "plays": 1}}
+        queue = {"items": [{"path": str(made["seen.mp4"]), "status": "pending"},
+                           {"path": str(made["new.mp4"]), "status": "pending"}]}
+        order = [p.name for p in janitor.retirable(queue, history)]
+        check("a pending file already aired can leave", order == ["seen.mp4"], str(order))
+        check("the control: without the history both stay pinned",
+              janitor.retirable(queue) == [], str(janitor.retirable(queue)))
+        queue["items"][0]["status"] = "ready"
+        check("one with chunks cut is never offered",
+              janitor.retirable(queue, history) == [])
+
+    print("the share makes room, never out of unseen video")
+    with tempfile.TemporaryDirectory() as tmp:
+        lib, made = build(tmp, ["new.mp4", "seen.mp4", "zz.mp4"], [])
+        janitor.LIBRARY = lib
+        prep.remux_verdict = lambda p: True
+        # the newest, zz, is held by the floor and stays out of the question
+        janitor.MIN_PLAYABLE_FILES = 1
+        history = {str(made["seen.mp4"]): {"at": 5.0, "plays": 1, "secs": 3600},
+                   str(made["new.mp4"]): {"at": 0.0, "plays": 0, "secs": 3600}}
+        real = (janitor.common.BUDGET_BYTES, janitor.common.bytes_used,
+                prep.load_history, prep.runway_seconds, janitor.common.load_queue)
+        try:
+            janitor.common.BUDGET_BYTES = 28 * 1024 ** 3
+            janitor.common.bytes_used = lambda lib=None: 26 * 1024 ** 3
+            prep.load_history = lambda: history
+            prep.runway_seconds = lambda history=None, ignoring=None: 30 * 3600
+            janitor.common.load_queue = lambda: {"items": []}
+            janitor.main(["--apply"])
+            left = sorted(p.name for p in lib.iterdir())
+            check("over the share, the aired file goes and the unseen one stays",
+                  left == ["new.mp4", "zz.mp4"], str(left))
+            check("the target leaves room for the heaviest video the collector hands over",
+                  janitor.BUDGET_RETIRE_UNDER_BYTES
+                  >= janitor.collector.BUDGET_HEADROOM_BYTES + janitor.collector.MAX_FETCH_BYTES)
+        finally:
+            (janitor.common.BUDGET_BYTES, janitor.common.bytes_used,
+             prep.load_history, prep.runway_seconds, janitor.common.load_queue) = real
 finally:
     janitor.LIBRARY, prep.remux_verdict = real_lib, real_verdict
     janitor.MIN_PLAYABLE_FILES = real_floor

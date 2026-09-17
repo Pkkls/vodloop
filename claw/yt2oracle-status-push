@@ -38,5 +38,18 @@ queues=$(awk '
 
 if $OSSH "$DEST" true 2>/dev/null; then oracle=up; else oracle=DOWN; fi
 
-json="{\"done\":$done,\"failed\":$failed,\"queue\":$queue,\"queues\":$queues,\"freeMB\":$free,\"oracle\":\"$oracle\",\"at\":$at}"
+# Ce que la carte garde deja en stock, par bibliotheque. Le collector sert ces
+# videos en premier: elles arrivent en un envoi de quelques minutes, sans
+# redemander a YouTube. Les noms passent par --restrict-filenames, donc l'id
+# est toujours le dernier tiret suivi de onze caracteres avant l'extension.
+stock=""
+for d in /root/yt/stock/videos*; do
+  [ -d "$d" ] || continue
+  ids=$(find "$d" -type f \( -name '*.mkv' -o -name '*.mp4' -o -name '*.webm' \) \
+        | sed -n 's/.*-\([A-Za-z0-9_-]\{11\}\)\.[a-z0-9]*$/"\1"/p' | sort -u | tr '\n' ',')
+  stock="$stock${stock:+,}\"$(basename "$d")\":[${ids%,}]"
+done
+stockMB=$(du -sm /root/yt/stock 2>/dev/null | cut -f1); : "${stockMB:=0}"
+
+json="{\"done\":$done,\"failed\":$failed,\"queue\":$queue,\"queues\":$queues,\"stock\":{$stock},\"stockMB\":$stockMB,\"freeMB\":$free,\"oracle\":\"$oracle\",\"at\":$at}"
 printf '%s' "$json" | $OSSH "$DEST" "cat > /home/ubuntu/yt2oracle/status.json"

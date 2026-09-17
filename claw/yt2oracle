@@ -146,6 +146,25 @@ case "$MAXH" in "" | 1080 | 720 | 480 | 360) ;; *) die "MAXH refuse: $MAXH" ;; e
 # morceau, et les sept autres morceaux viendraient se poser a cote.
 [ -z "$PART" ] || [ -n "$RANGE" ] || die "PART sans RANGE"
 
+# Le stock: des videos telechargees d'avance et gardees sur la carte, par
+# bibliotheque et par hauteur, depuis que la carte fait 128 Go. yt2oracle-stock
+# le remplit a son rythme. Ici on le lit (une livraison sert d'abord ce qui est
+# deja la, sans redemander a YouTube) ou on y range (STOCK_ONLY=1: telecharger
+# et garder, sans rien envoyer a Oracle). Seule une video entiere se stocke.
+STOCK_ONLY="${STOCK_ONLY:-}"
+STOCK_DIR="$WORK/stock/${DEST_DIR#/home/ubuntu/}/h${MAXH:-any}"
+vid=""
+if [ -z "$PART" ] && [ $# -eq 1 ]; then
+  vid=${1##*[=/]}
+  case "$vid" in *[!A-Za-z0-9_-]*) vid="" ;; esac
+  [ ${#vid} -eq 11 ] || vid=""
+fi
+[ -z "$STOCK_ONLY" ] || [ -n "$vid" ] || die "STOCK_ONLY exige une seule video entiere"
+stocked=""
+if [ -n "$vid" ]; then
+  stocked=$(ls "$STOCK_DIR"/*-"$vid".mkv "$STOCK_DIR"/*-"$vid".mp4 "$STOCK_DIR"/*-"$vid".webm 2>/dev/null | head -1) || stocked=""
+fi
+
 # Le Claw n'a que ~13 Go. On refuse de commencer si la place locale est deja basse,
 # sinon un gros download remplit la carte SD et casse le reste de la machine.
 local_free=$(df -Pm "$WORK" | tail -1 | awk '{print $4}')
@@ -174,7 +193,7 @@ if [ -s "$COOKIES_FILE" ]; then
   log "cookies: $COOKIES_FILE ($(wc -l < "$COOKIES_FILE") lignes)"
 fi
 
-log "download: $*"
+[ -n "$stocked" ] || log "download: $*"
 # Le mur anti-bot de YouTube est intermittent, pas absolu: le 2026-09-08 la meme
 # video est passee puis s'est fait refuser sept minutes plus tard, 12 reussites
 # contre 42 refus sur la journee. Attendre le tick suivant coute cinq minutes
@@ -186,6 +205,9 @@ log "download: $*"
 # et laisse des morceaux, que l'essai suivant prendrait pour les siens.
 TRIES=4
 RETRY_SLEEP=20
+# Le remplissage du stock n'est jamais presse: un refus y attend son prochain
+# creneau au lieu d'insister, c'est ce qui l'empeche de faire signaler l'adresse.
+[ -z "$STOCK_ONLY" ] || TRIES=1
 
 # Ce qui change quand on demande un MORCEAU plutot qu'une video.
 #
@@ -240,21 +262,29 @@ fetch() {
     "$@" >>"$LOG" 2>&1
 }
 
-attempt=1
-while : ; do
-  if fetch "$@"; then break; fi
-  if [ "$attempt" -ge "$TRIES" ]; then
-    die "yt-dlp refuse apres $attempt essai(s) (voir $LOG)"
+if [ -n "$stocked" ]; then
+  mv -f "$stocked" "$WORK/" || die "stock: impossible de reprendre $stocked"
+  log "stock: servi depuis la carte, $(basename "$stocked")"
+else
+  # L'heure du dernier appel a YouTube, livraison ou stock: c'est l'adresse qui
+  # se fait signaler, pas le script, donc le stock espace ses essais de celui-ci.
+  { mkdir -p "$WORK/stock" && touch "$WORK/stock/.last_fetch"; } || true
+  attempt=1
+  while : ; do
+    if fetch "$@"; then break; fi
+    if [ "$attempt" -ge "$TRIES" ]; then
+      die "yt-dlp refuse apres $attempt essai(s) (voir $LOG)"
+    fi
+    log "essai $attempt/$TRIES refuse, nouvel essai dans ${RETRY_SLEEP}s"
+    sweep
+    attempt=$((attempt + 1))
+    sleep "$RETRY_SLEEP"
+  done
+  # pas de "[ ... ] && log" ici: sous set -e, un test faux au premier essai tuerait
+  # le script juste apres un telechargement reussi.
+  if [ "$attempt" -gt 1 ]; then
+    log "passe au ${attempt}e essai"
   fi
-  log "essai $attempt/$TRIES refuse, nouvel essai dans ${RETRY_SLEEP}s"
-  sweep
-  attempt=$((attempt + 1))
-  sleep "$RETRY_SLEEP"
-done
-# pas de "[ ... ] && log" ici: sous set -e, un test faux au premier essai tuerait
-# le script juste apres un telechargement reussi.
-if [ "$attempt" -gt 1 ]; then
-  log "passe au ${attempt}e essai"
 fi
 
 # On ne pousse que ce qui vient d'etre produit, pas un residu d'un run precedent.
@@ -263,9 +293,19 @@ files=$(find "$WORK" -maxdepth 1 -type f \( -name '*.mp4' -o -name '*.mkv' -o -n
 # parfaitement lisible: un merge coupe a 3 h sur 11 h ne se voit nulle part
 # en aval. Sans cette ligne le run suivant le televerse comme la video.
 files=$(echo "$files" | sed "/[.]temp[.]/d")
+# En remplissage de stock, seul le fichier de la video demandee est range: un
+# residu laisse par un envoi rate appartient a sa propre livraison.
+[ -z "$STOCK_ONLY" ] || files=$(echo "$files" | grep -F -- "-$vid." || true)
 [ -n "$files" ] || die "rien telecharge (trop long, ou pas d'avc1 disponible)"
 
 need_kb=$(du -sk $files | awk '{s+=$1} END {print s}')
+
+if [ -n "$STOCK_ONLY" ]; then
+  mkdir -p "$STOCK_DIR"
+  for f in $files; do mv -f "$f" "$STOCK_DIR/" || die "stock: rangement impossible de $f"; done
+  log "stock: $((need_kb / 1024)) Mo ranges dans $STOCK_DIR"
+  exit 0
+fi
 
 # On depose d'abord dans un sous-dossier, et on ne renomme qu'apres verification.
 # prep balaie la bibliotheque en boucle et sonde chaque fichier qu'il y trouve;
