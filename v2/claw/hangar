@@ -179,6 +179,7 @@ fill() {
   [ -n "$vid" ] || { log "$chan: aucun candidat"; echo "$now ok" > "$BASE/last"; return 1; }
   log "$chan: telecharge $vid en ${maxh}p (hangar $held Mo, 24 h $((day_kb / 1024)) Mo)"
   [ -z "$DRY" ] || return 0
+  date +%s > "$BASE/$chan.tried"
 
   rm -f "$dir/.part"/*
   cookies=""
@@ -218,7 +219,18 @@ fill() {
   return 0
 }
 
+# The pacing below is one download at a time for the whole board, so taking the
+# channels in the order they are configured gives the first one every turn:
+# cx247 took all four fetches of 2026-09-18 and nanatty247 none, which left that
+# channel running on its Kick supply alone and airing nothing from YouTube.
+# The channel that has waited longest goes first instead.
+turn() {
+  for c in $CHANNELS; do
+    printf '%s %s\n' "$(num "$(cat "$BASE/$c.tried" 2>/dev/null)")" "$c"
+  done | sort -n | awk '{print $2}'
+}
+
 for chan in $CHANNELS; do ship "$chan"; done
-for chan in $CHANNELS; do fill "$chan" && break; done
+for chan in $(turn); do fill "$chan" && break; done
 report
 exit 0

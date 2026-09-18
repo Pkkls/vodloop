@@ -74,6 +74,10 @@ WINDOW_SECONDS = int(conf_num("WINDOW_HOURS", 16) * 3600)
 AHEAD_SECONDS = int(conf_num("AHEAD_SECONDS", 3600))
 REFETCH_SECONDS = int(conf_num("REFETCH_DAYS", 21) * 86400)
 MAX_FILE_BYTES = int(conf_num("MAX_FILE_GB", 10) * GIB)
+# 0: a file airs whole, in the order it arrived. Above 0: it airs one slice at
+# a time and goes back in the queue, where the next file is drawn at random, so
+# a five hour stream is spread over the day instead of owning five hours of it.
+PART_SECONDS = int(conf_num("PART_SECONDS", 0))
 # prep in v1 stopped below 4 GiB free; the disk is shared with the rest of the box
 FLOOR_BYTES = int(conf_num("FLOOR_GB", 5) * GIB)
 CHUNK_SECONDS = 300

@@ -18,6 +18,7 @@ chunks, already sent, are dropped: segmenting a copy is deterministic.
 """
 import os
 import pathlib
+import random
 import signal
 import subprocess
 import sys
@@ -30,24 +31,49 @@ import chan  # noqa: E402
 JOB = chan.STATE / "job.json"
 SEQ = chan.STATE / "seq"
 LIST = chan.WORK / "job.list"
+PARTS = chan.STATE / "parts.json"
 POLL = 2
+# a slice that would leave less than this behind takes the rest of the file
+# with it, rather than coming back for ninety seconds
+TAIL_SECONDS = 300
 
 
 def ahead_seconds():
     return len(list(chan.CHUNKS.glob("*.ts"))) * chan.CHUNK_SECONDS
 
 
+def part_start(name):
+    """How far into a file its next slice begins. 0 for a file never aired."""
+    try:
+        return float(chan.read_json(PARTS, {}).get(name, 0.0))
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def set_part(name, value):
+    data = chan.read_json(PARTS, {})
+    if value is None:
+        data.pop(name, None)
+    else:
+        data[name] = value
+    chan.write_json(PARTS, data)
+
+
 def next_source():
     """(path, origin) of what airs next, moved into current/, or (None, None).
 
-    The oldest file waiting, and nothing else: a channel that has run out plays
-    its standby clip until the board delivers, it never goes back over what it
-    has already shown.
+    Whole files air oldest first. Sliced ones are drawn at random, because the
+    point of slicing is that two hours of the channel are not two hours of the
+    same stream: the draw is what mixes the sources, the slice is what bounds
+    how long any one of them holds the wire.
+
+    Either way a file that has been on air whole never comes back: a channel
+    that has run out plays its standby clip until it is supplied again.
     """
     files = chan.media(chan.QUEUE)
     if not files:
         return None, None
-    chosen = files[0]
+    chosen = random.choice(files) if chan.PART_SECONDS else files[0]
     target = chan.CURRENT / chosen.name
     try:
         chosen.replace(target)
@@ -101,8 +127,28 @@ def reject(source, reason, forever=True):
     ledger = "rejected.tsv" if forever else "failed.tsv"
     with (chan.STATE / ledger).open("a") as fh:
         fh.write(f"{int(time.time())}\t{chan.video_id(source) or source.name}\t{reason}\n")
+    set_part(source.name, None)
     source.unlink(missing_ok=True)
     chan.telegram(f"video refusee ({reason}): {source.name[:80]}")
+
+
+def window(source, seconds):
+    """(start, length) of the slice to air now. The whole file when unsliced.
+
+    The last slice swallows what would be left over, so a file never comes back
+    for a stub: with PART_SECONDS at an hour, a 5 h 02 stream airs as four
+    hours and one of 1 h 02, not four, one and two minutes.
+
+    The marks are nominal. A copy can only start on a keyframe, so a junction
+    repeats up to one GOP, about two seconds on this material, and the error
+    does not accumulate because the next mark is measured from the last one and
+    not from what ffmpeg actually emitted. Making it exact would mean encoding.
+    """
+    if not chan.PART_SECONDS:
+        return 0.0, seconds
+    start = min(part_start(source.name), max(0.0, seconds - TAIL_SECONDS))
+    left = max(0.0, seconds - start)
+    return start, left if left <= chan.PART_SECONDS + TAIL_SECONDS else float(chan.PART_SECONDS)
 
 
 def run_job(source, origin, skip):
@@ -124,19 +170,24 @@ def run_job(source, origin, skip):
 
     audio = ["-c:a", "copy"] if chan.audio_copies(info) else \
         ["-c:a", "aac", "-b:a", "160k", "-ar", "44100", "-ac", "2"]
+    start, length = window(source, info["seconds"])
+    # -ss and -t before -i: seeking on the input costs nothing on a copy, and
+    # the same pair after it would decode everything up to the mark
+    seek = ["-ss", f"{start:.3f}", "-t", f"{length:.3f}"] if chan.PART_SECONDS else []
     chan.WORK.mkdir(parents=True, exist_ok=True)
     for stale in chan.WORK.iterdir():
         stale.unlink(missing_ok=True)
     chan.write_json(JOB, {"source": source.name, "origin": origin, "done": skip})
     job = subprocess.Popen(
-        ["ffmpeg", "-hide_banner", "-loglevel", "error", "-i", str(source),
+        ["ffmpeg", "-hide_banner", "-loglevel", "error"] + seek + ["-i", str(source),
          "-map", "0:v:0", "-map", "0:a:0", "-c:v", "copy"] + audio + chan.DROP_SEI
         + ["-f", "segment", "-segment_time", str(chan.CHUNK_SECONDS),
            "-segment_format", "mpegts", "-segment_list", str(LIST),
            "-reset_timestamps", "1", str(chan.WORK / "job_%05d.ts")],
         stderr=subprocess.PIPE)
     chan.log(f"decoupe {source.name} ({origin}, {info['seconds'] / 3600:.1f} h, "
-             f"son {'copie' if audio[1] == 'copy' else 'transcode'}, saut {skip})")
+             + (f"tranche {start / 3600:.1f}-{(start + length) / 3600:.1f} h, " if seek else "")
+             + f"son {'copie' if audio[1] == 'copy' else 'transcode'}, saut {skip})")
     moved, paused = 0, False
 
     def collect():
@@ -171,6 +222,13 @@ def run_job(source, origin, skip):
         return True
     if job.returncode != 0:
         chan.log(f"decoupe interrompue apres {moved} chunks: {error[-200:]}")
+    if chan.PART_SECONDS and start + length < info["seconds"] - TAIL_SECONDS:
+        set_part(source.name, start + length)
+        source.replace(chan.QUEUE / source.name)
+        chan.log(f"fini {source.name}: {moved} chunks, reste a partir de "
+                 f"{(start + length) / 3600:.1f} h")
+        return True
+    set_part(source.name, None)
     settle(source, origin)
     chan.log(f"fini {source.name}: {moved} chunks")
     return True

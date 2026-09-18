@@ -17,7 +17,9 @@ root.mkdir()
 (root / "channel.env").write_text("MAXH=720\nBUDGET_GB=28\nWINDOW_HOURS=16\nMAX_FILE_GB=10\n"
                                   "FLOOR_GB=5\nMIN_SECONDS=3600\nMAX_SECONDS=43200\n")
 os.environ["CHAN_ROOT"] = str(root)
-sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1] / "v2" / "oracle"))
+here = pathlib.Path(__file__).resolve().parents[1]
+# the repo keeps the code in v2/oracle, the server installs it in bin/
+sys.path[:0] = [str(here / "v2" / "oracle"), str(here / "bin")]
 
 import chan  # noqa: E402
 import cut  # noqa: E402
@@ -200,6 +202,28 @@ check("1080p in a 720p session", feed.exceeds((1920, 1080, 30), (1280, 720, 30))
 check("60 fps in a 30 fps session", feed.exceeds((1280, 720, 60), (1280, 720, 30)))
 check("control: 720p30 in a 1080p60 session", not feed.exceeds((1280, 720, 30), (1920, 1080, 60)))
 
+print("feed: a session is opened on the standby clip, so nothing can end it")
+real_profile = feed.profile_of
+try:
+    feed.profile_of = lambda path: (1280, 720, 60.0)
+    feed.SESSION.unlink(missing_ok=True)
+    check("a new pusher fixes the ladder on the clip", feed.open_session(4242))
+    check("and the session carries the clip's shape",
+          chan.read_json(feed.SESSION, {})["profile"] == [1280, 720, 60.0],
+          chan.read_json(feed.SESSION, {}))
+    check("control: the same pusher does not reopen it", not feed.open_session(4242))
+    check("a new one does", feed.open_session(4243))
+    # the cut this whole change exists to stop: 30 fps clip, 60 fps chunk
+    feed.profile_of = lambda path: (1280, 720, 30.0)
+    feed.open_session(4244)
+    feed.profile_of = lambda path: (1280, 720, 60.0)
+    check("control: a session opened below the material would be ended",
+          feed.exceeds((1280, 720, 60.0),
+                       tuple(chan.read_json(feed.SESSION, {})["profile"])))
+finally:
+    feed.profile_of = real_profile
+    feed.SESSION.unlink(missing_ok=True)
+
 if shutil.which("ffmpeg"):
     print("cut: one real pass")
     for folder in (chan.QUEUE, chan.CURRENT, chan.AIRED, chan.CHUNKS, chan.WORK, chan.STATE):
@@ -234,6 +258,54 @@ if shutil.which("ffmpeg"):
           len(chan.media(chan.AIRED)) == 1, chan.media(chan.AIRED))
 else:
     print("  (ffmpeg absent: real pass skipped)")
+
+print("cut: an hour at a time, drawn at random")
+real_part = chan.PART_SECONDS
+try:
+    chan.PART_SECONDS = 0
+    check("unsliced, a file airs whole", cut.window(pathlib.Path("a.mkv"), 18000) == (0.0, 18000))
+    chan.PART_SECONDS = 3600
+    cut.PARTS.unlink(missing_ok=True)
+    check("the first slice starts at zero", cut.window(pathlib.Path("a.mkv"), 18000) == (0.0, 3600.0))
+    cut.set_part("a.mkv", 14400.0)
+    check("the last slice is exactly what is left",
+          cut.window(pathlib.Path("a.mkv"), 18000) == (14400.0, 3600.0))
+    check("and a stub is swallowed by it rather than aired alone",
+          cut.window(pathlib.Path("a.mkv"), 18120) == (14400.0, 3720.0),
+          cut.window(pathlib.Path("a.mkv"), 18120))
+    cut.set_part("a.mkv", 99999.0)
+    start, length = cut.window(pathlib.Path("a.mkv"), 18000)
+    check("control: an offset past the end still yields playable seconds",
+          length > 0 and start + length <= 18000, (start, length))
+    cut.PARTS.unlink(missing_ok=True)
+finally:
+    chan.PART_SECONDS = real_part
+
+if shutil.which("ffmpeg"):
+    print("cut: a sliced file goes back in the queue until it is spent")
+    real_tail = cut.TAIL_SECONDS
+    try:
+        chan.PART_SECONDS, cut.TAIL_SECONDS = 5, 4
+        for stale in chan.media(chan.AIRED):
+            stale.unlink()
+        (chan.STATE / "aired.tsv").unlink(missing_ok=True)
+        make("3-Longue_video-partvideo01.mkv", 30)
+        source, origin = cut.next_source()
+        cut.run_job(source, origin, 0)
+        back = chan.QUEUE / source.name
+        check("after its first slice it is back in the queue", back.exists())
+        check("at the mark where the next one starts",
+              cut.part_start(source.name) == 5.0, cut.part_start(source.name))
+        check("and it has not been recorded as aired",
+              not (chan.STATE / "aired.tsv").exists())
+        source, origin = cut.next_source()
+        cut.run_job(source, origin, 0)
+        check("the last slice retires it", (chan.AIRED / back.name).exists()
+              and "partvideo01" in (chan.STATE / "aired.tsv").read_text())
+        check("control: nothing is left behind in the ledger",
+              cut.part_start(back.name) == 0.0)
+    finally:
+        chan.PART_SECONDS, cut.TAIL_SECONDS = real_part, real_tail
 
 print()
 if failures:
