@@ -189,9 +189,17 @@ fill() {
   # it on arrival: three deliveries and six gigabytes were spent that way on
   # 2026-09-18 before anything said so. Asking for 480 lines at least turns a
   # wasted hour of the card into a refusal that costs seconds.
+  # A rung known to be over the cap is passed over rather than started and
+  # aborted mid-file: 1080p60 at 5250 Mo against a 5000 Mo cap burned a fetch
+  # slot twice on 2026-09-18, and the 720p rung under it would have landed. The
+  # last rung carries no size filter, because YouTube often reports no size at
+  # all and --max-filesize is still the backstop under it.
+  fmt="bv*[vcodec^=avc1][height<=$maxh][height>=480][filesize_approx<${MAX_FILE_MB}M]+ba[acodec^=mp4a]"
+  fmt="$fmt/bv*[vcodec^=avc1][height<=720][height>=480][filesize_approx<${MAX_FILE_MB}M]+ba[acodec^=mp4a]"
+  fmt="$fmt/bv*[vcodec^=avc1][height<=$maxh][height>=480]+ba[acodec^=mp4a]"
   if yt-dlp --force-ipv4 ${cookies:+--cookies "$cookies"} --no-playlist --restrict-filenames \
        --no-progress --max-filesize "${MAX_FILE_MB}M" \
-       -f "bv*[vcodec^=avc1][height<=$maxh][height>=480]+ba[acodec^=mp4a]" \
+       -f "$fmt" \
        --merge-output-format mkv -P "$dir/.part" -o '%(title).80B-%(id)s.%(ext)s' \
        "https://www.youtube.com/watch?v=$vid" >> "$LOG" 2>&1; then
     got=$(ls "$dir/.part"/*-"$vid".mkv 2>/dev/null | head -1)
