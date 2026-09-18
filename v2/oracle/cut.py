@@ -1,9 +1,11 @@
 #!/usr/bin/env python3
 """Turn the next file into five minute chunks, copy only. A service.
 
-What airs next is the oldest file in queue/. When queue/ is empty the channel
-replays: a random file among the half of aired/ that aired longest ago, so a
-supply outage costs repeats and never dead air.
+What airs next is the oldest file in queue/, and nothing else. A video that has
+been on air moves to aired/, where it is kept as a reserve but never drawn
+again, and its id leaves the catalogue: the channel does not repeat itself, and
+an empty queue means the standby clip until the board delivers. That is kil's
+call, taken 2026-09-17 with the cost stated.
 
 One ffmpeg segment job per file. Chunks are only moved into chunks/ once the
 muxer has listed them as complete, so the feeder never reads a half-written
@@ -16,7 +18,6 @@ chunks, already sent, are dropped: segmenting a copy is deterministic.
 """
 import os
 import pathlib
-import random
 import signal
 import subprocess
 import sys
@@ -36,39 +37,23 @@ def ahead_seconds():
     return len(list(chan.CHUNKS.glob("*.ts"))) * chan.CHUNK_SECONDS
 
 
-def pick_replay(aired, rng=random):
-    """A random file among the least recently aired half, [(path, mtime)]."""
-    if not aired:
-        return None
-    oldest = sorted(aired, key=lambda pm: pm[1])[:max(1, len(aired) // 2)]
-    return rng.choice(oldest)[0]
-
-
 def next_source():
-    """(path, origin) of what airs next, moved into current/, or (None, None)."""
-    for origin, folder in (("queue", chan.QUEUE), ("aired", chan.AIRED)):
-        files = chan.media(folder)
-        if not files:
-            continue
-        if origin == "queue":
-            chosen = files[0]
-        else:
-            stamped = []
-            for f in files:
-                try:
-                    stamped.append((f, f.stat().st_mtime))
-                except OSError:
-                    continue
-            chosen = pick_replay(stamped)
-            if chosen is None:
-                continue
-        target = chan.CURRENT / chosen.name
-        try:
-            chosen.replace(target)
-        except OSError:
-            continue  # supply evicted it a moment ago
-        return target, origin
-    return None, None
+    """(path, origin) of what airs next, moved into current/, or (None, None).
+
+    The oldest file waiting, and nothing else: a channel that has run out plays
+    its standby clip until the board delivers, it never goes back over what it
+    has already shown.
+    """
+    files = chan.media(chan.QUEUE)
+    if not files:
+        return None, None
+    chosen = files[0]
+    target = chan.CURRENT / chosen.name
+    try:
+        chosen.replace(target)
+    except OSError:
+        return None, None
+    return target, "queue"
 
 
 def next_seq():
@@ -88,13 +73,20 @@ def completed(listing):
 
 
 def settle(source, origin):
-    """The file has aired: into aired/, stamped now, and remembered once."""
+    """The file has aired: remembered, and set aside in aired/.
+
+    kil, 2026-09-17: a video that has been on air never goes back on air, and
+    the ledger keeps its id out of the catalogue for REFETCH_DAYS, set long
+    enough to mean never. The file itself is kept as a reserve, which costs
+    disk and nothing else: supply.py evicts it, oldest first, when the room it
+    offers the board needs it. With an empty queue the channel shows its
+    standby clip rather than repeating, and the cure is supply, not memory.
+    """
+    with (chan.STATE / "aired.tsv").open("a") as ledger:
+        ledger.write(f"{int(time.time())}\t{chan.video_id(source) or source.name}\n")
     target = chan.AIRED / source.name
     source.replace(target)
     os.utime(target)
-    if origin == "queue":
-        with (chan.STATE / "aired.tsv").open("a") as ledger:
-            ledger.write(f"{int(time.time())}\t{chan.video_id(target) or target.name}\n")
 
 
 def reject(source, reason, forever=True):

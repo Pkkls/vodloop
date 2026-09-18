@@ -33,6 +33,11 @@ KEEP_FREE_MB=12000
 HANGAR_MB=80000
 MAX_FILE_MB=10000
 MAX_FAILS=3
+# How far down the candidate list the draw may go. Oracle writes it sources in
+# turn, each newest first, so the head is the recent material of every source.
+# Without this the draw was uniform over three years of catalogue and the
+# channel aired a batch of very old videos in a row.
+RECENT=120
 [ -f "$CONF" ] && . "$CONF"
 
 DRY=""
@@ -154,6 +159,7 @@ fill() {
   maxh=$(num "$(field maxh "$want")")
   case "$maxh" in 1080 | 720 | 480) ;; *) maxh=720 ;; esac
   cands=$($OSSH "$ORACLE" "cat $V2/$chan/state/candidates.tsv" 2>/dev/null) || return 1
+  cands=$(printf '%s\n' "$cands" | head -n "$RECENT")
   # A channel with an empty queue is on its standby clip right now, and the
   # question stops being which video deserves a turn: it is which one is on the
   # air soonest. A fetch costs about the same whatever it brings back, so the

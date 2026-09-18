@@ -27,6 +27,7 @@ import time
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 
 import chan  # noqa: E402
+import kick  # noqa: E402
 
 CATALOG = chan.STATE / "catalog.tsv"
 CANDIDATES = chan.STATE / "candidates.tsv"
@@ -80,19 +81,46 @@ def measured_rate(paths, durations, fallback=250_000):
 
 
 def read_catalog():
-    """(id, seconds) of the catalogue on disk. Seconds come back as text, and
-    comparing that to a ceiling is a TypeError that only fires in production."""
+    """(id, seconds, source, place) of the catalogue on disk.
+
+    Numbers come back as numbers: comparing the file's text seconds to a
+    ceiling is a TypeError that only fires in production. A file written before
+    the places existed still reads, everything in it landing in source 0.
+    """
     rows = []
     try:
         for line in CATALOG.read_text().splitlines():
-            vid, _, secs = line.partition("\t")
+            fields = line.split("\t")
             try:
-                rows.append((vid, int(secs)))
-            except ValueError:
+                rows.append((fields[0], int(fields[1]),
+                             int(fields[2]) if len(fields) > 2 else 0,
+                             int(fields[3]) if len(fields) > 3 else len(rows)))
+            except (IndexError, ValueError):
                 continue
     except OSError:
         pass
     return rows
+
+
+def newest_first(rows):
+    """The candidates, sources taken in turn, each newest first.
+
+    kil, 2026-09-17: "tu mets trop de videos trop anciennes d'un coup". The
+    order of a listing is what carries recency, so the head of this list is the
+    most recent of every source, and the board draws near the head.
+    """
+    by_source = {}
+    for vid, secs, rank, place in rows:
+        by_source.setdefault(rank, []).append((place, vid, secs))
+    lists = [[(vid, secs) for _, vid, secs in sorted(items)]
+             for _, items in sorted(by_source.items())]
+    out, cursor = [], 0
+    while any(cursor < len(items) for items in lists):
+        for items in lists:
+            if cursor < len(items):
+                out.append(items[cursor])
+        cursor += 1
+    return out
 
 
 def fetch_ceiling(rate):
@@ -142,8 +170,19 @@ def refresh_catalog(apply):
     except OSError:
         chan.log("sources.txt absent")
         return
-    rows, failed = {}, 0
-    for url, words in sources:
+    rows, failed, table = {}, 0, []
+    for rank, (url, words) in enumerate(sources):
+        if url.startswith("kick:"):
+            # the channel's own VODs, fetched by this server rather than by the
+            # board: Kick lets a datacenter address through, YouTube does not
+            kept, part = kick.catalogue(url[5:], chan.MAXH, chan.MAX_FILE_BYTES,
+                                        chan.MAX_SECONDS)
+            for vid, secs, place in kept:
+                rows.setdefault(vid, (secs, rank, place))
+            table += part
+            failed += not kept
+            chan.log(f"catalogue {url}: {len(kept)} morceaux")
+            continue
         try:
             out = subprocess.run([YTDLP, "--flat-playlist", "--no-warnings", "--print",
                                   "%(id)s\t%(duration)s\t%(title)s", url],
@@ -152,15 +191,23 @@ def refresh_catalog(apply):
             out = ""
         kept = parse_listing(out, words)
         failed += not out.strip()
-        rows.update(kept)
+        # The listing comes back newest first, and that order is the only thing
+        # that says how recent a video is: the flat listing carries no date.
+        # Kept per source, with its place in it, so the draw can stay near the
+        # top instead of pulling something from three years ago.
+        for place, (vid, secs) in enumerate(kept):
+            rows.setdefault(vid, (secs, rank, place))
         chan.log(f"catalogue {url}: {len(kept)} dans la bande")
     if failed == len(sources) or not rows:
         chan.log("aucune liste lue, catalogue precedent conserve")
         return
     if apply:
         tmp = CATALOG.with_suffix(".tmp")
-        tmp.write_text("".join(f"{vid}\t{secs}\n" for vid, secs in rows.items()))
+        tmp.write_text("".join(f"{vid}\t{secs}\t{rank}\t{place}\n"
+                               for vid, (secs, rank, place) in rows.items()))
         tmp.replace(CATALOG)
+        if table:
+            kick.write_table(table)
 
 
 FORGIVEN_FAILURES = 1
@@ -232,7 +279,7 @@ def main(argv):
     # downloading. The ceiling is the file size the card survives, read back as
     # a duration through the rate this channel actually receives.
     fetch_seconds = fetch_ceiling(rate)
-    candidates = [(vid, secs) for vid, secs in catalog
+    candidates = [(vid, secs) for vid, secs in newest_first(catalog)
                   if vid not in skip and secs <= fetch_seconds]
     chan.log(f"file {len(queue)} ({queued / 3600:.1f} h), diffuses {len(aired) - len(evict)}, "
              f"besoin {need / 3600:.1f} h, offre {offer / chan.GIB:.1f} Go, "

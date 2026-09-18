@@ -7,7 +7,6 @@ aired, a 50 fps one is refused and never reaches the wire.
 """
 import os
 import pathlib
-import random
 import shutil
 import subprocess
 import sys
@@ -23,6 +22,7 @@ sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1] / "v2" / "ora
 import chan  # noqa: E402
 import cut  # noqa: E402
 import feed  # noqa: E402
+import kick  # noqa: E402
 import supply  # noqa: E402
 
 failures = []
@@ -100,9 +100,10 @@ check("a thick channel may only be asked for short videos",
 check("control: a thin one is bounded by the band, not by the card",
       supply.fetch_ceiling(233016) == chan.MAX_SECONDS)
 supply.CATALOG.parent.mkdir(parents=True, exist_ok=True)
-supply.CATALOG.write_text("dQw4w9WgXcQ\t7200\nbroken00001\tNA\n")
+supply.CATALOG.write_text("dQw4w9WgXcQ\t7200\t0\t3\nbroken00001\tNA\t0\t4\nolder000001\t7200\n")
 check("the catalogue comes back with numbers, not text",
-      supply.read_catalog() == [("dQw4w9WgXcQ", 7200)], supply.read_catalog())
+      supply.read_catalog() == [("dQw4w9WgXcQ", 7200, 0, 3), ("older000001", 7200, 0, 1)],
+      supply.read_catalog())
 
 print("supply: what the board is not offered again")
 (chan.STATE).mkdir(parents=True, exist_ok=True)
@@ -127,21 +128,72 @@ check("control: twice is not", "flaky000001" in supply.excluded(now))
 for name in ("aired.tsv", "rejected.tsv", "failed.tsv"):
     (chan.STATE / name).unlink()
 
-print("cut: what airs next")
-files = [(f"f{n}", 1000 + n) for n in range(6)]
+print("supply: the recent material of every source comes first")
+rows = [("oldA0000001", 3600, 0, 2), ("newA0000001", 3600, 0, 0),
+        ("midA0000001", 3600, 0, 1), ("newB0000001", 3600, 1, 0),
+        ("oldB0000001", 3600, 1, 1)]
+order = [vid for vid, _ in supply.newest_first(rows)]
+check("sources are taken in turn, newest of each first",
+      order == ["newA0000001", "newB0000001", "midA0000001", "oldB0000001", "oldA0000001"],
+      order)
+check("control: nothing is lost on the way", len(order) == len(rows))
 
+print("kick: reading a channel's own VODs")
+master = ("#EXTM3U\n"
+          "#EXT-X-STREAM-INF:BANDWIDTH=7624377,RESOLUTION=1920x1080,FRAME-RATE=30.000\n"
+          "1080p/playlist.m3u8\n"
+          "#EXT-X-STREAM-INF:BANDWIDTH=2439511,RESOLUTION=1280x720,FRAME-RATE=30.000\n"
+          "720p30/playlist.m3u8\n"
+          "#EXT-X-STREAM-INF:BANDWIDTH=630000,RESOLUTION=640x360,FRAME-RATE=30.000\n"
+          "360p30/playlist.m3u8\n")
+check("the tallest rung under the ceiling is taken",
+      kick.parse_master(master, 720) == ("720p30/playlist.m3u8", 2439511, 720),
+      kick.parse_master(master, 720))
+check("control: a taller ceiling takes the source rung",
+      kick.parse_master(master, 1080)[2] == 1080)
+check("control: nothing at all under 480 lines", kick.parse_master(master, 360) is None)
+media = "#EXTM3U\n#EXTINF:10.000,\n0.ts\n#EXTINF:10.000,\n1.ts\n#EXTINF:4.000,\n2.ts\n"
+check("segments come back in order with their length",
+      kick.parse_media(media) == [("0.ts", 10.0), ("1.ts", 10.0), ("2.ts", 4.0)])
+check("a part takes the segments that start inside it",
+      kick.segments_for(kick.parse_media(media), 10, 20) == ["1.ts"])
+check("control: the whole recording takes them all",
+      kick.segments_for(kick.parse_media(media), 0, 30) == ["0.ts", "1.ts", "2.ts"])
+check("a short recording is one part", kick.slice_parts(3600, 7200) == [(0, 3600)])
+cuts = kick.slice_parts(36000, 7200)
+check("a ten hour one is cut in equal parts that cover it",
+      len(cuts) == 5 and cuts[0][0] == 0 and cuts[-1][1] == 36000, cuts)
+check("no gap between two parts", all(a[1] == b[0] for a, b in zip(cuts, cuts[1:])), cuts)
+ids = {kick.part_id("uuid-abc", n) for n in range(1, 6)}
+check("every part has its own id, of the right shape",
+      len(ids) == 5 and all(len(i) == 11 and chan.VIDEO_ID.search("x-" + i + ".mkv") for i in ids),
+      sorted(ids))
+check("control: the same part keeps its id",
+      kick.part_id("uuid-abc", 2) == kick.part_id("uuid-abc", 2))
+check("a title becomes a file name", kick.safe_title("Day 7: Jaipur / India!") == "Day_7_Jaipur_India")
 
-class First:
-    @staticmethod
-    def choice(seq):
-        return seq[-1]
+print("kick: which part is fetched next")
+import kickfetch  # noqa: E402
 
-
-check("a replay comes from the least recently aired half",
-      cut.pick_replay(files, First) == "f2", cut.pick_replay(files, First))
-check("any of that half can be drawn",
-      {cut.pick_replay(files, random.Random(s)) for s in range(40)} == {"f0", "f1", "f2"})
-check("nothing aired, nothing to replay", cut.pick_replay([]) is None)
+supply.CATALOG.write_text("kaaaaaaaa01\t7200\t0\t0\nyoutubevid1\t7200\t1\t0\n"
+                          "kaaaaaaaa02\t7200\t0\t1\n")
+kick.write_table([("kaaaaaaaa01", "https://cdn/1.m3u8", 0, 7200, "Jour_1", 6000000),
+                  ("kaaaaaaaa02", "https://cdn/1.m3u8", 7200, 14400, "Jour_1", 6000000)])
+chosen = kickfetch.pick(now=1789000000)
+check("the newest Kick part comes first, YouTube is left to the board",
+      chosen and chosen[0] == "kaaaaaaaa01", chosen)
+check("the part carries the bitrate it will really weigh at",
+      chosen and chosen[6] == 6000000, chosen)
+write_ledgers({"aired.tsv": [(1789000000 - 60, "kaaaaaaaa01")]})
+chosen = kickfetch.pick(now=1789000000)
+check("a part already aired is never fetched again",
+      chosen and chosen[0] == "kaaaaaaaa02", chosen)
+write_ledgers({"aired.tsv": [(1789000000 - 60, "kaaaaaaaa01"),
+                             (1789000000 - 30, "kaaaaaaaa02")]})
+check("control: with both aired there is nothing to take",
+      kickfetch.pick(now=1789000000) is None)
+(chan.STATE / "aired.tsv").unlink()
+kick.TABLE.unlink()
 
 print("feed: a session reopens only upward")
 check("1080p in a 720p session", feed.exceeds((1920, 1080, 30), (1280, 720, 30)))
@@ -177,7 +229,9 @@ if shutil.which("ffmpeg"):
           and "badvideo001" in (chan.STATE / "rejected.tsv").read_text())
     check("and adds no chunk", len(list(chan.CHUNKS.glob("*.ts"))) == 1)
     source, origin = cut.next_source()
-    check("with the queue empty, the aired file comes back", origin == "aired", origin)
+    check("with the queue empty, nothing is replayed", source is None, source)
+    check("control: what aired is kept in reserve, not thrown away",
+          len(chan.media(chan.AIRED)) == 1, chan.media(chan.AIRED))
 else:
     print("  (ffmpeg absent: real pass skipped)")
 
