@@ -183,14 +183,25 @@ fill() {
   rm -f "$dir/.part"/*
   cookies=""
   [ -s "$BASE/cookies.txt" ] && cookies="$BASE/cookies.txt"
+  # The floor matters as much as the ceiling. YouTube keeps some long VODs in
+  # avc1 at 360p only, "height<=720" takes that gladly, and the far end refuses
+  # it on arrival: three deliveries and six gigabytes were spent that way on
+  # 2026-09-18 before anything said so. Asking for 480 lines at least turns a
+  # wasted hour of the card into a refusal that costs seconds.
   if yt-dlp --force-ipv4 ${cookies:+--cookies "$cookies"} --no-playlist --restrict-filenames \
        --no-progress --max-filesize "${MAX_FILE_MB}M" \
-       -f "bv*[vcodec^=avc1][height<=$maxh]+ba[acodec^=mp4a]/bv*[vcodec^=avc1][height<=480]+ba[acodec^=mp4a]" \
+       -f "bv*[vcodec^=avc1][height<=$maxh][height>=480]+ba[acodec^=mp4a]" \
        --merge-output-format mkv -P "$dir/.part" -o '%(title).80B-%(id)s.%(ext)s' \
        "https://www.youtube.com/watch?v=$vid" >> "$LOG" 2>&1; then
     got=$(ls "$dir/.part"/*-"$vid".mkv 2>/dev/null | head -1)
   else
     got=""
+    # A video that does not exist in the shape the wire needs never will, so
+    # the far side is told once and stops offering it.
+    if tail -5 "$LOG" | grep -q "Requested format is not available"; then
+      $OSSH "$ORACLE" "printf '%s\t%s\tavc1 sous 480 lignes\n' $(date +%s) '$vid' >> $V2/$chan/state/rejected.tsv" 2>/dev/null
+      log "$chan: $vid n'existe pas en avc1 au-dessus de 480 lignes, signale a Oracle"
+    fi
   fi
   if [ -n "$got" ] && [ -f "$got" ]; then
     kb=$(( $(bytes "$got") / 1024 ))
