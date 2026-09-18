@@ -18,20 +18,24 @@ for role in push feed cut; do
 done
 sudo systemctl daemon-reload
 
-# The standby clip has the channel's own shape: a clip of another size is a
-# resolution change on the wire at the worst moment (found at 1280x720 against a
-# 1920x1080 channel on 2026-09-14). Encoded once, the only encode in v2.
+# The standby clip is the channel's ceiling, not just its size: feed.py opens
+# every RTMP session on it, and Kick fixes that session's ladder on the first
+# picture it sees. A clip below the material ends the live the first time a
+# taller chunk arrives (a 1280x720 clip against a 1920x1080 channel cut it on
+# 2026-09-14; a 30 fps one against 60 fps chunks cut it once per rotation).
+# So: MAXH lines, 60 i/s. Encoded once, the only encode in v2.
 maxh=$(sed -n 's/^MAXH=//p' "$ROOT/channel.env"); maxh=${maxh:-720}
 case "$maxh" in 1080) size=1920x1080 ;; 480) size=854x480 ;; *) size=1280x720 ;; esac
-if ! ffprobe -v error -select_streams v:0 -show_entries stream=width,height -of csv=s=x:p=0 \
-     "$ROOT/filler.ts" 2>/dev/null | grep -qx "$size"; then
+shape=$(ffprobe -v error -select_streams v:0 -show_entries stream=width,height,r_frame_rate \
+        -of csv=s=x:p=0 "$ROOT/filler.ts" 2>/dev/null)
+if [ "$shape" != "${size}x60/1" ]; then
   ffmpeg -hide_banner -loglevel error \
-    -f lavfi -t 20 -i "color=c=0x101014:s=$size:r=30,drawtext=fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf:text='vod loading...':fontcolor=white@0.82:fontsize=h/16:x=(w-text_w)/2:y=(h-text_h)/2" \
+    -f lavfi -t 20 -i "color=c=0x101014:s=$size:r=60,drawtext=fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf:text='vod loading...':fontcolor=white@0.82:fontsize=h/16:x=(w-text_w)/2:y=(h-text_h)/2" \
     -f lavfi -t 20 -i "anullsrc=channel_layout=stereo:sample_rate=44100" \
-    -c:v libx264 -preset veryfast -crf 21 -pix_fmt yuv420p -g 60 -keyint_min 60 -sc_threshold 0 \
+    -c:v libx264 -preset veryfast -crf 21 -pix_fmt yuv420p -g 120 -keyint_min 120 -sc_threshold 0 \
     -c:a aac -b:a 160k -ar 44100 -ac 2 -f mpegts -y "$ROOT/filler.ts.new"
   mv "$ROOT/filler.ts.new" "$ROOT/filler.ts"
-  echo "clip d'attente: $size"
+  echo "clip d'attente: ${size} 60 i/s"
 fi
 
 block="# v2:$NAME debut

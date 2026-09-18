@@ -8,9 +8,11 @@ Kept from v1 because each line was paid for:
     muxer tolerates instead of a range sent twice, which it does not.
   - +initial_discontinuity silences the continuity counter jump at each junction.
   - Kick fixes its ladder from the first picture of an RTMP session: a session
-    opened at 720p30 serves a 1080p or 60 fps chunk below itself. So a chunk
-    that exceeds the session ends it (SIGTERM to the pusher's ffmpeg, systemd
-    brings both back in about 6 s), at most once every ten minutes.
+    opened at 720p30 serves a 1080p or 60 fps chunk below itself. So every
+    session is opened on the standby clip, which is built at the channel's
+    ceiling, and nothing that follows can exceed it. A chunk that does anyway
+    still ends the session (SIGTERM to the pusher's ffmpeg, systemd brings both
+    back in about 6 s), at most once every ten minutes.
   - with nothing to send, the standby clip, which never opens a new session.
 This process may restart freely. The pusher may not.
 """
@@ -55,7 +57,34 @@ def pusher_pid():
         return 0
 
 
+def open_session(pid):
+    """Fix a new session's ladder on the standby clip, and say it was done.
+
+    Kick reads its ladder from the first picture of an RTMP session and ends
+    the live on any later picture above it. The clip carries the channel's
+    ceiling, so opening on it means nothing that follows can ever exceed the
+    session: no reopen, no cut VOD, no dropped viewers, whatever order the
+    material arrives in. Before this the first chunk set the ladder, and a
+    30 fps one followed by a 60 fps one cost a cut per rotation.
+    """
+    profile = profile_of(chan.FILLER)
+    if pid <= 0 or profile is None:
+        return False
+    session = chan.read_json(SESSION, {})
+    if session.get("pid") == pid and session.get("profile"):
+        return False
+    chan.write_json(SESSION, {"pid": pid, "profile": list(profile),
+                              "reopened_at": session.get("reopened_at", 0)})
+    return True
+
+
 def reopen_if_above(chunk, may_reopen, now=time.time):
+    """The net under open_session: a chunk above the clip still has to cut.
+
+    It cannot fire on material the channel accepts, since the clip is built at
+    MAXH and 60 fps. It stays for the day that ceiling is raised under a live
+    pusher, where the alternative is a session serving its own upscale.
+    """
     pid = pusher_pid()
     profile = profile_of(chunk)
     if pid <= 0 or profile is None:
@@ -63,7 +92,6 @@ def reopen_if_above(chunk, may_reopen, now=time.time):
     session = chan.read_json(SESSION, {})
     last = session.get("reopened_at", 0)
     if session.get("pid") != pid or not session.get("profile"):
-        chan.write_json(SESSION, {"pid": pid, "profile": list(profile), "reopened_at": last})
         return False
     if not may_reopen or not exceeds(profile, tuple(session["profile"])):
         return False
@@ -88,6 +116,9 @@ def main():
         time.sleep(30)
     while True:
         chunks = sorted(chan.CHUNKS.glob("*.ts"))
+        if open_session(pusher_pid()):
+            chan.log(f"session ouverte sur le clip d'attente: {profile_of(chan.FILLER)}")
+            chunks = []
         source = chunks[0] if chunks else chan.FILLER
         if reopen_if_above(source, may_reopen=bool(chunks)):
             chan.log(f"session rouverte pour {source.name}: {profile_of(source)}")
