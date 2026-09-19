@@ -262,6 +262,10 @@ def create_reward(title, cost, description="", user_input=False):
         "should_redemptions_skip_request_queue": False})
 
 
+def delete_reward(reward_id):
+    return _call("DELETE", f"/channels/rewards/{reward_id}") is not None
+
+
 def settle_redemption(redemption_id, honoured):
     """Spend the points, or hand them back. One call, one redemption."""
     path = "/channels/rewards/redemptions/" + ("accept" if honoured else "reject")
