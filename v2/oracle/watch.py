@@ -26,6 +26,8 @@ REPEAT_SECONDS = 3 * 3600
 MUTE_COOLDOWN = 20 * 60
 STALE_SECONDS = 30 * 60
 DRY_ARRIVAL_SECONDS = 12 * 3600
+# under two hours of unseen material the board has about one delivery of grace
+THIN_RUNWAY_SECONDS = 2 * 3600
 
 
 def sent_bytes(pid):
@@ -88,6 +90,13 @@ def main(argv):
     want = chan.read_json(chan.STATE / "want.json", {})
     if now - want.get("at", 0) > STALE_SECONDS:
         faults["supply"] = "want.json perime: supply.py ne tourne plus"
+    # The wire never goes empty any more: under the reserve it repeats an hour
+    # instead. That is quieter than a loading card and it is still the channel
+    # running out, so it is said out loud while there is time to answer it.
+    runway = want.get("runway_seconds")
+    if runway is not None and runway < THIN_RUNWAY_SECONDS:
+        faults["reserve"] = (f"{runway / 3600:.1f} h d'inedit seulement: "
+                             f"l'antenne va commencer a repasser des heures")
     board = chan.read_json(chan.ROOT.parent / "board.json", {})
     if now - board.get("at", 0) > STALE_SECONDS:
         faults["carte"] = "la carte ne donne plus signe de vie"
@@ -97,7 +106,8 @@ def main(argv):
     if free < chan.FLOOR_BYTES:
         faults["disque"] = f"{free / chan.GIB:.1f} Go libres, sous le plancher"
 
-    print(f"chunks {chunks}, file {want.get('queue_hours')} h, besoin "
+    print(f"chunks {chunks}, file {want.get('queue_hours')} h, inedit "
+          f"{(want.get('runway_seconds') or 0) / 3600:.1f} h, besoin "
           f"{(want.get('need_seconds') or 0) / 3600:.1f} h, libre {free / chan.GIB:.1f} Go, "
           f"fautes {sorted(faults) or 'aucune'}")
     alarms = data.get("alarms", {})
