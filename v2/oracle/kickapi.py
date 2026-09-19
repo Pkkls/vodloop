@@ -35,7 +35,8 @@ TOKENS = chan.STATE / "kick_tokens.json"
 PENDING = chan.STATE / "kick_pending.json"
 PUBKEY = chan.STATE / "kick_pubkey.pem"
 APP = chan.load_env(chan.ROOT / "kickapp.env")
-SCOPES = "user:read channel:read channel:write chat:write events:subscribe"
+SCOPES = ("user:read channel:read channel:write chat:write events:subscribe "
+          "channel:rewards:read channel:rewards:write")
 # a token is swapped this long before it expires, so a call never races the clock
 REFRESH_MARGIN = 300
 # Kick's own clock against ours: a webhook older than this is a replay
@@ -222,6 +223,30 @@ def subscribe(broadcaster_id, events=(("chat.message.sent", 1),)):
     return _call("POST", "/events/subscriptions", json={
         "broadcaster_user_id": int(broadcaster_id), "method": "webhook",
         "events": [{"name": name, "version": version} for name, version in events]})
+
+
+def rewards():
+    return (_call("GET", "/channels/rewards") or {}).get("data") or []
+
+
+def create_reward(title, cost, description="", user_input=False):
+    """A reward whose redemptions wait for us, so points can be given back.
+
+    should_redemptions_skip_request_queue stays false on purpose: a redemption
+    that lands already spent cannot be refunded when the channel is unable to
+    honour it, and being told no while paying for it is the one outcome worth
+    engineering against.
+    """
+    return _call("POST", "/channels/rewards", json={
+        "title": title, "cost": int(cost), "description": description[:255],
+        "is_enabled": True, "is_user_input_required": bool(user_input),
+        "should_redemptions_skip_request_queue": False})
+
+
+def settle_redemption(redemption_id, honoured):
+    """Spend the points, or hand them back. One call, one redemption."""
+    path = "/channels/rewards/redemptions/" + ("accept" if honoured else "reject")
+    return _call("POST", path, json={"ids": [redemption_id]}) is not None
 
 
 def viewers(slug):

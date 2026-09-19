@@ -46,6 +46,7 @@ sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 
 import chan  # noqa: E402
 import cut  # noqa: E402
+import feed  # noqa: E402
 import kickapi  # noqa: E402
 
 STATE = chan.STATE / "bot.json"
@@ -129,18 +130,24 @@ def clean_title(name, slug=""):
 
 
 def playing():
-    """What is on the wire right now, as far as the cutter has said."""
-    job = chan.read_json(cut.JOB, None)
-    if not job or not job.get("source"):
+    """What is going out this second, taken from the feeder and not the cutter.
+
+    The cutter runs an hour ahead of the wire and deletes its job the moment it
+    finishes, so a title read from it announced the next hour an hour early and
+    then froze on it. The feeder is the only thing that knows which chunk is
+    leaving, and it writes that down as it sends.
+    """
+    live = chan.read_json(feed.ONAIR, None)
+    if not live or live.get("filler") or not live.get("source"):
         return None
-    seconds = float(job.get("seconds") or 0)
-    number = int(job.get("number") or 0)
-    total = cut.slices_in(seconds) if seconds else 1
-    started = float(job.get("started") or 0)
-    return {"name": job["source"], "title": pretty(job["source"]),
-            "hour": number + 1, "hours": total, "started": started,
+    seconds = float(live.get("seconds") or 0)
+    number = int(live.get("number") or 0)
+    started = float(live.get("at") or 0)
+    return {"name": live["source"], "title": pretty(live["source"]),
+            "hour": number + 1, "hours": cut.slices_in(seconds) if seconds else 1,
+            "started": started,
             "elapsed": max(0.0, time.time() - started) if started else 0.0,
-            "vid": chan.video_id(job["source"]) or ""}
+            "vid": chan.video_id(live["source"]) or ""}
 
 
 def shelf():
@@ -390,6 +397,83 @@ def handle(payload):
         say(answer, payload.get("message_id"))
 
 
+# --- channel points --------------------------------------------------------
+
+# What the channel sells, and what each one does. The cost is a starting point;
+# change it in the dashboard and nothing here cares. A reward is matched on its
+# title, so renaming one in the dashboard unhooks it, which is the honest
+# failure: better a reward that does nothing and refunds than one that does
+# something nobody expected.
+REWARDS = [
+    {"key": "skip", "title": "Skip this hour", "cost": 500, "input": False,
+     "description": "Ends the hour playing now and draws another one. "
+                    "Refunded if the channel just skipped or has nothing else unseen."},
+    {"key": "pick", "title": "Pick what plays next", "cost": 1000, "input": True,
+     "description": "Type the number of a video from !list. "
+                    "Refunded if the number is not on the shelf."},
+]
+BY_TITLE = {r["title"].lower(): r for r in REWARDS}
+
+
+def reward_skip(data, now, who, text):
+    """(honoured, what to say). Points come back when the answer is no."""
+    blocked = skip_blocked(data, now, playing())
+    if blocked:
+        return False, f"@{who} {blocked} — points refunded"
+    do_skip(data, now, f"points from {who}")
+    return True, f"@{who} spent points to move on"
+
+
+def reward_pick(data, now, who, text):
+    rows = shelf()
+    try:
+        index = int(re.sub(r"\D", "", text or "")) - 1
+    except ValueError:
+        return False, f"@{who} that is not a number from !list — points refunded"
+    if not rows or not 0 <= index < min(5, len(rows)):
+        return False, f"@{who} nothing on the shelf at that number — points refunded"
+    PICK.write_text(json.dumps({"name": rows[index][0].name, "at": int(now)}))
+    return True, f"@{who} picked {pretty(rows[index][0].name)[:48]} for next"
+
+
+ACTIONS = {"skip": reward_skip, "pick": reward_pick}
+
+
+def redeemed(payload):
+    """One reward redemption: do it or refund it, and say which in chat."""
+    if (payload.get("status") or "").lower() not in ("", "pending"):
+        return
+    reward = payload.get("reward") or {}
+    known = BY_TITLE.get((reward.get("title") or "").strip().lower())
+    person = payload.get("redeemer") or {}
+    who = re.sub(r"[^\w .-]", "", str(person.get("username") or ""))[:25]
+    if not known:
+        return
+    data = load()
+    honoured, answer = ACTIONS[known["key"]](
+        data, time.time(), who, payload.get("user_input") or "")
+    save(data)
+    if payload.get("id"):
+        kickapi.settle_redemption(payload["id"], honoured)
+    if answer:
+        say(answer)
+    chan.log(f"recompense {known['key']} par {who}: "
+             f"{'honoree' if honoured else 'remboursee'}")
+
+
+def sync_rewards():
+    """Create what is missing, leave what exists alone."""
+    have = {(r.get("title") or "").strip().lower() for r in kickapi.rewards()}
+    for spec in REWARDS:
+        if spec["title"].lower() in have:
+            continue
+        if kickapi.create_reward(spec["title"], spec["cost"], spec["description"],
+                                 spec["input"]):
+            chan.log(f"recompense creee: {spec['title']} ({spec['cost']} points)")
+        else:
+            chan.log(f"recompense refusee par Kick: {spec['title']}")
+
+
 # --- the title -------------------------------------------------------------
 
 def wanted_title():
@@ -455,11 +539,13 @@ def ensure_subscription():
     """Make sure Kick is actually sending us the chat, and say so once."""
     try:
         names = {s.get("event") for s in kickapi.subscriptions()}
-        if "chat.message.sent" not in names:
-            if kickapi.subscribe(BROADCASTER):
-                chan.log("abonnement chat.message.sent cree")
+        wanted = [("chat.message.sent", 1), ("channel.reward.redemption.updated", 1)]
+        missing = [e for e in wanted if e[0] not in names]
+        if missing:
+            if kickapi.subscribe(BROADCASTER, missing):
+                chan.log(f"abonnements crees: {[e[0] for e in missing]}")
             else:
-                chan.log("abonnement chat.message.sent refuse")
+                chan.log(f"abonnements refuses: {[e[0] for e in missing]}")
     except Exception as problem:
         chan.log(f"abonnement: {problem}")
 
@@ -522,7 +608,8 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(400)
         # answered before the work, so a slow command never makes Kick retry
         self._send(200)
-        if self.headers.get("Kick-Event-Type") != "chat.message.sent":
+        kind = self.headers.get("Kick-Event-Type")
+        if kind not in ("chat.message.sent", "channel.reward.redemption.updated"):
             return
         if BROADCASTER and int((payload.get("broadcaster") or {}).get("user_id") or 0) != BROADCASTER:
             return
@@ -532,7 +619,10 @@ class Handler(BaseHTTPRequestHandler):
             return
         data["seen"].append(message_id)
         save(data)
-        handle(payload)
+        if kind == "chat.message.sent":
+            handle(payload)
+        else:
+            redeemed(payload)
 
 
 def main(argv):
@@ -541,6 +631,12 @@ def main(argv):
         redirect = kickapi.APP.get(
             "KICK_REDIRECT_URI", "https://vodloop.kicknosubviewer.duckdns.org/kick/callback")
         print(kickapi.authorize_url(redirect))
+        return 0
+    if "--rewards" in argv:
+        sync_rewards()
+        for r in kickapi.rewards():
+            print(f"  {r.get('title')}  {r.get('cost')} points  "
+                  f"{'actif' if r.get('is_enabled') else 'inactif'}")
         return 0
     if "--status" in argv:
         live = playing()
@@ -555,6 +651,7 @@ def main(argv):
     threading.Thread(target=keep_title, daemon=True).start()
     if kickapi.token():
         ensure_subscription()
+        sync_rewards()
     else:
         chan.log("pas de jeton: lancer bot.py --authorize et ouvrir l'URL")
     server = ThreadingHTTPServer(("127.0.0.1", PORT), Handler)

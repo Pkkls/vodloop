@@ -396,9 +396,8 @@ check("a file name becomes something a viewer can read",
       bot.pretty("1789784406-260120_nanatty_-_Day_2_IRL_Santiago-JEELzhY-PGQ.mkv"))
 check("control: a name with neither prefix nor id survives it",
       bot.pretty("clip.mkv") == "clip")
-chan.write_json(cut.JOB, {"source": "1789-Un_Titre-dQw4w9WgXcQ.mkv", "origin": "queue",
-                          "done": 2, "number": 2, "seconds": 18000,
-                          "started": time.time() - 900})
+chan.write_json(bot.feed.ONAIR, {"source": "1789-Un_Titre-dQw4w9WgXcQ.mkv",
+                                 "number": 2, "seconds": 18000, "at": time.time() - 900})
 was = chan.PART_SECONDS
 chan.PART_SECONDS = 3600
 live = bot.playing()
@@ -466,7 +465,7 @@ try:
 finally:
     bot.threshold, bot.unseen_hours = real_threshold, real_viewers
     bot.SKIP.unlink(missing_ok=True)
-    cut.JOB.unlink(missing_ok=True)
+    bot.feed.ONAIR.unlink(missing_ok=True)
 
 print("bot: a webhook is read only once it is proven to be Kick's")
 check("a POST with no signature at all is refused",
@@ -503,15 +502,14 @@ try:
           bot.clean_title("1789819373-250512_nanatty_Kick_VOD-VWYhzs0WkQQ.mkv", "nanatty247"))
     was_part = chan.PART_SECONDS
     chan.PART_SECONDS = 3600
-    chan.write_json(cut.JOB, {"source": "1789-2026-09-15_SOLO_in_Thailand-k0156a4c001.mkv",
-                              "origin": "queue", "done": 1, "number": 1,
-                              "seconds": 14400, "started": time.time()})
+    chan.write_json(bot.feed.ONAIR,
+                    {"source": "1789819373-2026-09-15_SOLO_in_Thailand-k0156a4c001.mkv",
+                     "number": 1, "seconds": 14400, "at": time.time()})
     title = bot.wanted_title()
     check("the handle ends the title", title.endswith("@nanatty"), title)
     check("and the hour is in it", "hour 2/4" in title, title)
-    chan.write_json(cut.JOB, {"source": "1789819373-260120_" + "tres_long_" * 20 + "fin-JEELzhY-PGQ.mkv",
-                              "origin": "queue", "done": 1, "number": 0,
-                              "seconds": 14400, "started": time.time()})
+    chan.write_json(bot.feed.ONAIR, {"source": "1789819373-260120_" + "tres_long_" * 20 + "fin-JEELzhY-PGQ.mkv",
+                                     "number": 0, "seconds": 14400, "at": time.time()})
     long_title = bot.wanted_title()
     check("a name too long is cut, never the handle",
           long_title.endswith("@nanatty") and len(long_title) <= 140, len(long_title))
@@ -519,7 +517,7 @@ try:
     check("control: a channel with no handle configured carries none",
           not (bot.wanted_title() or "").endswith("@nanatty"))
     chan.PART_SECONDS = was_part
-    cut.JOB.unlink(missing_ok=True)
+    bot.feed.ONAIR.unlink(missing_ok=True)
 finally:
     chan.CONF.clear()
     chan.CONF.update(real_conf)
@@ -579,6 +577,53 @@ check("a file whose every hour is spent offers nothing",
       "les heures 0 et 1 restent, la 2 est prise")
 chan.PART_SECONDS = was
 cut.HOURS.unlink(missing_ok=True)
+
+
+print("bot: channel points do the thing or hand the points back")
+settled = []
+real_settle, real_unseen, real_playing = bot.kickapi.settle_redemption, bot.unseen_hours, bot.playing
+try:
+    bot.kickapi.settle_redemption = lambda rid, ok: settled.append((rid, ok)) or True
+    bot.unseen_hours = lambda: 6
+    bot.playing = lambda: {"title": "t", "name": "t.mkv", "hour": 1, "hours": 4,
+                           "vid": "x", "started": 0, "elapsed": bot.SKIP_MIN_AIRED + 60}
+    bot.SKIP.unlink(missing_ok=True)
+    bot.STATE.unlink(missing_ok=True)
+
+    def redeem(title, text="", status="pending", rid="r1"):
+        settled.clear()
+        bot.redeemed({"id": rid, "status": status, "user_input": text,
+                      "reward": {"title": title},
+                      "redeemer": {"user_id": 9, "username": "viewer"}})
+        return settled[0] if settled else None
+
+    check("a skip redemption moves the channel on and spends the points",
+          redeem("Skip this hour") == ("r1", True) and bot.SKIP.exists())
+    check("a second one right after is refused and refunded",
+          redeem("Skip this hour", rid="r2") == ("r2", False))
+    bot.SKIP.unlink(missing_ok=True)
+    check("control: a reward nobody wired is left alone entirely",
+          redeem("Some other reward") is None)
+    check("control: a redemption already settled is not acted on twice",
+          redeem("Skip this hour", status="accepted") is None)
+    real_shelf = bot.shelf
+    try:
+        bot.shelf = lambda: []
+        check("a pick with nothing on the shelf is refunded",
+              redeem("Pick what plays next", "1") == ("r1", False))
+        bot.shelf = lambda: [(pathlib.Path("1789819373-Un_Titre-dQw4w9WgXcQ.mkv"), 2)]
+        bot.PICK.unlink(missing_ok=True)
+        check("a valid pick is honoured and the cutter is told",
+              redeem("Pick what plays next", "1") == ("r1", True) and bot.PICK.exists())
+        check("control: a pick that is not a number is refunded",
+              redeem("Pick what plays next", "banana") == ("r1", False))
+    finally:
+        bot.shelf = real_shelf
+        bot.PICK.unlink(missing_ok=True)
+finally:
+    bot.kickapi.settle_redemption = real_settle
+    bot.unseen_hours, bot.playing = real_unseen, real_playing
+    bot.SKIP.unlink(missing_ok=True)
 
 print()
 if failures:

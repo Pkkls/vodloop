@@ -28,6 +28,10 @@ sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 import chan  # noqa: E402
 
 OFFSET = chan.STATE / "offset"
+# what is on the wire this second, written here because only this loop knows.
+# The cutter runs an hour ahead and deletes its job when it finishes, so a title
+# taken from the cutter announced the next hour an hour early and then froze.
+ONAIR = chan.STATE / "onair.json"
 SESSION = chan.STATE / "session.json"
 REOPEN_GAP_SECONDS = 10 * 60
 
@@ -106,6 +110,23 @@ def reopen_if_above(chunk, may_reopen, now=time.time):
     return True
 
 
+def note_on_air(chunk):
+    """Say which hour of which file is going out, and since when."""
+    if chunk == chan.FILLER:
+        row = {"filler": True, "at": int(time.time())}
+    else:
+        found = chan.read_json(chan.STATE / "chunkmap.json", {}).get(chunk.name)
+        if not found:
+            return
+        row = {"source": found[0], "number": found[1], "seconds": found[2]}
+    keys = ("source", "number", "filler")
+    was = chan.read_json(ONAIR, {})
+    if [was.get(k) for k in keys] == [row.get(k) for k in keys]:
+        return  # same hour still going out, so the clock on it does not restart
+    row["at"] = int(time.time())
+    chan.write_json(ONAIR, row)
+
+
 def main():
     try:
         offset = float(OFFSET.read_text().strip())
@@ -124,6 +145,7 @@ def main():
             chan.log(f"session rouverte pour {source.name}: {profile_of(source)}")
             time.sleep(30)
             continue
+        note_on_air(source)
         length = seconds(source)
         offset += length
         tmp = OFFSET.with_suffix(".tmp")

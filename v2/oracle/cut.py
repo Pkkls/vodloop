@@ -50,6 +50,10 @@ PARTS = chan.STATE / "parts.json"
 # every hour ever put on the wire: epoch, video id, hour number. Appended to and
 # never rewritten, because what the wire has shown cannot be taken back.
 HOURS = chan.STATE / "hours.tsv"
+# which hour of which file each waiting chunk came from. The cutter is an hour
+# ahead of the wire, so this is the only way the feeder, and through it the
+# title, can say what is actually going out rather than what is being prepared.
+CHUNKMAP = chan.STATE / "chunkmap.json"
 POLL = 2
 # a slice that would leave less than this behind takes the rest of the file
 # with it, rather than coming back for ninety seconds
@@ -104,6 +108,14 @@ def played(name, book=None):
     """The hour numbers of this video that have already been on the wire."""
     book = ledger() if book is None else book
     return set(book.get(chan.video_id(name) or str(name), {}))
+
+
+def remember_chunk(chunk, source, number, seconds):
+    """Tie a chunk to the hour it came from, and forget the ones already sent."""
+    data = chan.read_json(CHUNKMAP, {})
+    data[chunk] = [source, number, seconds]
+    alive = {p.name for p in chan.CHUNKS.glob("*.ts")} | {chunk}
+    chan.write_json(CHUNKMAP, {k: v for k, v in data.items() if k in alive})
 
 
 def record_hour(name, number):
@@ -391,7 +403,9 @@ def run_job(source, origin, skip):
             else:
                 if moved == skip:
                     record_hour(source.name, number)
-                piece.replace(chan.CHUNKS / f"{next_seq():010d}.ts")
+                chunk = f"{next_seq():010d}.ts"
+                piece.replace(chan.CHUNKS / chunk)
+                remember_chunk(chunk, source.name, number, info["seconds"])
                 chan.write_json(JOB, {"source": source.name, "origin": origin,
                                       "done": moved + 1, "number": number,
                                       "seconds": info["seconds"], "started": started_at})
