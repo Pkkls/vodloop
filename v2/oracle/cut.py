@@ -757,13 +757,24 @@ def run_job(source, origin, skip, number=None, since=0):
             if moved < skip:
                 piece.unlink(missing_ok=True)
             else:
+                unit = number + moved
+                if unit in played(source.name):
+                    # the feeder has already sent this minute. The cutter runs
+                    # an hour ahead and a resumed job recuts from its own start
+                    # mark, so it can reach minutes the wire has passed in the
+                    # meantime: on 2026-09-19 that queued four chunks of an
+                    # hour already gone out. Reserved covers what is waiting,
+                    # the ledger covers what has left, and this is the ledger
+                    # half of the same guard.
+                    piece.unlink(missing_ok=True)
+                    moved += 1
+                    continue
                 chunk = f"{next_seq():010d}.ts"
                 piece.replace(chan.CHUNKS / chunk)
                 # nothing is written to the ledger here: a chunk is spent when
                 # the feeder sends it, and one that a skip throws away was
                 # never seen, so its minutes go back in the draw
-                remember_chunk(chunk, source.name, number, info["seconds"],
-                               number + moved)
+                remember_chunk(chunk, source.name, number, info["seconds"], unit)
                 chan.write_json(JOB, {"source": source.name, "origin": origin,
                                       "done": moved + 1, "number": number,
                                       "seconds": info["seconds"], "started": started_at})

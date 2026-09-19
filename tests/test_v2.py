@@ -912,6 +912,23 @@ cut.PICK.unlink(missing_ok=True)
 cut.HOURS.unlink(missing_ok=True)
 
 
+print("cut: a minute the wire has passed is never queued behind it")
+was_part = chan.PART_SECONDS
+try:
+    chan.PART_SECONDS = 3600
+    cut.UNITS.unlink(missing_ok=True)
+    cut.HOURS.unlink(missing_ok=True)
+    cut.record_units("8-Deja_vu-ddddddddddd.mkv", [30, 31])
+    check("the ledger knows those two minutes have gone out",
+          cut.played("8-Deja_vu-ddddddddddd.mkv") == {30, 31})
+    check("so a resumed job that reaches them must drop them, not queue them",
+          all(u in cut.played("8-Deja_vu-ddddddddddd.mkv") for u in (30, 31))
+          and 32 not in cut.played("8-Deja_vu-ddddddddddd.mkv"))
+    cut.UNITS.unlink(missing_ok=True)
+finally:
+    chan.PART_SECONDS = was_part
+
+
 print("cut: a restart resumes the hour it was cutting, not another one")
 for stale in chan.media(chan.CURRENT):
     stale.unlink()
