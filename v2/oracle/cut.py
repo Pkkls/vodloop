@@ -136,6 +136,30 @@ def remaining(path, seconds):
 KICK_ID = re.compile(r"^k[0-9a-f]{8}[0-9]{2}$")
 
 
+def recording_of(path):
+    """What a piece belongs to. Two parts of one stream are one recording.
+
+    kick.slice_parts cuts a long stream into parts that each carry its title, so
+    a fifteen hour Kick VOD becomes seven files all called the same thing. They
+    are different content and the draw treated them as unrelated, which is how
+    the channel showed "Thailand Day 3" over and over on 2026-09-19: no rule was
+    broken and it still looked like a loop, which is the only thing a viewer can
+    judge. The first nine characters of a part id are the recording's own.
+    """
+    vid = chan.video_id(path) or ""
+    return vid[:9] if KICK_ID.match(vid) else vid
+
+
+def last_recording(book):
+    """The recording whose hour left the wire most recently, or an empty string."""
+    latest, when = "", 0
+    for vid, hours in book.items():
+        top = max(hours.values()) if hours else 0
+        if top > when:
+            latest, when = vid, top
+    return latest[:9] if KICK_ID.match(latest) else latest
+
+
 def from_board(path):
     """True for what the board brought back, false for this server's Kick line.
 
@@ -184,6 +208,7 @@ def next_source():
         return claim(spare[0], "repeat") if spare else (None, None)
 
     book, durations = ledger(), chan.read_json(chan.STATE / "durations.json", {})
+    just_played = last_recording(book)
     wanted = chan.read_json(PICK, {}).get("name")
     PICK.unlink(missing_ok=True)
     if wanted:
@@ -195,8 +220,12 @@ def next_source():
         chan.log(f"choix du chat introuvable ou deja vu: {str(wanted)[:60]}")
     for folder, origin in ((chan.QUEUE, "queue"), (chan.AIRED, "reserve")):
         fresh = [p for p in chan.media(folder) if unaired(p, book, durations)]
-        if fresh:
-            return claim(random.choice([p for p in fresh if from_board(p)] or fresh), origin)
+        if not fresh:
+            continue
+        # two turns in a row from the same stream read as a repeat whatever the
+        # hours say, so another recording wins whenever one is available
+        elsewhere = [p for p in fresh if recording_of(p) != just_played] or fresh
+        return claim(random.choice([p for p in elsewhere if from_board(p)] or elsewhere), origin)
 
     oldest, held = None, None
     for folder in (chan.QUEUE, chan.AIRED):

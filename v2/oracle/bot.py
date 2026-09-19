@@ -211,7 +211,18 @@ def skip_blocked(data, now, live):
 
 
 def threshold():
-    return max(VOTE_MIN, math.ceil(kickapi.viewers(SLUG) * VOTE_RATIO))
+    """How many voices carry a vote, never more than there are people to give them.
+
+    kil, 2026-09-19: asking three when one person is watching is asking for
+    nothing to ever happen. The floor is what stops one viewer overruling a
+    crowd, so it only means anything up to the size of the crowd: alone, one
+    voice is the whole room and it decides.
+
+        1 viewer  -> 1      3 viewers -> 3      20 viewers -> 5
+        2 viewers -> 2     12 viewers -> 3      40 viewers -> 10
+    """
+    seen = max(1, kickapi.viewers(SLUG))
+    return max(1, min(VOTE_MIN, seen), math.ceil(seen * VOTE_RATIO))
 
 
 def do_skip(data, now, reason):
@@ -391,7 +402,11 @@ def wanted_title():
     live = playing()
     if not live:
         return None
-    piece = f" · hour {live['hour']}/{live['hours']}" if live["hours"] > 1 else ""
+    # a Kick part carries the whole stream's title, so the title has to say
+    # which part it is or two of them are the same line on the channel
+    part = re.match(r"^k[0-9a-f]{8}(\d{2})$", live["vid"] or "")
+    piece = f" · part {int(part.group(1))}" if part else ""
+    piece += f" · hour {live['hour']}/{live['hours']}" if live["hours"] > 1 else ""
     tail = f"{piece} · !vote to skip"
     suffix = chan.CONF.get("TITLE_SUFFIX", "").strip()
     if suffix:

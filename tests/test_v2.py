@@ -533,6 +533,40 @@ finally:
     chan.CONF.clear()
     chan.CONF.update(real_conf)
 
+
+print("cut: two turns in a row from the same stream is a loop, whatever the hours say")
+check("a Kick part belongs to its recording",
+      cut.recording_of(pathlib.Path("1789-T-kb97ce32702.mkv")) == "kb97ce327",
+      cut.recording_of(pathlib.Path("1789-T-kb97ce32702.mkv")))
+check("and its neighbour belongs to the same one",
+      cut.recording_of(pathlib.Path("1789-T-kb97ce32704.mkv")) == "kb97ce327")
+check("control: a YouTube video is its own recording",
+      cut.recording_of(pathlib.Path("1789-T-dQw4w9WgXcQ.mkv")) == "dQw4w9WgXcQ")
+check("the last thing on the wire is read from the ledger",
+      cut.last_recording({"kb97ce32702": {0: 100}, "dQw4w9WgXcQ": {0: 50}}) == "kb97ce327",
+      cut.last_recording({"kb97ce32702": {0: 100}, "dQw4w9WgXcQ": {0: 50}}))
+check("control: with a YouTube id last, that id is what must not repeat",
+      cut.last_recording({"kb97ce32702": {0: 50}, "dQw4w9WgXcQ": {0: 100}}) == "dQw4w9WgXcQ")
+
+
+print("bot: a vote asks for no more voices than there are people")
+real_viewers = bot.kickapi.viewers
+try:
+    table = {}
+    for n in (0, 1, 2, 3, 4, 12, 20, 40):
+        bot.kickapi.viewers = lambda slug, n=n: n
+        table[n] = bot.threshold()
+    check("a lone viewer carries the vote alone", table[1] == 1, table)
+    check("and so does a viewer the API cannot count", table[0] == 1, table)
+    check("two viewers need both", table[2] == 2, table)
+    check("the floor holds once the room can meet it", table[3] == 3 and table[12] == 3, table)
+    check("above it the share takes over", table[20] == 5 and table[40] == 10, table)
+    check("control: never more voices than viewers",
+          all(v <= max(1, k) for k, v in table.items()), table)
+    check("control: and never zero", all(v >= 1 for v in table.values()), table)
+finally:
+    bot.kickapi.viewers = real_viewers
+
 print()
 if failures:
     print(f"{len(failures)} failed: " + ", ".join(failures))
