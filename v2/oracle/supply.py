@@ -284,8 +284,15 @@ def main(argv):
     # downloading. The ceiling is the file size the card survives, read back as
     # a duration through the rate this channel actually receives.
     fetch_seconds = fetch_ceiling(rate)
+    # A Kick part is fetched by this server, and its id is eleven characters
+    # like a YouTube one, so the board cannot tell them apart: it drew them from
+    # this list and asked YouTube for kbeaa817f02. Thirty-two of the hundred and
+    # eighty-seven offered to it were unfetchable, at the head of the list where
+    # it draws, and each one burned a slot the pacing only gives every ninety
+    # minutes. The board is offered what the board can fetch.
+    mine = set(kick.read_table())
     candidates = [(vid, secs) for vid, secs in newest_first(catalog)
-                  if vid not in skip and secs <= fetch_seconds]
+                  if vid not in skip and vid not in mine and secs <= fetch_seconds]
     chan.log(f"file {len(queue)} ({queued / 3600:.1f} h), diffuses {len(aired) - len(evict)}, "
              f"besoin {need / 3600:.1f} h, offre {offer / chan.GIB:.1f} Go, "
              f"libre {free / chan.GIB:.1f} Go, candidats {len(candidates)}/{len(catalog)} "

@@ -196,7 +196,12 @@ fill() {
   # all and --max-filesize is still the backstop under it.
   fmt="bv*[vcodec^=avc1][height<=$maxh][height>=480][filesize_approx<${MAX_FILE_MB}M]+ba[acodec^=mp4a]"
   fmt="$fmt/bv*[vcodec^=avc1][height<=720][height>=480][filesize_approx<${MAX_FILE_MB}M]+ba[acodec^=mp4a]"
-  fmt="$fmt/bv*[vcodec^=avc1][height<=$maxh][height>=480]+ba[acodec^=mp4a]"
+  # YouTube reports no size at all on some long VODs, which takes the two rungs
+  # above out of the running and left this one holding a 720p at 5247 Mo that
+  # --max-filesize then aborted at the last megabytes (ViNWLOgsWTM, 32 minutes
+  # and a slot, 2026-09-19). So the rung that runs without a size term is the
+  # smallest one, where the cap is not in reach.
+  fmt="$fmt/bv*[vcodec^=avc1][height<=480][height>=480]+ba[acodec^=mp4a]"
   if yt-dlp --force-ipv4 ${cookies:+--cookies "$cookies"} --no-playlist --restrict-filenames \
        --no-progress --max-filesize "${MAX_FILE_MB}M" \
        -f "$fmt" \

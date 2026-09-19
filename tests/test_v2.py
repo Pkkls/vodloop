@@ -197,6 +197,24 @@ check("control: with both aired there is nothing to take",
 (chan.STATE / "aired.tsv").unlink()
 kick.TABLE.unlink()
 
+print("kick: this line fills its share and leaves the rest to the board")
+real_media, real_duration = chan.media, chan.duration
+try:
+    held = [pathlib.Path("1789-Stream-kaaaaaaaa01.mkv"), pathlib.Path("1789-Yt-youtubevid1.mkv")]
+    chan.media = lambda folder: held if pathlib.Path(folder) == chan.QUEUE else []
+    chan.duration = lambda p, cache=None: 7200.0
+    table = {"kaaaaaaaa01": ()}
+    check("only Kick material counts against the Kick share",
+          kickfetch.kick_hours_queued(table) == 7200.0, kickfetch.kick_hours_queued(table))
+    cut.set_part("1789-Stream-kaaaaaaaa01.mkv", 3600.0)
+    check("a started file counts as what is left of it",
+          kickfetch.kick_hours_queued(table) == 3600.0, kickfetch.kick_hours_queued(table))
+    cut.PARTS.unlink(missing_ok=True)
+    check("control: a channel with no Kick file leaves the whole window free",
+          kickfetch.kick_hours_queued({}) == 0.0)
+finally:
+    chan.media, chan.duration = real_media, real_duration
+
 print("feed: a session reopens only upward")
 check("1080p in a 720p session", feed.exceeds((1920, 1080, 30), (1280, 720, 30)))
 check("60 fps in a 30 fps session", feed.exceeds((1280, 720, 60), (1280, 720, 30)))

@@ -43,6 +43,17 @@ def pick(now=None):
     return None
 
 
+def kick_hours_queued(table):
+    """Seconds of Kick material waiting, a started file counted as what is left."""
+    durations = chan.read_json(chan.STATE / "durations.json", {})
+    parts = chan.read_json(chan.STATE / "parts.json", {})
+    total = 0.0
+    for path in chan.media(chan.QUEUE):
+        if chan.video_id(path) in table:
+            total += max(0.0, chan.duration(path, durations) - float(parts.get(path.name, 0)))
+    return total
+
+
 def fetch(url, start, end, target):
     """Stream the part's segments through one ffmpeg. True when it lands."""
     media = kick.get(url)
@@ -101,6 +112,18 @@ def main(argv):
         chan.log("want.json perime, supply.py d'abord")
         return 0
     need, offer = want.get("need_seconds", 0), want.get("offer_bytes", 0)
+    # This line runs four times an hour and lands a part in half an hour; the
+    # board is paced at one download every ninety minutes and only ships when
+    # the queue is short. So Kick refilled the window every time and the board
+    # was never asked: nanatty247 aired twenty-four hours of Kick and nothing
+    # from YouTube on 2026-09-18, which is not the mix it is configured for.
+    # Kick fills its share and stops, and what is left is the board's to fill.
+    ceiling = chan.conf_num("KICK_SHARE", 1.0) * chan.WINDOW_SECONDS
+    held = kick_hours_queued(kick.read_table())
+    if held >= ceiling:
+        chan.log(f"part Kick en file {held / 3600:.1f} h sur {ceiling / 3600:.1f} h "
+                 f"autorisees: la place restante est a la carte")
+        return 0
     chosen = pick()
     if not need or chosen is None:
         chan.log(f"rien a prendre (besoin {need / 3600:.1f} h, "
