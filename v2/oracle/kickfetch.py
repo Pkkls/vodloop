@@ -123,6 +123,9 @@ def main(argv):
     # So it holds off while the wire has KICK_FLOOR_HOURS of unseen material
     # ahead of it, and steps in under that, which is the only moment a repeat
     # or a loading card is in reach.
+    if chan.NO_KICK:
+        chan.log("Kick coupe sur cette chaine (NO_KICK)")
+        return 0
     floor = chan.conf_num("KICK_FLOOR_HOURS", 0) * 3600
     runway = want.get("runway_seconds", 0)
     if runway >= floor:

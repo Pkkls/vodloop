@@ -275,7 +275,8 @@ def draw(book, durations, just_played, avoid=()):
     """(path, origin) the draw would take, moving nothing. None when spent."""
     for folder, origin in ((chan.QUEUE, "queue"), (chan.AIRED, "reserve")):
         fresh = [p for p in chan.media(folder)
-                 if p.name not in avoid and unaired(p, book, durations)]
+                 if p.name not in avoid and unaired(p, book, durations)
+                 and not (chan.NO_KICK and not from_board(p))]
         if not fresh:
             continue
         # two turns in a row from the same stream read as a repeat whatever the
@@ -499,6 +500,24 @@ def serve_ready():
     return True
 
 
+def do_skip(reason, name=""):
+    """Take the current hour off the wire and put the held one on.
+
+    Everything waiting is dropped, which is the second the channel has nothing
+    to send, so the held hour goes on in the same breath. Called from inside a
+    cutting job and from the idle loop alike: with an hour of chunks ahead the
+    cutter is idle most of the time, and a skip asked then used to sit unread
+    until the next job started, which on 2026-09-19 was the whole reason a
+    vote looked like it had done nothing.
+    """
+    for stale in sorted(chan.CHUNKS.glob("*.ts"))[SKIP_KEEP_CHUNKS:]:
+        stale.unlink(missing_ok=True)
+    if not serve_ready():
+        chan.log("rien de tenu pret, le clip d'attente couvre le saut")
+    FLUSH.write_text(str(int(time.time())))
+    chan.log(f"passage saute ({reason}): {name[:60]}")
+
+
 def run_job(source, origin, skip, number=None):
     """Cut one hour of a file into chunks. number is set only on a resume.
 
@@ -588,16 +607,7 @@ def run_job(source, origin, skip, number=None):
                 job.send_signal(signal.SIGCONT)
                 paused = False
             job.terminate()
-            for stale in sorted(chan.CHUNKS.glob("*.ts"))[SKIP_KEEP_CHUNKS:]:
-                stale.unlink(missing_ok=True)
-            # everything waiting has just been dropped, so this is the second
-            # the channel has nothing to send. The held hour goes on now; the
-            # loop below picks the same file up and carries on from where the
-            # primer stopped.
-            if not serve_ready():
-                chan.log("rien de tenu pret, le clip d'attente couvre le saut")
-            FLUSH.write_text(str(int(time.time())))
-            chan.log(f"passage saute ({reason}): {source.name[:60]}")
+            do_skip(reason, source.name)
             skipped = True
             break
         full = ahead_seconds() >= chan.AHEAD_SECONDS + 2 * chan.CHUNK_SECONDS
@@ -658,10 +668,16 @@ def main():
             resumed[0].replace(chan.QUEUE / resumed[0].name)
     while True:
         if ahead_seconds() >= chan.AHEAD_SECONDS:
-            # an hour in hand: the spare minute goes into holding the head of
+            if SKIP.exists():
+                reason = chan.read_json(SKIP, {}).get("reason", "demande")
+                SKIP.unlink(missing_ok=True)
+                do_skip(reason, chan.read_json(chan.STATE / "onair.json",
+                                               {}).get("source", ""))
+                continue
+            # an hour in hand: the spare minutes go into holding the head of
             # another hour ready, which is what makes a skip instant
             prime()
-            time.sleep(10)
+            time.sleep(POLL)
             continue
         source, origin = next_source()
         if source is None:

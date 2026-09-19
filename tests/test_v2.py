@@ -646,6 +646,57 @@ small.unlink()
 big.unlink()
 
 
+print("cut: Kick is off where it is switched off")
+real_nokick = chan.NO_KICK
+try:
+    chan.NO_KICK = True
+    for stale in (list(chan.media(chan.QUEUE)) + list(chan.media(chan.CURRENT))
+                  + list(chan.media(chan.AIRED))):
+        stale.unlink()
+    cut.HOURS.unlink(missing_ok=True)
+    cut.PARTS.unlink(missing_ok=True)
+    (chan.QUEUE / "9-Un_morceau_Kick-k2efa33c602.mkv").write_bytes(b"x")
+    (chan.QUEUE / "9-Une_video_YouTube-yOutUbe1234.mkv").write_bytes(b"x")
+    # chan.duration keys its cache on name and size, so the stubs are one byte
+    durations = {"9-Un_morceau_Kick-k2efa33c602.mkv:1": 7200.0,
+                 "9-Une_video_YouTube-yOutUbe1234.mkv:1": 7200.0}
+    was = chan.PART_SECONDS
+    chan.PART_SECONDS = 3600
+    picks = {cut.draw(cut.ledger(), durations, "")[0].name for _ in range(30)}
+    check("a Kick part is never drawn on a channel with Kick switched off",
+          picks == {"9-Une_video_YouTube-yOutUbe1234.mkv"}, picks)
+    (chan.QUEUE / "9-Une_video_YouTube-yOutUbe1234.mkv").unlink()
+    check("with nothing else left it is still not drawn, it is not drawn at all",
+          cut.draw(cut.ledger(), durations, "") == (None, None),
+          cut.draw(cut.ledger(), durations, ""))
+    chan.NO_KICK = False
+    check("control: with Kick on, the same part is drawn again",
+          cut.draw(cut.ledger(), durations, "")[0].name
+          == "9-Un_morceau_Kick-k2efa33c602.mkv",
+          cut.draw(cut.ledger(), durations, ""))
+    chan.PART_SECONDS = was
+finally:
+    chan.NO_KICK = real_nokick
+    for stale in (list(chan.media(chan.QUEUE)) + list(chan.media(chan.CURRENT))
+                  + list(chan.media(chan.AIRED))):
+        stale.unlink()
+    cut.HOURS.unlink(missing_ok=True)
+
+
+print("cut: a skip asked while the cutter is idle is still honoured")
+cut.clear_ready()
+cut.SKIP.unlink(missing_ok=True)
+cut.FLUSH.unlink(missing_ok=True)
+for stale in chan.CHUNKS.glob("*.ts"):
+    stale.unlink()
+(chan.CHUNKS / "0000008001.ts").write_bytes(b"x")
+cut.do_skip("essai", "quelque_chose.mkv")
+check("it drops what was waiting even with no job running",
+      not list(chan.CHUNKS.glob("*.ts")), list(chan.CHUNKS.glob("*.ts")))
+check("and tells the feeder to cut the chunk in flight short", cut.FLUSH.exists())
+cut.FLUSH.unlink(missing_ok=True)
+
+
 print("cut: an hour held ready, so a skip has something to send at once")
 cut.clear_ready()
 cut.PRIMED.unlink(missing_ok=True)

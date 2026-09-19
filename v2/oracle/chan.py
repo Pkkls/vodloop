@@ -82,6 +82,12 @@ MAX_FILE_BYTES = int(conf_num("MAX_FILE_GB", 10) * GIB)
 # a time and goes back in the queue, where the next file is drawn at random, so
 # a five hour stream is spread over the day instead of owning five hours of it.
 PART_SECONDS = int(conf_num("PART_SECONDS", 0))
+# kil has asked for this more times than I have acted on it: a Kick VOD is
+# gone four weeks after it aired, so a channel built on them shows the same
+# month for ever. With this set, nothing fetches Kick, nothing catalogues it,
+# and nothing already on the disk is drawn. One switch, because a channel that
+# needs three of them is a channel I will get wrong again.
+NO_KICK = str(CONF.get("NO_KICK", "")).strip() not in ("", "0", "no", "false")
 # prep in v1 stopped below 4 GiB free; the disk is shared with the rest of the box
 FLOOR_BYTES = int(conf_num("FLOOR_GB", 5) * GIB)
 CHUNK_SECONDS = 300

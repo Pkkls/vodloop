@@ -205,6 +205,8 @@ def refresh_catalog(apply):
         return
     rows, failed, table = {}, 0, []
     for rank, (url, words) in enumerate(sources):
+        if url.startswith("kick:") and chan.NO_KICK:
+            continue
         if url.startswith("kick:"):
             # the channel's own VODs, fetched by this server rather than by the
             # board: Kick lets a datacenter address through, YouTube does not
