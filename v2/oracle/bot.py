@@ -68,6 +68,20 @@ USER_COOLDOWN = int(chan.conf_num("USER_COOLDOWN_SECONDS", 15))
 # A paid fetch rides on top of the supply the channel already needs, so the
 # board's own ceilings can swallow one. kil, 2026-09-19: "si ca bloque, refund
 # les points". Both numbers exist so that the points come back.
+# A skip does not cost one hour, it destroys whatever is left of the hour on
+# air: that hour is spent in the ledger the moment its first chunk goes out,
+# and nothing spent is ever shown again. Skipping ten minutes in throws away
+# fifty. At three an hour that is 3.5 h of reserve consumed per hour of wall
+# clock, against a board that delivers about one. The old limit was a count,
+# which prices a skip at minute 55 the same as one at minute 10.
+SKIP_FLOOR = int(chan.conf_num("SKIP_FLOOR_HOURS", 3)) * 3600
+SKIP_WASTE_CAP = int(chan.conf_num("SKIP_WASTE_MINUTES_PER_HOUR", 60)) * 60
+# over how many hours the reserve above the floor may be spent. A fixed budget
+# is wrong at both ends: 30 min an hour forbade every skip before minute 30
+# whatever the shelf held, and anything generous enough to be useful with 12 h
+# in hand would empty a shelf holding 4.
+SKIP_SPREAD_HOURS = int(chan.conf_num("SKIP_SPREAD_HOURS", 6))
+USER_SKIP_COOLDOWN = int(chan.conf_num("USER_SKIP_COOLDOWN_SECONDS", 3600))
 REQUEST_MAX_PENDING = int(chan.conf_num("REQUEST_MAX_PENDING", 3))
 REQUEST_DEADLINE = int(chan.conf_num("REQUEST_DEADLINE_HOURS", 6)) * 3600
 TITLE_MIN_INTERVAL = int(chan.conf_num("TITLE_MIN_INTERVAL_SECONDS", 90))
@@ -193,7 +207,7 @@ def load():
 def save(data):
     data["seen"] = data["seen"][-SEEN_KEPT:]
     cutoff = time.time() - 7200
-    data["skips"] = [t for t in data["skips"] if t > cutoff]
+    data["skips"] = [r for r in skips_since(data, cutoff)]
     data["users"] = {u: t for u, t in data["users"].items() if t > time.time() - 3600}
     chan.write_json(STATE, data)
 
@@ -210,19 +224,94 @@ def say(text, reply_to=None):
 
 # --- the guards ------------------------------------------------------------
 
-def skip_blocked(data, now, live):
-    """Why a skip cannot happen now, or None. Checked for votes and for !force."""
-    if unseen_hours() < 1:
+def skip_cost(live):
+    """Seconds of unseen material a skip right now would throw away.
+
+    The hour on air is already spent, so what a skip destroys is the part of
+    it nobody will ever see. Late in the hour that is nearly nothing, early in
+    it that is nearly the whole hour, and pricing both the same is what let a
+    handful of votes drain a day of supply.
+    """
+    if not live or not chan.PART_SECONDS:
+        return 0.0
+    return max(0.0, chan.PART_SECONDS - live.get("elapsed", 0))
+
+
+def waste_allowance(reserve):
+    """Seconds of unseen material the chat may destroy in an hour.
+
+    Derived from what the channel is holding rather than fixed: nothing at the
+    floor, and an hour's worth once the shelf is deep enough that losing it
+    costs nobody a loading card. Between the two it is the spare reserve
+    spread over SKIP_SPREAD_HOURS, so the closer the shelf gets to the floor
+    the less a vote may take, and it reaches zero before the floor does.
+    """
+    spare = max(0.0, reserve - SKIP_FLOOR)
+    return min(float(SKIP_WASTE_CAP), spare / max(1, SKIP_SPREAD_HOURS))
+
+
+def skips_since(data, when):
+    """The skips recorded after a moment, in the shape they are stored now.
+
+    Older state holds bare timestamps, so those read as a skip of unknown cost
+    rather than being dropped: forgetting them would hand out a fresh budget
+    every time the bot is deployed.
+    """
+    out = []
+    for row in data.get("skips", []):
+        if isinstance(row, dict):
+            if row.get("at", 0) > when:
+                out.append(row)
+        elif row > when:
+            out.append({"at": row, "cost": float(chan.PART_SECONDS or 0), "who": ""})
+    return out
+
+
+def wasted_recently(data, now):
+    return sum(float(r.get("cost", 0)) for r in skips_since(data, now - 3600))
+
+
+def skip_blocked(data, now, live, who=None):
+    """Why a skip cannot happen now, or None. Checked for votes and for !force.
+
+    Three guards, in the order that matters. The floor is the promise: the
+    reserve left after this skip must still carry the channel until the board
+    delivers again, so no amount of voting can reach the standby clip. The
+    waste budget shapes how that reserve is spent, in minutes destroyed rather
+    than in skips counted, so a late skip is nearly free and an early one is
+    not. The per viewer budget is the answer to one person carrying every vote,
+    which is exactly what a threshold of one allows.
+    """
+    reserve = unseen_hours() * 3600
+    cost = skip_cost(live)
+    if reserve < 3600:
         return "nothing unseen left to move on to right now"
-    recent = [t for t in data["skips"] if t > now - 3600]
+    if reserve - cost < SKIP_FLOOR:
+        return (f"that would leave {(reserve - cost) / 3600:.1f} h in reserve and "
+                f"the channel holds {SKIP_FLOOR // 3600} h back, so this one stays on")
+    allowed = waste_allowance(reserve)
+    spent = wasted_recently(data, now)
+    if spent + cost > allowed:
+        return (f"skipping now throws away {cost / 60:.0f} min nobody has seen and "
+                f"the shelf allows {(allowed - spent) / 60:.0f} more this hour, "
+                f"so wait a bit or vote nearer the end of the hour")
+    recent = skips_since(data, now - 3600)
     if len(recent) >= SKIP_MAX_PER_HOUR:
         return f"{len(recent)} skips this hour already, that is the limit"
-    if recent and now - max(recent) < SKIP_COOLDOWN:
-        left = int((SKIP_COOLDOWN - (now - max(recent))) / 60) + 1
+    last = max((r["at"] for r in recent), default=0)
+    if last and now - last < SKIP_COOLDOWN:
+        left = int((SKIP_COOLDOWN - (now - last)) / 60) + 1
         return f"we just skipped one, next vote possible in {left} min"
     if live and live["elapsed"] < SKIP_MIN_AIRED:
         left = int((SKIP_MIN_AIRED - live["elapsed"]) / 60) + 1
         return f"this hour just started, votable in {left} min"
+    if who:
+        mine = [r for r in skips_since(data, now - USER_SKIP_COOLDOWN)
+                if r.get("who") == who]
+        if mine:
+            left = int((USER_SKIP_COOLDOWN - (now - max(r["at"] for r in mine))) / 60) + 1
+            return (f"you carried the last skip, somebody else's turn for "
+                    f"{left} min")
     return None
 
 
@@ -241,9 +330,11 @@ def threshold():
     return max(1, min(VOTE_MIN, seen), math.ceil(seen * VOTE_RATIO))
 
 
-def do_skip(data, now, reason):
+def do_skip(data, now, reason, live=None, who=""):
+    """Move on, and write down what it cost and who asked, because both are
+    what the guards read next time."""
     SKIP.write_text(json.dumps({"at": int(now), "reason": reason}))
-    data["skips"].append(now)
+    data["skips"].append({"at": now, "cost": skip_cost(live), "who": who or ""})
     data["vote"] = None
 
 
@@ -288,8 +379,11 @@ def cmd_stats(*_):
     book = cut.ledger()
     hours = sum(len(v) for v in book.values())
     rows = shelf()
-    return (f"{len(rows)} videos on the shelf, {unseen_hours()}h never aired, "
-            f"{hours}h put on the wire so far")
+    unseen = unseen_hours()
+    left = max(0.0, waste_allowance(unseen * 3600) - wasted_recently(load(), time.time()))
+    return (f"{len(rows)} videos on the shelf, {unseen}h never aired, "
+            f"{hours}h put on the wire so far · skipping may throw away "
+            f"{left / 60:.0f} more min this hour, {SKIP_FLOOR // 3600}h held back")
 
 
 def cmd_vote(data, now, sender, args):
@@ -305,7 +399,7 @@ def cmd_vote(data, now, sender, args):
                 PICK.write_text(json.dumps({"name": vote["target"], "at": int(now)}))
                 data["vote"] = None
                 return f"voted: {pretty(vote['target'])} plays next"
-            do_skip(data, now, "vote")
+            do_skip(data, now, "vote", playing(), vote["voters"][0])
             return "voted, moving on"
         return f"skip vote: {len(vote['voters'])}/{need}"
     if vote and now - vote.get("failed_at", 0) < 0:
@@ -314,14 +408,14 @@ def cmd_vote(data, now, sender, args):
     if now - last_fail < VOTE_FAIL_COOLDOWN:
         left = int((VOTE_FAIL_COOLDOWN - (now - last_fail)) / 60) + 1
         return f"a vote just failed, next one possible in {left} min"
-    blocked = skip_blocked(data, now, live)
+    blocked = skip_blocked(data, now, live, sender["user_id"])
     if blocked:
         return blocked
     need = threshold()
     data["vote"] = {"kind": "skip", "target": None, "voters": [sender["user_id"]],
                     "need": need, "closes": now + VOTE_WINDOW}
     if need <= 1:
-        do_skip(data, now, "vote")
+        do_skip(data, now, "vote", live, sender["user_id"])
         return "moving on"
     return f"vote to skip started: {need} votes needed in {VOTE_WINDOW}s, type !vote"
 
@@ -356,9 +450,12 @@ def cmd_pick(data, now, sender, args):
 def cmd_force(data, now, sender, args):
     if not sender["privileged"]:
         return None
-    if unseen_hours() < 1:
-        return "nothing unseen left to move on to"
-    do_skip(data, now, f"forced by {sender['name']}")
+    live = playing()
+    reserve = unseen_hours() * 3600
+    if reserve - skip_cost(live) < SKIP_FLOOR:
+        return (f"that would leave {(reserve - skip_cost(live)) / 3600:.1f} h in "
+                f"reserve, under the {SKIP_FLOOR // 3600} h floor")
+    do_skip(data, now, f"forced by {sender['name']}", live, "")
     return "moving on"
 
 
@@ -511,10 +608,11 @@ BY_TITLE = {r["title"].lower(): r for r in REWARDS}
 
 def reward_skip(data, now, who, text):
     """(honoured, what to say). Points come back when the answer is no."""
-    blocked = skip_blocked(data, now, playing())
+    live = playing()
+    blocked = skip_blocked(data, now, live, data.get("redeemer_id") or who)
     if blocked:
         return False, f"@{who} {blocked} — points refunded"
-    do_skip(data, now, f"points from {who}")
+    do_skip(data, now, f"points from {who}", live, data.get("redeemer_id") or who)
     return True, f"@{who} spent points to move on"
 
 
@@ -684,12 +782,16 @@ def redeemed(payload):
         return
     data = load()
     data.pop("queued_now", None)
+    # the guards count skips per viewer, and a redemption names its redeemer
+    # where a chat command names a sender: same person, two shapes
+    data["redeemer_id"] = person.get("user_id")
     honoured, answer = ACTIONS[known["key"]](
         data, time.time(), who, payload.get("user_input") or "")
     # A video the board has not brought back yet: accepting now would take the
     # points for a delivery the daily ceiling may still swallow, so the
     # redemption stays in Kick's queue and announce_arrivals settles it either
     # way, which is the only path that can still refund.
+    data.pop("redeemer_id", None)
     queued = data.pop("queued_now", None)
     if queued:
         data["asked"][queued]["redemption"] = payload.get("id")

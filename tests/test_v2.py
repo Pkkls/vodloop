@@ -499,6 +499,78 @@ if shutil.which("ffmpeg"):
             stale.unlink()
 
 
+BOTGUARD = True
+print("bot: nobody can vote the reserve down to nothing")
+import bot as _b  # noqa: E402
+_was_unseen, _was_playing, _was_part = _b.unseen_hours, _b.playing, chan.PART_SECONDS
+try:
+    chan.PART_SECONDS = 3600
+
+    def at(minute, reserve):
+        _b.unseen_hours = lambda r=reserve: r
+        _b.playing = lambda m=minute: {"title": "t", "name": "t.mkv", "hour": 1,
+                                       "hours": 4, "vid": "x", "started": 0,
+                                       "elapsed": m * 60}
+        return _b.playing()
+
+    live = at(10, 12)
+    check("a skip is priced on what it destroys, not counted as one",
+          _b.skip_cost(live) == 3000.0 and _b.skip_cost(at(55, 12)) == 300.0,
+          (_b.skip_cost(at(10, 12)), _b.skip_cost(at(55, 12))))
+    fresh = {"skips": [], "users": {}}
+    check("with a fat reserve and a late hour, a skip goes through",
+          _b.skip_blocked(fresh, 10_000, at(55, 12)) is None,
+          _b.skip_blocked(fresh, 10_000, at(55, 12)))
+    early = _b.skip_blocked(fresh, 10_000, at(10, 5))
+    check("a thin shelf refuses an early one, which would waste fifty minutes",
+          early is not None and "throws away" in early, early)
+    thin = _b.skip_blocked(fresh, 10_000, at(55, 3.02))
+    check("near the floor even a five minute skip is refused",
+          thin is not None and "reserve" in thin, thin)
+    check("control: an hour more of shelf and the same skip goes through",
+          _b.skip_blocked(fresh, 10_000, at(55, 4)) is None,
+          _b.skip_blocked(fresh, 10_000, at(55, 4)))
+    check("the allowance follows the shelf instead of being a fixed number",
+          (_b.waste_allowance(3 * 3600), _b.waste_allowance(4 * 3600),
+           _b.waste_allowance(12 * 3600)) == (0.0, 600.0, 3600.0),
+          (_b.waste_allowance(3 * 3600), _b.waste_allowance(4 * 3600),
+           _b.waste_allowance(12 * 3600)))
+    check("a deep shelf still lets a viewer move on early in the hour",
+          _b.skip_blocked(fresh, 10_000, at(10, 12)) is None,
+          _b.skip_blocked(fresh, 10_000, at(10, 12)))
+
+    print("  -- the attack: one viewer voting as fast as the rules allow")
+    state = {"skips": [], "users": {}}
+    clock, burned, allowed = 0.0, 0.0, 0
+    for _ in range(400):
+        clock += 60
+        live = at(11, max(0.0, 12 - burned / 3600))
+        if _b.skip_blocked(state, clock, live, "troll") is None:
+            _b.do_skip(state, clock, "vote", live, "troll")
+            burned += _b.skip_cost(live)
+            allowed += 1
+        state["skips"] = _b.skips_since(state, clock - 7200)
+    check("six hours of one viewer spamming cannot empty the reserve",
+          0 < allowed and burned < (12 - 3) * 3600,
+          "%.1f h detruites en %d skips" % (burned / 3600, allowed))
+    check("and the reserve never goes under the floor it promised",
+          12 * 3600 - burned >= _b.SKIP_FLOOR, (12 * 3600 - burned) / 3600)
+
+    print("  -- and one viewer cannot take every turn")
+    state = {"skips": [], "users": {}}
+    _b.do_skip(state, 10_000, "vote", at(55, 12), "troll")
+    check("the one who just carried a skip is asked to wait",
+          "turn" in (_b.skip_blocked(state, 12_000, at(55, 12), "troll") or ""),
+          _b.skip_blocked(state, 12_000, at(55, 12), "troll"))
+    check("control: somebody else is not made to wait for them",
+          _b.skip_blocked(state, 12_000, at(55, 12), "quelquun") is None,
+          _b.skip_blocked(state, 12_000, at(55, 12), "quelquun"))
+    check("control: a state written before costs were recorded still counts",
+          len(_b.skips_since({"skips": [9_000.0, 1.0]}, 5_000)) == 1)
+finally:
+    _b.unseen_hours, _b.playing, chan.PART_SECONDS = _was_unseen, _was_playing, _was_part
+
+
 print("bot: reading the pipeline")
 import bot  # noqa: E402
 
