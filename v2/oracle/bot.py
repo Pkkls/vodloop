@@ -65,6 +65,11 @@ SKIP_COOLDOWN = int(chan.conf_num("SKIP_COOLDOWN_SECONDS", 1200))
 SKIP_MAX_PER_HOUR = int(chan.conf_num("SKIP_MAX_PER_HOUR", 3))
 SKIP_MIN_AIRED = int(chan.conf_num("SKIP_MIN_AIRED_SECONDS", 600))
 USER_COOLDOWN = int(chan.conf_num("USER_COOLDOWN_SECONDS", 15))
+# A paid fetch rides on top of the supply the channel already needs, so the
+# board's own ceilings can swallow one. kil, 2026-09-19: "si ca bloque, refund
+# les points". Both numbers exist so that the points come back.
+REQUEST_MAX_PENDING = int(chan.conf_num("REQUEST_MAX_PENDING", 3))
+REQUEST_DEADLINE = int(chan.conf_num("REQUEST_DEADLINE_HOURS", 6)) * 3600
 TITLE_MIN_INTERVAL = int(chan.conf_num("TITLE_MIN_INTERVAL_SECONDS", 90))
 TITLE_CHECK_INTERVAL = int(chan.conf_num("TITLE_CHECK_INTERVAL_SECONDS", 300))
 SEEN_KEPT = 300
@@ -582,6 +587,42 @@ def video_asked(text):
     return found.group(1) if found else None
 
 
+def waiting_requests(data):
+    """The paid fetches the board still owes."""
+    return [v for v, row in (data.get("asked") or {}).items()
+            if row.get("state") != "here"]
+
+
+def queue_request(data, now, who, vid, title):
+    """Put a paid fetch in the board's way, or say why it will not fit.
+
+    Refusing here costs the viewer nothing: the redemption has not been
+    accepted yet, so False refunds it in the same second. Letting a fourth one
+    in would cost them the points and six hours of silence, because the board
+    fetches one video at a time under a ceiling the channel's own supply
+    already spends most of.
+    """
+    held = waiting_requests(data)
+    if vid in held:
+        # overwriting the row would strand the first viewer's redemption in
+        # Kick's queue for good, with their points gone and nobody to settle it
+        return False, (f"@{who} {title[:40]} is already on its way for somebody "
+                       f"else - points refunded")
+    if len(held) >= REQUEST_MAX_PENDING:
+        return False, (f"@{who} {len(held)} requests are already waiting on the "
+                       f"board and it fetches one at a time - points refunded, "
+                       f"try again when one lands")
+    with supply.REQUESTS.open("a") as fh:
+        fh.write(vid + "\n")
+    data.setdefault("asked", {})[vid] = {"who": who, "title": title, "at": int(now),
+                                         "state": "waiting", "redemption": None}
+    # hand the id back to redeemed(), which alone knows it. Comparing the keys
+    # of asked before and after cannot: a video already waiting is not a new
+    # key, and the redemption behind it was then settled as if it were done.
+    data["queued_now"] = vid
+    return True, None
+
+
 def reward_request(data, now, who, text):
     """A stream a viewer found on YouTube, fetched next.
 
@@ -604,9 +645,9 @@ def reward_request(data, now, who, text):
         if chan.video_id(path) == vid:
             PICK.write_text(json.dumps({"name": path.name, "at": int(now)}))
             return True, f"@{who} it is already here: {titles[vid][:44]} plays next"
-    with supply.REQUESTS.open("a") as fh:
-        fh.write(vid + "\n")
-    data.setdefault("asked", {})[vid] = {"who": who, "title": titles[vid], "at": int(now)}
+    queued, refusal = queue_request(data, now, who, vid, titles[vid])
+    if not queued:
+        return False, refusal
     return True, (f"@{who} fetching {titles[vid][:40]}: "
                   f"{waiting_for(catalog_seconds(vid))}")
 
@@ -632,9 +673,9 @@ def reward_place(data, now, who, text):
     skip = supply.excluded(now)
     for vid, title in supply.catalog_titles().items():
         if any(t in title.lower() for t in terms) and vid not in skip:
-            with supply.REQUESTS.open("a") as fh:
-                fh.write(vid + "\n")
-            data.setdefault("asked", {})[vid] = {"who": who, "title": title, "at": int(now)}
+            queued, refusal = queue_request(data, now, who, vid, title)
+            if not queued:
+                return False, refusal
             return True, (f"@{who} {wanted}: fetching {title[:38]}, "
                           f"{waiting_for(catalog_seconds(vid))}")
     return False, f"@{who} nothing from there in the library — points refunded"
@@ -655,15 +696,24 @@ def redeemed(payload):
     if not known:
         return
     data = load()
+    data.pop("queued_now", None)
     honoured, answer = ACTIONS[known["key"]](
         data, time.time(), who, payload.get("user_input") or "")
+    # A video the board has not brought back yet: accepting now would take the
+    # points for a delivery the daily ceiling may still swallow, so the
+    # redemption stays in Kick's queue and announce_arrivals settles it either
+    # way, which is the only path that can still refund.
+    queued = data.pop("queued_now", None)
+    if queued:
+        data["asked"][queued]["redemption"] = payload.get("id")
     save(data)
-    if payload.get("id"):
+    if payload.get("id") and not queued:
         kickapi.settle_redemption(payload["id"], honoured)
     if answer:
         say(answer)
     chan.log(f"recompense {known['key']} par {who}: "
-             f"{'honoree' if honoured else 'remboursee'}")
+             + ("en attente de la carte" if queued
+                else "honoree" if honoured else "remboursee"))
 
 
 def check_rewards():
@@ -781,27 +831,65 @@ def announce(data):
     say(f"now playing: {clean_title(live['name'], SLUG)}{piece} · !vod !list !vote")
 
 
+def settle_request(row, honoured):
+    """Take the points, or give them back. Silent for a request made by hand."""
+    if row.get("redemption"):
+        kickapi.settle_redemption(row["redemption"], honoured)
+
+
 def announce_arrivals(data):
-    """Tell whoever paid for a stream that it arrived, and put it on next."""
+    """Follow a paid request to its end: here, on air, or refunded.
+
+    kil, 2026-09-19: a request rides on top of the supply the channel already
+    needs, so the board's ceilings can swallow one. The old code dropped it
+    after a day without a word and with the points already spent, which is the
+    worst of the three things it could have done.
+    """
     asked = data.get("asked") or {}
     if not asked:
         return
-    have = {chan.video_id(p) for folder in (chan.QUEUE, chan.AIRED)
+    now = time.time()
+    here = {chan.video_id(p) for folder in (chan.QUEUE, chan.CURRENT, chan.AIRED)
             for p in chan.media(folder)}
+    landing = {chan.video_id(p) for p in chan.media(chan.UPLOAD)}
+    live = playing()
+    barred = None
     for vid in list(asked):
         row = asked[vid]
-        if vid in have:
-            # it was paid for, so it does not take its chances in the draw
+        who, title = row.get("who", "someone"), str(row.get("title"))[:40]
+        if row.get("state") == "here":
+            # it is on the disk and picked; the only thing left to say is that
+            # it is actually going out, which is the thing that was paid for
+            if live and live["vid"] == vid:
+                say(f"@{who} the stream you asked for is on now: {title}")
+                asked.pop(vid)
+            elif now - row.get("at", 0) > REQUEST_DEADLINE:
+                asked.pop(vid)  # still on the disk, it will come round by itself
+            continue
+        if vid in here:
             for path, _ in shelf():
                 if chan.video_id(path) == vid:
-                    PICK.write_text(json.dumps({"name": path.name,
-                                                "at": int(time.time())}))
+                    # it was paid for, so it does not take its chances in the draw
+                    PICK.write_text(json.dumps({"name": path.name, "at": int(now)}))
                     break
-            say(f"@{row.get('who', 'someone')} the stream you asked for landed: "
-                f"{str(row.get('title'))[:40]} — on next, in ~{air_eta()} min")
+            settle_request(row, True)
+            say(f"@{who} the stream you asked for landed: {title} "
+                f"- on next, in ~{air_eta()} min")
+            row["state"], row["at"] = "here", int(now)
+            continue
+        if vid in landing:
+            continue  # mid-transfer from the board, not a failure
+        barred = supply.excluded(now) if barred is None else barred
+        if vid in barred:
+            settle_request(row, False)
+            say(f"@{who} {title} cannot be fetched after all - points refunded")
             asked.pop(vid)
-        elif time.time() - row.get("at", 0) > 86400:
-            asked.pop(vid)  # it never came, and saying so a day later helps nobody
+        elif now - row.get("at", 0) > REQUEST_DEADLINE:
+            settle_request(row, False)
+            say(f"@{who} {title} did not arrive within "
+                f"{REQUEST_DEADLINE // 3600} h, the board is at its daily "
+                f"ceiling - points refunded")
+            asked.pop(vid)
     data["asked"] = asked
 
 

@@ -724,7 +724,7 @@ try:
         supply.catalog_titles = lambda: {"dQw4w9WgXcQ": "Day 7 IRL Cappadocia Turkey"}
         supply.REQUESTS.unlink(missing_ok=True)
         check("a link to something the channel follows is fetched",
-              redeem("Request a stream", "https://youtu.be/dQw4w9WgXcQ") == ("r1", True)
+              redeem("Request a stream", "https://youtu.be/dQw4w9WgXcQ") is None
               and "dQw4w9WgXcQ" in supply.REQUESTS.read_text())
         check("control: a link to anything else is refunded, not fetched blind",
               redeem("Request a stream", "https://youtu.be/AAAAAAAAAAA") == ("r1", False))
@@ -733,6 +733,89 @@ try:
     finally:
         supply.catalog_titles = real_titles
         supply.REQUESTS.unlink(missing_ok=True)
+
+    print("  -- a paid request is followed to its end, or the points come back")
+    real_titles2, real_shelf3, real_say3 = supply.catalog_titles, bot.shelf, bot.say
+    real_excluded = supply.excluded
+    said2, landed = [], chan.QUEUE / "1789819373-Day_7_IRL_Cappadocia-dQw4w9WgXcQ.mkv"
+    try:
+        bot.say = lambda text, reply_to=None: said2.append(text) or True
+        supply.catalog_titles = lambda: {"dQw4w9WgXcQ": "Day 7 IRL Cappadocia Turkey"}
+        supply.excluded = lambda now: set()
+        supply.REQUESTS.unlink(missing_ok=True)
+        bot.PICK.unlink(missing_ok=True)
+        bot.shelf = lambda: []
+        fresh = bot.load()
+        fresh["asked"] = {}
+        bot.save(fresh)
+        check("a fetch the board still owes takes no points yet",
+              redeem("Request a stream", "https://youtu.be/dQw4w9WgXcQ") is None)
+        state = bot.load()
+        check("and the redemption is held so it can be settled either way",
+              (state.get("asked") or {}).get("dQw4w9WgXcQ", {}).get("redemption") == "r1",
+              state.get("asked"))
+        settled.clear(); said2.clear()
+        bot.announce_arrivals(state)
+        check("while it is still coming, nothing is settled and nothing is said",
+              not settled and not said2, (settled, said2))
+        landed.write_bytes(b"x")
+        bot.shelf = lambda: [(landed, 3)]
+        bot.announce_arrivals(state)
+        check("when it lands the points are taken and the chat hears it",
+              settled == [("r1", True)] and any("landed" in t for t in said2)
+              and bot.PICK.exists(), (settled, said2))
+        settled.clear(); said2.clear()
+        bot.playing = lambda: {"title": "t", "name": landed.name, "hour": 1, "hours": 1,
+                               "vid": "dQw4w9WgXcQ", "started": 0, "elapsed": 60}
+        bot.announce_arrivals(state)
+        check("and the chat hears again when it actually goes out",
+              any("is on now" in t for t in said2) and not state["asked"],
+              (said2, state.get("asked")))
+        bot.playing = lambda: None
+        late = {"asked": {"AAAAAAAAAAA": {"who": "v", "title": "Jamais venue",
+                                          "at": time.time() - bot.REQUEST_DEADLINE - 1,
+                                          "state": "waiting", "redemption": "r9"}}}
+        settled.clear(); said2.clear()
+        bot.announce_arrivals(late)
+        check("one the board never brought back gives the points back",
+              settled == [("r9", False)] and any("refunded" in t for t in said2)
+              and not late["asked"], (settled, said2))
+        supply.excluded = lambda now: {"BBBBBBBBBBB"}
+        barred = {"asked": {"BBBBBBBBBBB": {"who": "v", "title": "Refusee",
+                                            "at": time.time(), "state": "waiting",
+                                            "redemption": "r8"}}}
+        settled.clear(); said2.clear()
+        bot.announce_arrivals(barred)
+        check("one the supply refuses refunds at once, not six hours later",
+              settled == [("r8", False)] and any("refunded" in t for t in said2)
+              and not barred["asked"], (settled, said2))
+        full = {"asked": {"V%09d" % i: {"who": "v", "title": "t", "at": time.time(),
+                                        "state": "waiting", "redemption": None}
+                          for i in range(bot.REQUEST_MAX_PENDING)}}
+        ok, why = bot.queue_request(full, time.time(), "v", "CCCCCCCCCCC", "Encore une")
+        check("the queue of paid fetches is capped, and the refusal refunds",
+              ok is False and "refunded" in (why or ""), (ok, why))
+        check("control: under the cap it goes through",
+              bot.queue_request({"asked": {}}, time.time(), "v", "DDDDDDDDDDD", "t")[0])
+        twice = {"asked": {"EEEEEEEEEEE": {"who": "first", "title": "Deja demandee",
+                                           "at": time.time(), "state": "waiting",
+                                           "redemption": "r7"}}}
+        ok, why = bot.queue_request(twice, time.time(), "second", "EEEEEEEEEEE", "Deja demandee")
+        check("asking for one already on its way refunds rather than strands the first",
+              ok is False and "refunded" in (why or "")
+              and twice["asked"]["EEEEEEEEEEE"]["redemption"] == "r7", (ok, why, twice))
+    finally:
+        supply.catalog_titles, bot.shelf, bot.say = real_titles2, real_shelf3, real_say3
+        supply.excluded = real_excluded
+        supply.REQUESTS.unlink(missing_ok=True)
+        landed.unlink(missing_ok=True)
+        bot.PICK.unlink(missing_ok=True)
+        bot.playing = lambda: {"title": "t", "name": "t.mkv", "hour": 1, "hours": 4,
+                               "vid": "x", "started": 0,
+                               "elapsed": bot.SKIP_MIN_AIRED + 60}
+        state = bot.load()
+        state["asked"] = {}
+        bot.save(state)
 
     print("  -- keep going, and take me somewhere")
     real_shelf2 = bot.shelf
