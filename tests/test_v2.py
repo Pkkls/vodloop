@@ -589,6 +589,12 @@ cut.HOURS.unlink(missing_ok=True)
 
 
 print("bot: channel points do the thing or hand the points back")
+check("no reward description would be cut in half by Kick's limit",
+      bot.check_rewards(),
+      [(r["title"], len(r["description"])) for r in bot.REWARDS])
+check("control: the two that take typing say so",
+      [r["input"] for r in bot.REWARDS] == [False, False, True, True],
+      [r["input"] for r in bot.REWARDS])
 settled = []
 real_settle, real_unseen, real_playing = bot.kickapi.settle_redemption, bot.unseen_hours, bot.playing
 try:

@@ -416,11 +416,11 @@ REWARDS = [
      "description": "Type the number of a video from !list. "
                     "Refunded if the number is not on the shelf."},
     {"key": "place", "title": "Take me somewhere", "cost": 300, "input": True,
-     "description": "Type a place: Japan, Turkey, Peru, India, Korea, Chile, "
-                    "Argentina, Vietnam, Thailand, or a city like Osaka or "
-                    "Cappadocia. The next hour comes from a stream shot there, "
-                    "fetched if it is not on the shelf yet. "
-                    "Refunded if the library has nothing from there."},
+     "description": "Type a country or a city: Japan, Turkey, Peru, India, "
+                    "Korea, Chile, Argentina, Vietnam, Osaka, Cappadocia, Lima. "
+                    "The next hour is a stream filmed there. Not downloaded "
+                    "yet, it gets fetched and plays when it lands. "
+                    "Points back if nothing matches."},
 ]
 BY_TITLE = {r["title"].lower(): r for r in REWARDS}
 
@@ -545,6 +545,14 @@ def redeemed(payload):
              f"{'honoree' if honoured else 'remboursee'}")
 
 
+def check_rewards():
+    """Nothing here may be silently cut in half by the API's own limit."""
+    too_long = [r["title"] for r in REWARDS if len(r["description"]) > 255]
+    if too_long:
+        chan.log(f"descriptions trop longues, elles seraient tronquees: {too_long}")
+    return not too_long
+
+
 def sync_rewards(update=False):
     """Create what is missing. Only push costs when asked to.
 
@@ -552,6 +560,7 @@ def sync_rewards(update=False):
     default is create-and-leave-alone. `bot.py --rewards` is the deliberate act
     that makes this file the source of truth again.
     """
+    check_rewards()
     have = {(r.get("title") or "").strip().lower(): r for r in kickapi.rewards()}
     for spec in REWARDS:
         found = have.get(spec["title"].lower())
