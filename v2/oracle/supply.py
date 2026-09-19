@@ -155,6 +155,65 @@ def newest_first(rows):
 AUDIO_ALLOWANCE = 400 * 2 ** 20
 
 
+def aired_countries(titles, recent=12):
+    """The countries of the last few videos put on the wire, newest first.
+
+    Read from the hour ledger rather than from aired.tsv: a file sits between
+    two of its hours for a day, and what the channel has just shown is the
+    hours, not the files.
+    """
+    seen, out = set(), []
+    rows = []
+    try:
+        for line in (chan.STATE / "hours.tsv").read_text().splitlines():
+            fields = line.split("	")
+            if len(fields) >= 3:
+                rows.append((int(fields[0]), fields[1]))
+    except (OSError, ValueError):
+        pass
+    for _, vid in sorted(rows, reverse=True):
+        if vid in seen:
+            continue
+        seen.add(vid)
+        out.append(chan.country_of(titles.get(vid, "")))
+        if len(out) >= recent:
+            break
+    return out
+
+
+def mix_countries(rows, titles, just_aired=()):
+    """Reorder so the head of the list is not forty videos of one country.
+
+    kil, 2026-09-19: "essaie de mixer un peu les pays". The board only ever
+    looks at the first hundred and twenty lines, and on that day they held
+    four countries out of the eleven the catalogue covers: Peru, Chile,
+    Argentina, Korea, Thailand, Mexico and Taiwan were all past the cut and
+    could never be drawn at all.
+
+    One from each country in turn, keeping each country's own order, so the
+    head holds every country the catalogue has. Countries whose hours are
+    still fresh on the wire go to the back of the first round, which spaces
+    them out without ever putting them out of reach.
+    """
+    groups = {}
+    for row in rows:
+        groups.setdefault(chan.country_of(titles.get(row[0], "")), []).append(row)
+    fresh = list(just_aired)
+
+    def staleness(name):
+        # how many videos ago this country was last on, most recent lowest
+        return fresh.index(name) if name in fresh else len(fresh)
+
+    order = sorted(groups, key=lambda name: (-staleness(name), -len(groups[name]), name))
+    out, cursor = [], 0
+    while any(cursor < len(groups[name]) for name in order):
+        for name in order:
+            if cursor < len(groups[name]):
+                out.append(groups[name][cursor])
+        cursor += 1
+    return out
+
+
 def fetch_ceiling(rate):
     """The longest video the board can bring back whole, at that rate."""
     room = max(0, chan.MAX_FILE_BYTES - AUDIO_ALLOWANCE)
@@ -336,6 +395,8 @@ def main(argv):
     mine = set(kick.read_table())
     candidates = [(vid, secs) for vid, secs in newest_first(catalog)
                   if vid not in skip and vid not in mine and secs <= fetch_seconds]
+    titles = catalog_titles()
+    candidates = mix_countries(candidates, titles, aired_countries(titles))
     chan.log(f"file {len(queue)} ({queued / 3600:.1f} h), reserve {runway / 3600:.1f} h, "
              f"diffuses {len(aired) - len(evict)}, "
              f"besoin {need / 3600:.1f} h, offre {offer / chan.GIB:.1f} Go, "

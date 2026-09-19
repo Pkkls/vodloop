@@ -88,6 +88,51 @@ PART_SECONDS = int(conf_num("PART_SECONDS", 0))
 # and nothing already on the disk is drawn. One switch, because a channel that
 # needs three of them is a channel I will get wrong again.
 NO_KICK = str(CONF.get("NO_KICK", "")).strip() not in ("", "0", "no", "false")
+
+# Where a stream was shot, read off its title. Lives here because two things
+# need it and for opposite reasons: the chat answers "have you got anything
+# from Peru", and supply.py orders the candidate list so the board is not
+# offered the same country forty times in a row, which on 2026-09-19 was
+# Turkey for most of the head of nanatty247's list.
+PLACES = {
+    "japan": ("japan", "tokyo", "osaka", "kyoto", "hokkaido", "okinawa",
+              "sapporo", "nara", "kobe", "hiroshima", "fukuoka", "kabuki",
+              "roppongi", "shibuya", "shinjuku", "akihabara", "harajuku"),
+    "turkey": ("turkey", "turkiye", "istanbul", "cappadocia", "bursa",
+               "izmir", "pamukkale", "ankara", "antalya"),
+    "peru": ("peru", "lima", "cusco", "arequipa", "machu"),
+    "india": ("india", "jaipur", "agra", "delhi", "varanasi", "goa", "mumbai"),
+    "korea": ("korea", "seoul", "busan"),
+    "chile": ("chile", "chilie", "santiago", "coyhaique", "valparaiso",
+              "atacama", "patagonia"),
+    "argentina": ("argentina", "ushuaia", "buenos", "bariloche", "mendoza"),
+    "thailand": ("thailand", "bangkok", "phuket", "chiang", "pattaya"),
+    "vietnam": ("vietnam", "hanoi", "saigon", "danang", "hoi an"),
+    "taiwan": ("taiwan", "taipei", "kaohsiung"),
+    "mexico": ("mexico", "cancun", "oaxaca"),
+    "brazil": ("brazil", "rio", "sao paulo"),
+    "bolivia": ("bolivia", "la paz", "uyuni"),
+    "indonesia": ("indonesia", "bali", "jakarta"),
+    "philippines": ("philippines", "manila", "cebu"),
+}
+# a word boundary in front only: "Peru" must not match "Peruvian"'s neighbours
+# but "Turkiye" inside a sentence must still count
+_PLACE_HINTS = tuple((name, re.compile(r"\b(?:%s)" % "|".join(terms)))
+                     for name, terms in PLACES.items())
+
+
+def country_of(title):
+    """The country a title names, or "" when it names none.
+
+    Empty is a real answer and not a failure: about a third of this catalogue
+    is home streams whose titles say nothing about where they are, and they
+    are their own group in the draw rather than being forced into one.
+    """
+    low = str(title or "").lower()
+    for name, hint in _PLACE_HINTS:
+        if hint.search(low):
+            return name
+    return ""
 # prep in v1 stopped below 4 GiB free; the disk is shared with the rest of the box
 FLOOR_BYTES = int(conf_num("FLOOR_GB", 5) * GIB)
 CHUNK_SECONDS = 300

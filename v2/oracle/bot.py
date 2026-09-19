@@ -553,21 +553,8 @@ def reward_stay(data, now, who, text):
 # alone had a hundred and three. Measured against the real catalogue on
 # 2026-09-19, so a country asked for finds the streams shot in it. Ask for a
 # city and you get that city; ask for a country and you get all of it.
-PLACES = {
-    "japan": ("japan", "tokyo", "osaka", "kyoto", "hokkaido", "okinawa",
-              "sapporo", "nara", "kobe", "hiroshima", "fukuoka", "kabuki"),
-    "turkey": ("turkey", "turkiye", "istanbul", "cappadocia", "bursa"),
-    "peru": ("peru", "lima", "cusco"),
-    "india": ("india", "jaipur", "agra", "delhi", "varanasi", "goa"),
-    "korea": ("korea", "seoul", "busan"),
-    "chile": ("chile", "santiago"),
-    "argentina": ("argentina", "ushuaia", "buenos"),
-    "thailand": ("thailand", "bangkok", "phuket"),
-    "vietnam": ("vietnam", "hanoi", "saigon"),
-    "taiwan": ("taiwan", "taipei"),
-    "mexico": ("mexico",),
-    "brazil": ("brazil", "rio"),
-}
+# the table lives in chan.py: supply.py orders the candidate list with it too
+PLACES = chan.PLACES
 
 
 def place_terms(wanted):

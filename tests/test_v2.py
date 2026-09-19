@@ -108,6 +108,37 @@ try:
           supply.measured_rate(["a"], {}) == 250_000)
 finally:
     chan.duration, chan.size_of = real_duration, real_size
+print("supply: the head of the list holds every country, not one of them")
+check("a country is read off the title, cities included",
+      (chan.country_of("Day 22, IRL Bursa, Turkey"), chan.country_of("IRL Osaka - Nontent"),
+       chan.country_of("Day 37, IRL Cusco, Peru")) == ("turkey", "japan", "peru"),
+      (chan.country_of("Day 22, IRL Bursa, Turkey"), chan.country_of("IRL Osaka - Nontent")))
+check("control: a title that names nowhere says so plainly",
+      chan.country_of("nanatty Kick VOD") == "" and chan.country_of("") == "")
+rows = ([("t%d" % i, 3600) for i in range(40)]          # turkey, the crowd
+        + [("j%d" % i, 3600) for i in range(20)]        # japan
+        + [("p%d" % i, 3600) for i in range(3)])        # peru, almost nothing
+titles = dict([("t%d" % i, "IRL Bursa, Turkey") for i in range(40)]
+              + [("j%d" % i, "IRL Osaka") for i in range(20)]
+              + [("p%d" % i, "IRL Cusco, Peru") for i in range(3)])
+mixed = supply.mix_countries(rows, titles)
+head = [chan.country_of(titles[v]) for v, _ in mixed[:9]]
+check("the head alternates instead of running one country dry",
+      set(head[:3]) == {"turkey", "japan", "peru"} and head[:3] != head[3:6] or
+      sorted(head[:3]) == ["japan", "peru", "turkey"], head)
+check("every country reaches the part of the list the board reads",
+      {chan.country_of(titles[v]) for v, _ in mixed[:12]} == {"turkey", "japan", "peru"},
+      [chan.country_of(titles[v]) for v, _ in mixed[:12]])
+check("control: nothing is lost or duplicated in the reorder",
+      sorted(mixed) == sorted(rows) and len(mixed) == len(rows), len(mixed))
+just = ["turkey", "turkey", "turkey"]
+after = supply.mix_countries(rows, titles, just)
+check("a country still fresh on the wire goes last in the round, not away",
+      chan.country_of(titles[after[0][0]]) != "turkey"
+      and "turkey" in {chan.country_of(titles[v]) for v, _ in after[:4]},
+      [chan.country_of(titles[v]) for v, _ in after[:4]])
+
+
 check("a thick channel may only be asked for short videos",
       supply.fetch_ceiling(1e6) == int((10 * G - supply.AUDIO_ALLOWANCE) / 1e6),
       supply.fetch_ceiling(1e6))
