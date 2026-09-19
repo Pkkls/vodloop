@@ -6,12 +6,14 @@ random inside it. An hour that has been on the wire is never sent again: the
 ledger that says so is keyed by video id and appended to, so it survives the
 file being retired, evicted to make room, and fetched back.
 
-Material is drawn in three tiers, and the wire decides the order, not taste:
+Material is drawn in two tiers, and there is deliberately no third:
   1. an unaired hour of something in queue/
   2. an unaired hour of something in aired/, the reserve on disk
-  3. only when every hour of everything on disk has been on the wire, the one
-     aired longest ago. A repeat is worse than new material and better than a
-     loading card, and this tier is the one that says the channel is starving.
+An hour is spent the moment its first chunk reaches the wire, so a cutter killed
+half way through does not leave it drawable again. With nothing unseen on the
+disk the channel shows its standby clip and watch.py raises the alarm, because
+a disk with nothing left on it is a supply that failed, and showing the same
+hour twice hides that instead of fixing it.
 
 One ffmpeg segment job per file. Chunks are only moved into chunks/ once the
 muxer has listed them as complete, so the feeder never reads a half-written
@@ -192,22 +194,30 @@ def next_source():
       reserve   something in aired/ that still holds an hour nobody has seen.
                 It is on the disk already, so it beats a loading card by the
                 whole time a delivery would take.
-      repeat    every hour of everything on disk has been on the wire. The file
-                holding the hour aired longest ago goes back on. This tier is
-                the channel starving, and watch.py is what says so.
+    There is no third tier. An hour that has been on the wire is spent, and a
+    disk with nothing unseen on it means the supply failed, which is a thing to
+    fix and not a thing to paper over by showing the same hour twice.
 
     Unsliced, the tiers collapse to the oldest file in the queue, as before.
     """
     if not chan.PART_SECONDS:
         files = chan.media(chan.QUEUE)
-        if files:
-            return claim(files[0], "queue")
-        # an unsliced channel has no hours to account for, but it has the same
-        # reserve and the same reason to prefer it to a loading card
-        spare = sorted(chan.media(chan.AIRED), key=lambda p: p.stat().st_mtime)
-        return claim(spare[0], "repeat") if spare else (None, None)
+        # No reserve here either. An unsliced channel has no hour ledger, so
+        # anything it drew from aired/ would be a whole video shown twice, and
+        # the rule is the same rule for both channels: what has been on the
+        # wire does not go back on it. One rule with an exception hidden in a
+        # branch nobody reads is not a rule.
+        return claim(files[0], "queue") if files else (None, None)
 
     book, durations = ledger(), chan.read_json(chan.STATE / "durations.json", {})
+    # A file with every hour spent is never drawn again, and the queue is not
+    # where supply.py looks for room, so one left there would hold its gigabytes
+    # until somebody noticed. It belongs in the reserve, where eviction can see
+    # it and where it is still the last thing to go while it holds anything.
+    for spent in chan.media(chan.QUEUE):
+        if not unaired(spent, book, durations) and chan.duration(spent, durations):
+            spent.replace(chan.AIRED / spent.name)
+            chan.log(f"entierement diffuse, passe en reserve: {spent.name[:60]}")
     just_played = last_recording(book)
     wanted = chan.read_json(PICK, {}).get("name")
     PICK.unlink(missing_ok=True)
@@ -227,16 +237,12 @@ def next_source():
         elsewhere = [p for p in fresh if recording_of(p) != just_played] or fresh
         return claim(random.choice([p for p in elsewhere if from_board(p)] or elsewhere), origin)
 
-    oldest, held = None, None
-    for folder in (chan.QUEUE, chan.AIRED):
-        for path in chan.media(folder):
-            when = min(book.get(chan.video_id(path) or path.name, {0: 0}).values())
-            if held is None or when < held:
-                oldest, held = path, when
-    if oldest is None:
-        return None, None
-    chan.log(f"plus une heure inedite sur le disque: {oldest.name[:60]} repasse")
-    return claim(oldest, "repeat")
+    # No third tier. kil, 2026-09-19: "tu me repasses PAS 2 fois le meme chunk
+    # d'une heure". An hour that has been on the wire is spent for good, so when
+    # the disk holds nothing unseen the answer is the standby clip and an alarm,
+    # never the same hour again. The cure is supply, and watch.py is what says
+    # the supply failed.
+    return None, None
 
 
 def claim(chosen, origin):
@@ -383,6 +389,8 @@ def run_job(source, origin, skip):
             if moved < skip:
                 piece.unlink(missing_ok=True)
             else:
+                if moved == skip:
+                    record_hour(source.name, number)
                 piece.replace(chan.CHUNKS / f"{next_seq():010d}.ts")
                 chan.write_json(JOB, {"source": source.name, "origin": origin,
                                       "done": moved + 1, "number": number,
@@ -427,7 +435,8 @@ def run_job(source, origin, skip):
     if job.returncode != 0 and not skipped:
         chan.log(f"decoupe interrompue apres {moved} chunks: {error[-200:]}")
     if chan.PART_SECONDS:
-        record_hour(source.name, number)
+        if moved <= skip:
+            record_hour(source.name, number)  # nothing aired, but never retry it blind
         done = played(source.name)
         total = slices_in(info["seconds"])
         if len(done) < total:

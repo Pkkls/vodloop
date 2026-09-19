@@ -293,11 +293,8 @@ if shutil.which("ffmpeg"):
     check("and adds no chunk", len(list(chan.CHUNKS.glob("*.ts"))) == 1)
     check("control: what aired is kept in reserve, not thrown away",
           len(chan.media(chan.AIRED)) == 1, chan.media(chan.AIRED))
-    spare = chan.media(chan.AIRED)[0]
-    source, origin = cut.next_source()
-    check("unsliced, an empty queue still draws the reserve before the clip",
-          source is not None and origin == "repeat", (source, origin))
-    source.replace(chan.AIRED / spare.name)
+    check("unsliced, an empty queue draws nothing rather than replay",
+          cut.next_source() == (None, None), cut.next_source())
 
     print("cut: the three tiers, and no hour twice")
     was = chan.PART_SECONDS
@@ -319,17 +316,11 @@ if shutil.which("ffmpeg"):
         source.replace(chan.AIRED / source.name)
         check("control: a spent file offers no unaired hour",
               cut.unaired(chan.AIRED / source.name, cut.ledger(), {}) == set())
-        again, origin = cut.next_source()
-        check("only then does an hour go back on, and it is named as a repeat",
-              again is not None and origin == "repeat", (again, origin))
-        book = cut.ledger()
-        oldest = min(book[chan.video_id(again.name)].items(), key=lambda kv: kv[1])[0]
-        check("the hour drawn is the one off the wire the longest",
-              cut.window(again, chan.duration(again))[2] == oldest, oldest)
-        again.replace(chan.AIRED / again.name)
+        check("with every hour spent, nothing is drawn rather than repeated",
+              cut.next_source() == (None, None), cut.next_source())
         for leftover in chan.media(chan.AIRED):
             leftover.unlink()
-        check("control: with nothing at all on disk there is nothing to draw",
+        check("control: and an empty disk answers the same way",
               cut.next_source() == (None, None))
     finally:
         chan.PART_SECONDS = was
@@ -566,6 +557,28 @@ try:
     check("control: and never zero", all(v >= 1 for v in table.values()), table)
 finally:
     bot.kickapi.viewers = real_viewers
+
+
+print("cut: an hour is spent for good, whatever happens to the file")
+cut.HOURS.unlink(missing_ok=True)
+cut.PARTS.unlink(missing_ok=True)
+cut.record_hour("1789819373-Un_Titre-dQw4w9WgXcQ.mkv", 2)
+check("an hour on the wire is written down",
+      cut.played("1789819373-Un_Titre-dQw4w9WgXcQ.mkv") == {2})
+check("the same file fetched again under a new name remembers it",
+      cut.played("1789999999-Un_Titre_Autre_Nom-dQw4w9WgXcQ.mkv") == {2},
+      cut.played("1789999999-Un_Titre_Autre_Nom-dQw4w9WgXcQ.mkv"))
+cut.record_hour("1789819373-Un_Titre-dQw4w9WgXcQ.mkv", 2)
+check("control: written twice it is still one hour",
+      cut.played("1789819373-Un_Titre-dQw4w9WgXcQ.mkv") == {2})
+was = chan.PART_SECONDS
+chan.PART_SECONDS = 3600
+check("a file whose every hour is spent offers nothing",
+      cut.unaired(pathlib.Path("1789819373-Un_Titre-dQw4w9WgXcQ.mkv"), cut.ledger(),
+                  {"1789819373-Un_Titre-dQw4w9WgXcQ.mkv:0": 10800}) == {0, 1},
+      "les heures 0 et 1 restent, la 2 est prise")
+chan.PART_SECONDS = was
+cut.HOURS.unlink(missing_ok=True)
 
 print()
 if failures:
