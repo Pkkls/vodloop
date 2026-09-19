@@ -485,6 +485,54 @@ check("control: a signature over the wrong body is refused too",
                           "Kick-Event-Message-Timestamp": "2026-09-19T12:00:00Z",
                           "Kick-Event-Signature": "Zm9v"}, b"{}"))
 
+
+print("bot: the title a viewer can read, with the handle always last")
+real_conf = dict(chan.CONF)
+try:
+    chan.CONF["TITLE_SUFFIX"] = "@nanatty"
+    check("the date an upload carries is written the way it is read",
+          bot.said_date("260120 nanatty Day 2") == ("20 Jan 2026", "nanatty Day 2"),
+          bot.said_date("260120 nanatty Day 2"))
+    check("the other prefix too",
+          bot.said_date("2026-09-15 SOLO in Thailand")[0] == "15 Sep 2026")
+    check("control: a number that is not a date is left alone",
+          bot.said_date("999999 something") == ("", "999999 something"),
+          bot.said_date("999999 something"))
+    check("the channel's own name is not said twice",
+          bot.clean_title("1789819373-2026-09-15_nanatty_SOLO_in_Thailand-k0156a4c001.mkv", "nanatty247")
+          == "SOLO in Thailand (15 Sep 2026)",
+          bot.clean_title("1789819373-2026-09-15_nanatty_SOLO_in_Thailand-k0156a4c001.mkv", "nanatty247"))
+    check("an uploader's reference goes, the episode number stays",
+          bot.clean_title("1789819373-260120_nanatty_-_Day_2_IRL_Santiago_c223-JEELzhY-PGQ.mkv", "nanatty247")
+          == "Day 2 IRL Santiago (20 Jan 2026)",
+          bot.clean_title("1789819373-260120_nanatty_-_Day_2_IRL_Santiago_c223-JEELzhY-PGQ.mkv", "nanatty247"))
+    check("control: a name with nothing left still says something",
+          bot.clean_title("1789819373-250512_nanatty_Kick_VOD-VWYhzs0WkQQ.mkv", "nanatty247")
+          == "12 May 2025",
+          bot.clean_title("1789819373-250512_nanatty_Kick_VOD-VWYhzs0WkQQ.mkv", "nanatty247"))
+    was_part = chan.PART_SECONDS
+    chan.PART_SECONDS = 3600
+    chan.write_json(cut.JOB, {"source": "1789-2026-09-15_SOLO_in_Thailand-k0156a4c001.mkv",
+                              "origin": "queue", "done": 1, "number": 1,
+                              "seconds": 14400, "started": time.time()})
+    title = bot.wanted_title()
+    check("the handle ends the title", title.endswith("@nanatty"), title)
+    check("and the hour is in it", "hour 2/4" in title, title)
+    chan.write_json(cut.JOB, {"source": "1789819373-260120_" + "tres_long_" * 20 + "fin-JEELzhY-PGQ.mkv",
+                              "origin": "queue", "done": 1, "number": 0,
+                              "seconds": 14400, "started": time.time()})
+    long_title = bot.wanted_title()
+    check("a name too long is cut, never the handle",
+          long_title.endswith("@nanatty") and len(long_title) <= 140, len(long_title))
+    chan.CONF.pop("TITLE_SUFFIX")
+    check("control: a channel with no handle configured carries none",
+          not (bot.wanted_title() or "").endswith("@nanatty"))
+    chan.PART_SECONDS = was_part
+    cut.JOB.unlink(missing_ok=True)
+finally:
+    chan.CONF.clear()
+    chan.CONF.update(real_conf)
+
 print()
 if failures:
     print(f"{len(failures)} failed: " + ", ".join(failures))

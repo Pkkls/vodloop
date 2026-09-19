@@ -72,11 +72,60 @@ _last_said = [0.0]
 
 # --- reading the pipeline --------------------------------------------------
 
+MONTHS = ("Jan", "Feb", "Mar", "Apr", "May", "Jun",
+          "Jul", "Aug", "Sep", "Oct", "Nov", "Dec")
+# what an uploader leaves in a file name and no viewer needs: the channel said
+# twice, the word VOD, and the recording's own reference (c223, @na)
+NOISE = re.compile(r"^(kick|vod|vods|full|twitch|youtube|@\w{1,4}|[a-z]\d{3,})$", re.I)
+
+
 def pretty(name):
     """A file name as a human would say it: no epoch prefix, no id, no underscores."""
     stem = re.sub(r"^\d{9,}-", "", pathlib.Path(name).stem)
     stem = re.sub(r"-[A-Za-z0-9_-]{11}$", "", stem)
     return re.sub(r"\s+", " ", stem.replace("_", " ")).strip(" -.") or "untitled"
+
+
+def said_date(stem):
+    """(date as a viewer reads it, what is left) from the two prefixes uploads use."""
+    found = re.match(r"^(\d{4})-(\d{2})-(\d{2})[ _-]+(.*)$", stem)
+    if found:
+        year, month, day, rest = found.groups()
+    else:
+        found = re.match(r"^(\d{2})(\d{2})(\d{2})[ _-]+(.*)$", stem)
+        if not found:
+            return "", stem
+        year, month, day, rest = "20" + found.group(1), found.group(2), found.group(3), found.group(4)
+    try:
+        number = int(month)
+        if not 1 <= number <= 12 or not 1 <= int(day) <= 31:
+            return "", stem
+    except ValueError:
+        return "", stem
+    return f"{int(day)} {MONTHS[number - 1]} {year}", rest
+
+
+def clean_title(name, slug=""):
+    """What the channel should say it is playing.
+
+    An uploader's file name is not a title: "250512_nanatty_Kick_VOD_@na___c223"
+    carries a date, the channel's own name twice over and the reference of the
+    recording, and none of the last three mean anything to someone arriving on
+    the stream. The date does, on a channel that plays nothing but past streams,
+    so it is kept and written the way it is read.
+    """
+    stem = pretty(name)
+    when, rest = said_date(stem)
+    # the channel's own name, however the uploader spelled it, is already the
+    # last thing in the title and says nothing twice
+    mine = {slug.lower(), re.sub(r"\d+$", "", slug).lower(),
+            chan.CONF.get("TITLE_SUFFIX", "").lstrip("@").lower()} - {""}
+    words = [w for w in re.split(r"[ _]+", rest.replace("-", " ")) if w]
+    kept = [w for w in words if not NOISE.match(w) and w.lower() not in mine]
+    body = re.sub(r"\s+", " ", " ".join(kept)).strip(" -.,")
+    if when and body:
+        return f"{body} ({when})"
+    return body or when or "past stream"
 
 
 def playing():
@@ -333,12 +382,25 @@ def handle(payload):
 # --- the title -------------------------------------------------------------
 
 def wanted_title():
+    """The line the channel carries, with the handle always last.
+
+    kil, 2026-09-19: the handle is not decoration, it has to be at the end of
+    every title the channel ever shows. So it is appended after the truncation
+    and never inside it: what gets cut when the name is long is the name.
+    """
     live = playing()
     if not live:
         return None
-    piece = f" [{live['hour']}/{live['hours']}]" if live["hours"] > 1 else ""
-    head = live["title"][:85]
-    return f"{head}{piece} · !vote to skip · 24/7 rerun"
+    piece = f" · hour {live['hour']}/{live['hours']}" if live["hours"] > 1 else ""
+    tail = f"{piece} · !vote to skip"
+    suffix = chan.CONF.get("TITLE_SUFFIX", "").strip()
+    if suffix:
+        tail = f"{tail} · {suffix}"
+    room = max(20, 138 - len(tail))
+    head = clean_title(live["name"], SLUG)
+    if len(head) > room:
+        head = head[:room - 1].rstrip(" -.,") + "\u2026"
+    return f"{head}{tail}"
 
 
 def keep_title():
