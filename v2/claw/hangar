@@ -196,14 +196,20 @@ fill() {
   #   - an https rung knows its exact size and publishes it as filesize, not as
   #     filesize_approx, which is null there. Filtering on filesize_approx alone
   #     excluded every exact rung and collapsed the ladder onto the last one.
-  fmt="bv*[vcodec^=avc1][protocol^=https][height<=$maxh][height>=$minh][filesize<${MAX_FILE_MB}M]+ba[acodec^=mp4a]"
-  fmt="$fmt/bv*[vcodec^=avc1][height<=$maxh][height>=$minh][filesize_approx<${MAX_FILE_MB}M]+ba[acodec^=mp4a]"
+  # The cap is on the merged file, which is the one the far side weighs, but a
+  # format filter only sees one track: 5000M of video plus its own audio merged
+  # to 5199 Mo against a 5120 Mo ceiling, and that file sat unshippable on the
+  # card all morning while the channel ran dry. The video rungs leave room for
+  # the sound; --max-filesize stays the per-track backstop.
+  vid_mb=$((MAX_FILE_MB - 400))
+  fmt="bv*[vcodec^=avc1][protocol^=https][height<=$maxh][height>=$minh][filesize<${vid_mb}M]+ba[acodec^=mp4a]"
+  fmt="$fmt/bv*[vcodec^=avc1][height<=$maxh][height>=$minh][filesize_approx<${vid_mb}M]+ba[acodec^=mp4a]"
   # The rung for a video that publishes no size at all. "<?" keeps a format
   # whose size is unknown and drops one known to be over: without the "?" this
   # rung had no size term at all and started 8JQEBshjMZY, whose only 720p rung
   # is 5001 Mo against a 5000 Mo cap, then --max-filesize aborted it half an
   # hour in. A size that is known and too big is knowable in a second.
-  fmt="$fmt/bv*[vcodec^=avc1][protocol^=https][height<=$minh][height>=$minh][filesize<?${MAX_FILE_MB}M][filesize_approx<?${MAX_FILE_MB}M]+ba[acodec^=mp4a]"
+  fmt="$fmt/bv*[vcodec^=avc1][protocol^=https][height<=$minh][height>=$minh][filesize<?${vid_mb}M][filesize_approx<?${vid_mb}M]+ba[acodec^=mp4a]"
   # yt-dlp answers into a file of its own, not into the shared log: the verdict
   # below was read from "tail -5 $LOG", which on 2026-09-19 still held the line
   # of the run before it and told Oracle to blacklist ax0pvdRtxRI for a shape
