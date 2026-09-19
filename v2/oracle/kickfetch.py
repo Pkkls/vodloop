@@ -21,6 +21,7 @@ import urllib.parse
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 
 import chan  # noqa: E402
+import cut  # noqa: E402
 import kick  # noqa: E402
 import supply  # noqa: E402
 
@@ -46,12 +47,8 @@ def pick(now=None):
 def kick_hours_queued(table):
     """Seconds of Kick material waiting, a started file counted as what is left."""
     durations = chan.read_json(chan.STATE / "durations.json", {})
-    parts = chan.read_json(chan.STATE / "parts.json", {})
-    total = 0.0
-    for path in chan.media(chan.QUEUE):
-        if chan.video_id(path) in table:
-            total += max(0.0, chan.duration(path, durations) - float(parts.get(path.name, 0)))
-    return total
+    return sum(cut.remaining(path, chan.duration(path, durations))
+               for path in chan.media(chan.QUEUE) if chan.video_id(path) in table)
 
 
 def fetch(url, start, end, target):

@@ -222,9 +222,12 @@ try:
     table = {"kaaaaaaaa01": ()}
     check("only Kick material counts against the Kick share",
           kickfetch.kick_hours_queued(table) == 7200.0, kickfetch.kick_hours_queued(table))
-    cut.set_part("1789-Stream-kaaaaaaaa01.mkv", 3600.0)
-    check("a started file counts as what is left of it",
+    was = chan.PART_SECONDS
+    chan.PART_SECONDS = 3600
+    cut.set_part("1789-Stream-kaaaaaaaa01.mkv", {0})
+    check("an hour of it already aired does not count twice",
           kickfetch.kick_hours_queued(table) == 3600.0, kickfetch.kick_hours_queued(table))
+    chan.PART_SECONDS = was
     cut.PARTS.unlink(missing_ok=True)
     check("control: a channel with no Kick file leaves the whole window free",
           kickfetch.kick_hours_queued({}) == 0.0)

@@ -74,6 +74,18 @@ def set_part(name, value):
     chan.write_json(PARTS, data)
 
 
+def remaining(path, seconds):
+    """Seconds of a file still to air, the hours already on the wire removed.
+
+    supply.py and kickfetch.py both size the queue with this: a file sits in it
+    between two of its hours, and counting those hours again would have the
+    channel believe it holds a window it has already spent.
+    """
+    if not chan.PART_SECONDS:
+        return seconds
+    return max(0.0, seconds - len(played(pathlib.Path(path).name)) * chan.PART_SECONDS)
+
+
 def next_source():
     """(path, origin) of what airs next, moved into current/, or (None, None).
 

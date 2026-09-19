@@ -27,6 +27,7 @@ import time
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 
 import chan  # noqa: E402
+import cut  # noqa: E402
 import kick  # noqa: E402
 
 CATALOG = chan.STATE / "catalog.tsv"
@@ -249,12 +250,7 @@ def main(argv):
 
     durations = chan.read_json(chan.STATE / "durations.json", {})
     queue = chan.media(chan.QUEUE)
-    # a sliced file sits in the queue between two slices, and the hours of it
-    # already aired are not reserve: counting them whole would let the channel
-    # believe it holds a full window while it runs out
-    parts = chan.read_json(chan.STATE / "parts.json", {})
-    queued = sum(max(0.0, chan.duration(p, durations) - float(parts.get(p.name, 0)))
-                 for p in queue)
+    queued = sum(cut.remaining(p, chan.duration(p, durations)) for p in queue)
     held = queue + chan.media(chan.AIRED) + chan.media(chan.CURRENT)
     rate = measured_rate(held, durations)
     chan.write_json(chan.STATE / "durations.json",
