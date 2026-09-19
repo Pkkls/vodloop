@@ -622,6 +622,46 @@ try:
           redeem("Some other reward") is None)
     check("control: a redemption already settled is not acted on twice",
           redeem("Skip this hour", status="accepted") is None)
+    print("  -- the chat is told what changed")
+    said = []
+    real_say = bot.say
+    try:
+        bot.say = lambda text, reply_to=None: said.append(text) or True
+        state = {"said_playing": "", "asked": {}}
+        bot.playing = lambda: {"title": "t", "name": "1789819373-2026-09-15_SOLO_in_Thailand-k0156a4c001.mkv",
+                               "hour": 2, "hours": 4, "vid": "k0156a4c001",
+                               "started": 0, "elapsed": 60}
+        bot.announce(state)
+        check("a new hour is announced once", len(said) == 1 and "now playing" in said[0], said)
+        bot.announce(state)
+        check("and not announced again while it is still on", len(said) == 1, said)
+        bot.playing = lambda: None
+        bot.announce(state)
+        check("an empty shelf is said out loud too",
+              len(said) == 2 and "nothing unseen" in said[1], said)
+    finally:
+        bot.say = real_say
+        bot.playing = lambda: {"title": "t", "name": "t.mkv", "hour": 1, "hours": 4,
+                               "vid": "x", "started": 0,
+                               "elapsed": bot.SKIP_MIN_AIRED + 60}
+
+    print("  -- what a viewer is told about the wait")
+    chan.write_json(chan.STATE / "want.json", {"rate_bps": 250000})
+    was_part = chan.PART_SECONDS
+    chan.PART_SECONDS = 3600
+    two_hours = bot.fetch_eta(7200)
+    four_hours = bot.fetch_eta(14400)
+    check("a longer video is quoted a longer wait", four_hours > two_hours,
+          (two_hours, four_hours))
+    check("and the estimate is rounded, not pretended to the minute",
+          two_hours % 5 == 0 and four_hours % 5 == 0, (two_hours, four_hours))
+    check("the slot allowance is in it even for something tiny",
+          bot.fetch_eta(1) >= bot.BOARD_SLOT_MIN, bot.fetch_eta(1))
+    line = bot.waiting_for(7200)
+    check("a viewer is told both when it arrives and when it airs",
+          "here in ~" in line and "on air ~" in line, line)
+    chan.PART_SECONDS = was_part
+
     print("  -- a stream asked for by link")
     for shape in ("https://www.youtube.com/watch?v=dQw4w9WgXcQ",
                   "https://youtu.be/dQw4w9WgXcQ?t=42",

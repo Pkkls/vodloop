@@ -180,6 +180,8 @@ def load():
     data.setdefault("users", {})
     data.setdefault("title", "")
     data.setdefault("title_at", 0)
+    data.setdefault("said_playing", "")
+    data.setdefault("asked", {})
     return data
 
 
@@ -399,6 +401,49 @@ def handle(payload):
         say(answer, payload.get("message_id"))
 
 
+# --- how long a viewer has to wait -----------------------------------------
+
+# Measured on the board's own log: 1364 Mo in 16 min and 3389 Mo in 34, so
+# about ninety a minute over the home line. The slot allowance is the gap the
+# board keeps between downloads when a channel is short.
+BOARD_MB_PER_MIN = chan.conf_num("BOARD_MB_PER_MIN", 90)
+BOARD_SLOT_MIN = chan.conf_num("BOARD_SLOT_MINUTES", 15)
+
+
+def catalog_seconds(vid):
+    """How long the requested video runs, from the catalogue that listed it."""
+    for row in supply.read_catalog():
+        if row[0] == vid:
+            return row[1]
+    return 7200
+
+
+def fetch_eta(seconds):
+    """Minutes before a video of this length is on the disk, roughly.
+
+    Rough on purpose: the board may be mid-download, the line varies, and a
+    number to the minute would be a promise nobody can keep. Rounded to five so
+    it reads as the estimate it is.
+    """
+    rate = chan.read_json(chan.STATE / "want.json", {}).get("rate_bps") or 250_000
+    minutes = BOARD_SLOT_MIN + (seconds * rate / 1e6) / max(1.0, BOARD_MB_PER_MIN)
+    return int(round(minutes / 5.0) * 5)
+
+
+def air_eta():
+    """Minutes before the hour on the wire ends and the next one is drawn."""
+    live = playing()
+    if not live or not chan.PART_SECONDS:
+        return 0
+    return max(0, int((chan.PART_SECONDS - live["elapsed"]) / 60))
+
+
+def waiting_for(seconds):
+    """The sentence a viewer gets when something has to be fetched first."""
+    soon, then = fetch_eta(seconds), air_eta()
+    return f"here in ~{soon} min, on air ~{soon + then} min" if then else f"here in ~{soon} min"
+
+
 # --- channel points --------------------------------------------------------
 
 # What the channel sells, and what each one does. The cost is a starting point;
@@ -532,7 +577,9 @@ def reward_request(data, now, who, text):
             return True, f"@{who} it is already here: {titles[vid][:44]} plays next"
     with supply.REQUESTS.open("a") as fh:
         fh.write(vid + "\n")
-    return True, f"@{who} fetching {titles[vid][:46]}, it goes on when it lands"
+    data.setdefault("asked", {})[vid] = {"who": who, "title": titles[vid], "at": int(now)}
+    return True, (f"@{who} fetching {titles[vid][:40]}: "
+                  f"{waiting_for(catalog_seconds(vid))}")
 
 
 def reward_place(data, now, who, text):
@@ -557,9 +604,10 @@ def reward_place(data, now, who, text):
     for vid, title in supply.catalog_titles().items():
         if any(t in title.lower() for t in terms) and vid not in skip:
             with supply.REQUESTS.open("a") as fh:
-                fh.write("%s\n" % vid)
-            return True, (f"@{who} asked for {wanted}: fetching {title[:44]}, "
-                          f"it goes on when it lands")
+                fh.write(vid + "\n")
+            data.setdefault("asked", {})[vid] = {"who": who, "title": title, "at": int(now)}
+            return True, (f"@{who} {wanted}: fetching {title[:38]}, "
+                          f"{waiting_for(catalog_seconds(vid))}")
     return False, f"@{who} nothing from there in the library — points refunded"
 
 
@@ -676,10 +724,56 @@ def keep_title():
                     data["title"], data["title_at"] = want, now
                     save(data)
                     chan.log(f"titre: {want}")
+            announce(data)
+            announce_arrivals(data)
+            save(data)
             close_stale_vote(data, now)
         except Exception as problem:
             chan.log(f"boucle titre: {problem}")
         time.sleep(20)
+
+
+def announce(data):
+    """Say what changed, because a channel that never speaks is a black box.
+
+    One line when the hour on the wire changes, so at most once an hour and
+    once per skip, and one line the first time the shelf runs dry. What was
+    said is remembered, so a restart does not repeat it.
+    """
+    live = playing()
+    mark = f"{live['name']}#{live['hour']}" if live else "filler"
+    if mark == data.get("said_playing"):
+        return
+    data["said_playing"] = mark
+    if not live:
+        say("nothing unseen left on the shelf, the next stream is on its way")
+        return
+    piece = f" (hour {live['hour']}/{live['hours']})" if live["hours"] > 1 else ""
+    say(f"now playing: {clean_title(live['name'], SLUG)}{piece} · !vod !list !vote")
+
+
+def announce_arrivals(data):
+    """Tell whoever paid for a stream that it arrived, and put it on next."""
+    asked = data.get("asked") or {}
+    if not asked:
+        return
+    have = {chan.video_id(p) for folder in (chan.QUEUE, chan.AIRED)
+            for p in chan.media(folder)}
+    for vid in list(asked):
+        row = asked[vid]
+        if vid in have:
+            # it was paid for, so it does not take its chances in the draw
+            for path, _ in shelf():
+                if chan.video_id(path) == vid:
+                    PICK.write_text(json.dumps({"name": path.name,
+                                                "at": int(time.time())}))
+                    break
+            say(f"@{row.get('who', 'someone')} the stream you asked for landed: "
+                f"{str(row.get('title'))[:40]} — on next, in ~{air_eta()} min")
+            asked.pop(vid)
+        elif time.time() - row.get("at", 0) > 86400:
+            asked.pop(vid)  # it never came, and saying so a day later helps nobody
+    data["asked"] = asked
 
 
 def close_stale_vote(data, now):
