@@ -198,8 +198,12 @@ fill() {
   #     excluded every exact rung and collapsed the ladder onto the last one.
   fmt="bv*[vcodec^=avc1][protocol^=https][height<=$maxh][height>=$minh][filesize<${MAX_FILE_MB}M]+ba[acodec^=mp4a]"
   fmt="$fmt/bv*[vcodec^=avc1][height<=$maxh][height>=$minh][filesize_approx<${MAX_FILE_MB}M]+ba[acodec^=mp4a]"
-  # a rung that publishes no size at all, with --max-filesize the backstop
-  fmt="$fmt/bv*[vcodec^=avc1][protocol^=https][height<=$minh][height>=$minh]+ba[acodec^=mp4a]"
+  # The rung for a video that publishes no size at all. "<?" keeps a format
+  # whose size is unknown and drops one known to be over: without the "?" this
+  # rung had no size term at all and started 8JQEBshjMZY, whose only 720p rung
+  # is 5001 Mo against a 5000 Mo cap, then --max-filesize aborted it half an
+  # hour in. A size that is known and too big is knowable in a second.
+  fmt="$fmt/bv*[vcodec^=avc1][protocol^=https][height<=$minh][height>=$minh][filesize<?${MAX_FILE_MB}M][filesize_approx<?${MAX_FILE_MB}M]+ba[acodec^=mp4a]"
   # yt-dlp answers into a file of its own, not into the shared log: the verdict
   # below was read from "tail -5 $LOG", which on 2026-09-19 still held the line
   # of the run before it and told Oracle to blacklist ax0pvdRtxRI for a shape
@@ -217,8 +221,11 @@ fill() {
     # A video that does not exist in the shape the wire needs never will, so
     # the far side is told once and stops offering it.
     if grep -q "Requested format is not available" "$run"; then
-      $OSSH "$ORACLE" "printf '%s\t%s\tavc1 sous %s lignes\n' $(date +%s) '$vid' '$minh' >> $V2/$chan/state/rejected.tsv" 2>/dev/null
-      log "$chan: $vid n'existe pas en avc1 a $minh lignes ou plus, signale a Oracle"
+      # Two shapes reach this line and both are permanent: nothing in avc1 at
+      # the floor, or nothing at the floor that fits the cap. The ledger says
+      # what was asked for rather than guessing which of the two it was.
+      $OSSH "$ORACLE" "printf '%s\t%s\tpas d avc1 %s lignes sous %s Mo\n' $(date +%s) '$vid' '$minh' '$MAX_FILE_MB' >> $V2/$chan/state/rejected.tsv" 2>/dev/null
+      log "$chan: $vid n'a pas d'avc1 a $minh lignes sous $MAX_FILE_MB Mo, signale a Oracle"
     fi
   fi
   cat "$run" >> "$LOG" 2>/dev/null
