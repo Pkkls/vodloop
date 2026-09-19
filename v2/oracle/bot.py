@@ -410,7 +410,18 @@ class Handler(BaseHTTPRequestHandler):
         code = (args.get("code") or [""])[0]
         state = (args.get("state") or [""])[0]
         if not code:
-            return self._send(400, b"pas de code")
+            # Somebody opened the landing page instead of the door. Kick sends
+            # people here, nobody starts here, and "no code" told them nothing:
+            # hand them the link they actually needed.
+            link = html.escape(kickapi.authorize_url(kickapi.APP.get(
+                "KICK_REDIRECT_URI",
+                "https://vodloop.kicknosubviewer.duckdns.org/kick/callback")))
+            page = ("<html><body style='font-family:sans-serif;max-width:40em;margin:3em auto'>"
+                    "<h3>Rien a faire sur cette page</h3><p>C'est l'adresse ou Kick renvoie "
+                    "apres autorisation. Pour autoriser le bot, ouvrez ce lien, connecte sur "
+                    "le compte de la chaine :</p>"
+                    f"<p><a href='{link}'>Autoriser le bot sur Kick</a></p></body></html>")
+            return self._send(200, page.encode(), "text/html; charset=utf-8")
         ok, message = kickapi.exchange(code, state)
         chan.log(f"callback oauth: {message}")
         if ok:
