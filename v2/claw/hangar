@@ -319,8 +319,13 @@ fill() {
 # The channel that has waited longest goes first instead.
 turn() {
   for c in $CHANNELS; do
-    printf '%s %s\n' "$(num "$(cat "$BASE/$c.tried" 2>/dev/null)")" "$c"
-  done | sort -n | awk '{print $2}'
+    w=$($OSSH "$ORACLE" "cat $V2/$c/state/want.json" 2>/dev/null)
+    # The channel closest to showing a loading card goes first; the time since
+    # its last turn only breaks a tie. Taking them oldest first handed the slot
+    # to cx247 with six hours in hand while nanatty247 sat on two.
+    printf '%s %s %s\n' "$(num "$(field runway_seconds "$w")")" \
+      "$(num "$(cat "$BASE/$c.tried" 2>/dev/null)")" "$c"
+  done | sort -n -k1,1 -k2,2 | awk '{print $3}'
 }
 
 for chan in $CHANNELS; do ship "$chan"; done
