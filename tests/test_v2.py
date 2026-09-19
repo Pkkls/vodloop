@@ -109,7 +109,10 @@ try:
 finally:
     chan.duration, chan.size_of = real_duration, real_size
 check("a thick channel may only be asked for short videos",
-      supply.fetch_ceiling(1e6) == int(10 * G / 1e6), supply.fetch_ceiling(1e6))
+      supply.fetch_ceiling(1e6) == int((10 * G - supply.AUDIO_ALLOWANCE) / 1e6),
+      supply.fetch_ceiling(1e6))
+check("and the room the board leaves for the sound is left here too",
+      supply.fetch_ceiling(1e6) < int(10 * G / 1e6), supply.fetch_ceiling(1e6))
 check("control: a thin one is bounded by the band, not by the card",
       supply.fetch_ceiling(233016) == chan.MAX_SECONDS)
 supply.CATALOG.parent.mkdir(parents=True, exist_ok=True)

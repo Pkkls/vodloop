@@ -308,9 +308,23 @@ fill() {
     log "$chan: range $vid ($((kb / 1024)) Mo)"
   else
     echo "$(date +%s) $vid $chan" >> "$BASE/failed.tsv"
-    echo "$(date +%s) fail" > "$BASE/last"
-    throttled_by "$run" && note_throttle
-    log "$chan: echec $vid, pas de nouvel essai avant $FAIL_GAP_MIN min"
+    if throttled_by "$run"; then
+      note_throttle
+      echo "$(date +%s) fail" > "$BASE/last"
+      log "$chan: echec $vid, pas de nouvel essai avant $FAIL_GAP_MIN min"
+    elif grep -q "Requested format is not available" "$run"; then
+      # Nothing was downloaded, it took under a minute, and Oracle has just
+      # been told never to offer this video again. That says something about
+      # the video and nothing about the address, so the three hour penalty
+      # was being spent sulking over a file nobody can fetch. On 2026-09-19
+      # seventy per cent of the candidates offered to nanatty247 were in
+      # that case, which is where the twelve hour holes in the log come from.
+      echo "$(date +%s) ok" > "$BASE/last"
+      log "$chan: $vid ecarte sans rien telecharger, au suivant"
+    else
+      echo "$(date +%s) fail" > "$BASE/last"
+      log "$chan: echec $vid, pas de nouvel essai avant $FAIL_GAP_MIN min"
+    fi
   fi
   rm -f "$dir/.part"/*
   return 0

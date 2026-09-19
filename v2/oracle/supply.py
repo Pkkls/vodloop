@@ -147,9 +147,18 @@ def newest_first(rows):
     return out
 
 
+# The board filters YouTube's rungs on the video track alone and leaves this
+# much of the channel's ceiling for the sound it will merge in. Offering a
+# video sized against the whole ceiling means offering one the board has to
+# refuse: on 2026-09-19 that was 19 per cent of what cx247 was being shown,
+# each one a fetch slot spent on a format probe that could only say no.
+AUDIO_ALLOWANCE = 400 * 2 ** 20
+
+
 def fetch_ceiling(rate):
     """The longest video the board can bring back whole, at that rate."""
-    return min(chan.MAX_SECONDS, int(chan.MAX_FILE_BYTES / rate))
+    room = max(0, chan.MAX_FILE_BYTES - AUDIO_ALLOWANCE)
+    return min(chan.MAX_SECONDS, int(room / rate))
 
 
 def parse_sources(text):
