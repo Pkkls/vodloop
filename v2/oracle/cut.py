@@ -123,6 +123,10 @@ def remember_chunk(chunk, source, number, seconds):
 
 
 def record_hour(name, number):
+    """Write an hour down once. A resume walks the same branch a second time."""
+    vid = chan.video_id(name) or str(name)
+    if number in ledger().get(vid, {}):
+        return
     chan.STATE.mkdir(parents=True, exist_ok=True)
     with HOURS.open("a") as fh:
         fh.write("%d\t%s\t%d\n" % (int(time.time()), chan.video_id(name) or name, number))
@@ -320,8 +324,9 @@ def reject(source, reason, forever=True):
     chan.telegram(f"video refusee ({reason}): {source.name[:80]}")
 
 
-def window(source, seconds):
-    """(start, length, slice number) of the hour to air now, drawn at random.
+def window(source, seconds, number=None):
+    """(start, length, slice number) of the hour to air now, drawn at random,
+    or None when the file has nothing unseen left in it.
 
     kil, 2026-09-19: "tu pick aleatoirement dans la video, par exemple tu mets
     directement a 3h en plein milieu". So an hour is taken from anywhere in the
@@ -339,22 +344,32 @@ def window(source, seconds):
     if not chan.PART_SECONDS:
         return 0.0, seconds, 0
     total = slices_in(seconds)
-    book = ledger()
-    free = [n for n in range(total) if n not in played(source.name, book)]
-    if free:
+    if number is None:
+        # No fallback to the least recently aired hour. That branch is what put
+        # hour 0 of one file back on the wire on 2026-09-19 at 16:03, four
+        # hours after hour 0 of the same file, which is the one thing this
+        # channel promises not to do. Nothing unseen means the file is spent,
+        # and a spent file retires instead of going round again.
+        free = [n for n in range(total) if n not in played(source.name)]
+        if not free:
+            return None
         number = random.choice(free)
-    else:
-        # nothing unseen left in this file: the hour that has been off the wire
-        # longest is the one a viewer is least likely to recognise
-        seen = book.get(chan.video_id(source) or source.name, {})
-        number = min(range(total), key=lambda n: seen.get(n, 0))
     start = float(number * chan.PART_SECONDS)
     # the last slice runs to the end of the file, stub included
     length = (seconds - start if number == total - 1 else float(chan.PART_SECONDS))
     return start, max(0.0, length), number
 
 
-def run_job(source, origin, skip):
+def run_job(source, origin, skip, number=None):
+    """Cut one hour of a file into chunks. number is set only on a resume.
+
+    A restart used to come back through here with the chunks of one hour
+    already on the wire and draw a different hour to follow them, skipping as
+    many chunks of the new hour as the old one had produced. That is how a
+    deploy at 16:03 on 2026-09-19 reaired an hour: the file was spent, the
+    draw fell through to the replay branch, and the skip count belonged to
+    nothing. The hour is part of the job, so it is read back with the job.
+    """
     info = chan.probe(source)
     if info is None:
         chan.log(f"sonde impossible pour {source.name}, nouvel essai plus tard")
@@ -373,7 +388,12 @@ def run_job(source, origin, skip):
 
     audio = ["-c:a", "copy"] if chan.audio_copies(info) else \
         ["-c:a", "aac", "-b:a", "160k", "-ar", "44100", "-ac", "2"]
-    start, length, number = window(source, info["seconds"])
+    drawn = window(source, info["seconds"], number)
+    if drawn is None:
+        chan.log(f"plus rien d'inedit dans {source.name[:60]}, passe en reserve")
+        settle(source, origin)
+        return True
+    start, length, number = drawn
     # -ss and -t before -i: seeking on the input costs nothing on a copy, and
     # the same pair after it would decode everything up to the mark
     seek = ["-ss", f"{start:.3f}", "-t", f"{length:.3f}"] if chan.PART_SECONDS else []
@@ -472,7 +492,10 @@ def recover():
     job = chan.read_json(JOB, None)
     resumed = None
     if job and (chan.CURRENT / job["source"]).exists():
-        resumed = (chan.CURRENT / job["source"], job.get("origin", "queue"), int(job.get("done", 0)))
+        number = job.get("number")
+        resumed = (chan.CURRENT / job["source"], job.get("origin", "queue"),
+                   int(job.get("done", 0)),
+                   None if number is None else int(number))
     for leftover in chan.media(chan.CURRENT):
         if resumed is None or leftover != resumed[0]:
             leftover.replace(chan.QUEUE / leftover.name)

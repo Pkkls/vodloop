@@ -361,6 +361,11 @@ try:
     cut.set_part("a.mkv", {0, 1, 2, 3})
     check("the last hour runs to the end of the file, stub included",
           cut.window(a, 18120) == (14400.0, 18120 - 14400.0, 4), cut.window(a, 18120))
+    cut.set_part("a.mkv", {0, 1, 2, 3, 4})
+    check("a file with every hour spent offers no window at all",
+          cut.window(a, 18000) is None, cut.window(a, 18000))
+    check("but a resume gets back the hour it was cutting, spent or not",
+          cut.window(a, 18000, 2) == (7200.0, 3600.0, 2), cut.window(a, 18000, 2))
     cut.set_part("a.mkv", 10800.0)
     check("the cursor the old format held reads as the hours it had played",
           cut.played("a.mkv") == {0, 1, 2}, cut.played("a.mkv"))
@@ -564,6 +569,45 @@ try:
     check("control: and never zero", all(v >= 1 for v in table.values()), table)
 finally:
     bot.kickapi.viewers = real_viewers
+
+
+print("bot: an ETA that counts the board sitting out its own hourly cap")
+for stale in chan.media(chan.QUEUE):
+    stale.unlink()
+check("with nothing delivered lately the board owes nothing",
+      bot.board_busy_minutes() == 0, bot.board_busy_minutes())
+small = chan.QUEUE / ("%d-Petit-aaaaaaaaaaa.mkv" % int(time.time() - 600))
+small.write_bytes(b"x" * 1024)
+check("control: a delivery under the cap does not hold it either",
+      bot.board_busy_minutes() == 0, bot.board_busy_minutes())
+big = chan.QUEUE / ("%d-Gros-bbbbbbbbbbb.mkv" % int(time.time() - 600))
+big.touch()
+# sparse: only st_size is read, and a real two gigabytes here killed the box
+os.truncate(big, int(bot.BOARD_HOUR_MB) * 1000 * 1000 + 1)
+waited = bot.board_busy_minutes()
+check("a delivery over the cap holds the board for the rest of the hour",
+      48 <= waited <= 50, waited)
+check("and the wait lands in front of the estimate, not beside it",
+      bot.fetch_eta(3600) >= waited + bot.BOARD_SLOT_MIN, bot.fetch_eta(3600))
+small.unlink()
+big.unlink()
+
+
+print("cut: a restart resumes the hour it was cutting, not another one")
+for stale in chan.media(chan.CURRENT):
+    stale.unlink()
+(chan.CURRENT / "9-Reprise-rESUmE12345.mkv").write_bytes(b"x")
+chan.write_json(cut.JOB, {"source": "9-Reprise-rESUmE12345.mkv", "origin": "queue",
+                          "done": 11, "number": 3, "seconds": 15654.0})
+resumed = cut.recover()
+check("the job hands back the hour it had drawn, beside the chunks it had made",
+      resumed is not None and resumed[2:] == (11, 3), resumed)
+chan.write_json(cut.JOB, {"source": "9-Reprise-rESUmE12345.mkv", "origin": "queue", "done": 4})
+check("control: a job written before the hour was kept resumes without one",
+      cut.recover()[3] is None, cut.recover())
+cut.JOB.unlink(missing_ok=True)
+for stale in chan.media(chan.CURRENT):
+    stale.unlink()
 
 
 print("cut: an hour is spent for good, whatever happens to the file")

@@ -408,6 +408,9 @@ def handle(payload):
 # board keeps between downloads when a channel is short.
 BOARD_MB_PER_MIN = chan.conf_num("BOARD_MB_PER_MIN", 90)
 BOARD_SLOT_MIN = chan.conf_num("BOARD_SLOT_MINUTES", 15)
+# what the board allows itself to pull in any rolling hour, mirrored from its
+# own HOUR_MB. Only used to say how long a wait is, never to gate anything.
+BOARD_HOUR_MB = chan.conf_num("BOARD_HOUR_MB", 2500)
 
 
 def catalog_seconds(vid):
@@ -418,6 +421,31 @@ def catalog_seconds(vid):
     return 7200
 
 
+def board_busy_minutes():
+    """Minutes the board still owes its own hourly cap before it may fetch.
+
+    The board holds itself under HOUR_MB in any rolling hour and sits out the
+    rest of it once it is over. Oracle cannot read that counter, but every
+    delivery carries what it cost: the arrival epoch is the queue prefix and
+    the size is on the disk. Leaving this out is what made the first ETA on
+    2026-09-19 forty-five minutes short of the truth.
+    """
+    now, spent, newest = time.time(), 0.0, 0
+    for folder in (chan.QUEUE, chan.CURRENT, chan.AIRED):
+        for path in chan.media(folder):
+            head = path.name.split("-", 1)[0]
+            if not head.isdigit() or now - int(head) > 3600:
+                continue
+            try:
+                spent += path.stat().st_size / 1e6
+            except OSError:
+                continue
+            newest = max(newest, int(head))
+    if not newest or spent < BOARD_HOUR_MB:
+        return 0
+    return max(0, int((3600 - (now - newest)) / 60))
+
+
 def fetch_eta(seconds):
     """Minutes before a video of this length is on the disk, roughly.
 
@@ -426,7 +454,8 @@ def fetch_eta(seconds):
     it reads as the estimate it is.
     """
     rate = chan.read_json(chan.STATE / "want.json", {}).get("rate_bps") or 250_000
-    minutes = BOARD_SLOT_MIN + (seconds * rate / 1e6) / max(1.0, BOARD_MB_PER_MIN)
+    minutes = (board_busy_minutes() + BOARD_SLOT_MIN
+               + (seconds * rate / 1e6) / max(1.0, BOARD_MB_PER_MIN))
     return int(round(minutes / 5.0) * 5)
 
 
