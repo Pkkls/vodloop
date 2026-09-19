@@ -25,6 +25,7 @@ chunks, already sent, are dropped: segmenting a copy is deterministic.
 import os
 import pathlib
 import random
+import re
 import signal
 import subprocess
 import sys
@@ -125,6 +126,23 @@ def remaining(path, seconds):
     return max(0.0, seconds - len(played(pathlib.Path(path).name)) * chan.PART_SECONDS)
 
 
+# a part id minted by kick.part_id: k, eight hex of the recording, its number
+KICK_ID = re.compile(r"^k[0-9a-f]{8}[0-9]{2}$")
+
+
+def from_board(path):
+    """True for what the board brought back, false for this server's Kick line.
+
+    Kick is the supply that answers when the wire is running out, so it ends up
+    in the queue beside material that was asked for on purpose. Preferring the
+    board here is what stops one emergency part from taking turns for days, and
+    it is the difference between a channel that holds its shape by itself and
+    one where somebody moves files out of the queue by hand, which is what I
+    did twice on 2026-09-19.
+    """
+    return not KICK_ID.match(chan.video_id(path) or "")
+
+
 def unaired(path, book, durations):
     """The hours of this file that have never been on the wire."""
     seconds = chan.duration(path, durations)
@@ -163,7 +181,7 @@ def next_source():
     for folder, origin in ((chan.QUEUE, "queue"), (chan.AIRED, "reserve")):
         fresh = [p for p in chan.media(folder) if unaired(p, book, durations)]
         if fresh:
-            return claim(random.choice(fresh), origin)
+            return claim(random.choice([p for p in fresh if from_board(p)] or fresh), origin)
 
     oldest, held = None, None
     for folder in (chan.QUEUE, chan.AIRED):

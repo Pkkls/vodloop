@@ -308,6 +308,9 @@ if shutil.which("ffmpeg"):
         check("with an empty queue the reserve is drawn, not the standby clip",
               source is not None and origin == "reserve", (source, origin))
         check("and it is the file that still holds unseen hours", source.name == spare.name)
+        check("what the board brought back is preferred to the Kick line",
+              cut.from_board(pathlib.Path("1789-Titre-dQw4w9WgXcQ.mkv"))
+              and not cut.from_board(pathlib.Path("1789-Titre-kb97ce32702.mkv")))
         # every hour of it on the wire: the reserve has nothing unseen left
         for n in range(cut.slices_in(chan.duration(source))):
             cut.record_hour(source.name, n)
