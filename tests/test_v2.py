@@ -606,6 +606,30 @@ try:
           redeem("Some other reward") is None)
     check("control: a redemption already settled is not acted on twice",
           redeem("Skip this hour", status="accepted") is None)
+    print("  -- keep going, and take me somewhere")
+    real_shelf2 = bot.shelf
+    try:
+        here = pathlib.Path("1789819373-2026-09-15_SOLO_in_Thailand-k0156a4c001.mkv")
+        bot.shelf = lambda: [(here, 2)]
+        bot.PICK.unlink(missing_ok=True)
+        check("a place that is on the shelf is honoured",
+              redeem("Take me somewhere", "thailand") == ("r1", True) and bot.PICK.exists())
+        bot.PICK.unlink(missing_ok=True)
+        check("control: a place nobody filmed is refunded",
+              redeem("Take me somewhere", "reykjavik") == ("r1", False)
+              and not bot.PICK.exists())
+        check("control: a place too short to mean anything is refunded",
+              redeem("Take me somewhere", "a") == ("r1", False))
+        bot.playing = lambda: None
+        check("keeping a nothing going is refunded",
+              redeem("Keep this one going") == ("r1", False))
+    finally:
+        bot.shelf = real_shelf2
+        bot.PICK.unlink(missing_ok=True)
+        bot.playing = lambda: {"title": "t", "name": "t.mkv", "hour": 1, "hours": 4,
+                               "vid": "x", "started": 0,
+                               "elapsed": bot.SKIP_MIN_AIRED + 60}
+
     real_shelf = bot.shelf
     try:
         bot.shelf = lambda: []

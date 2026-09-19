@@ -262,6 +262,11 @@ def create_reward(title, cost, description="", user_input=False):
         "should_redemptions_skip_request_queue": False})
 
 
+def update_reward(reward_id, cost, description=""):
+    return _call("PATCH", f"/channels/rewards/{reward_id}",
+                 json={"cost": int(cost), "description": description[:255]}) is not None
+
+
 def delete_reward(reward_id):
     return _call("DELETE", f"/channels/rewards/{reward_id}") is not None
 

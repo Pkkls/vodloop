@@ -405,12 +405,19 @@ def handle(payload):
 # failure: better a reward that does nothing and refunds than one that does
 # something nobody expected.
 REWARDS = [
-    {"key": "skip", "title": "Skip this hour", "cost": 500, "input": False,
+    {"key": "skip", "title": "Skip this hour", "cost": 150, "input": False,
      "description": "Ends the hour playing now and draws another one. "
                     "Refunded if the channel just skipped or has nothing else unseen."},
-    {"key": "pick", "title": "Pick what plays next", "cost": 1000, "input": True,
+    {"key": "stay", "title": "Keep this one going", "cost": 150, "input": False,
+     "description": "Another hour of the stream playing now, instead of moving on. "
+                    "Refunded if this one has no hours left."},
+    {"key": "pick", "title": "Pick what plays next", "cost": 250, "input": True,
      "description": "Type the number of a video from !list. "
                     "Refunded if the number is not on the shelf."},
+    {"key": "place", "title": "Take me somewhere", "cost": 300, "input": True,
+     "description": "Type a place: Thailand, Japan, Argentina, Nepal... "
+                    "The next hour comes from a stream shot there. "
+                    "Refunded if nothing on the shelf matches."},
 ]
 BY_TITLE = {r["title"].lower(): r for r in REWARDS}
 
@@ -436,7 +443,39 @@ def reward_pick(data, now, who, text):
     return True, f"@{who} picked {pretty(rows[index][0].name)[:48]} for next"
 
 
-ACTIONS = {"skip": reward_skip, "pick": reward_pick}
+def reward_stay(data, now, who, text):
+    """Another hour of what is on, which is the opposite of a skip.
+
+    Nothing new is needed: the chat's pick lever names a file, and the draw
+    takes an unaired hour from whatever it names. Naming the file already
+    playing is how a viewer buys more of it.
+    """
+    live = playing()
+    if not live:
+        return False, f"@{who} nothing is playing right now — points refunded"
+    book, durations = cut.ledger(), chan.read_json(chan.STATE / "durations.json", {})
+    for folder in (chan.QUEUE, chan.AIRED):
+        path = folder / live["name"]
+        if path.exists() and cut.unaired(path, book, durations):
+            PICK.write_text(json.dumps({"name": live["name"], "at": int(now)}))
+            return True, f"@{who} bought another hour of {live['title'][:44]}"
+    return False, f"@{who} this one has no hours left — points refunded"
+
+
+def reward_place(data, now, who, text):
+    """A stream shot somewhere in particular, matched on its own title."""
+    wanted = re.sub(r"[^\w ]", "", text or "").strip().lower()
+    if len(wanted) < 3:
+        return False, f"@{who} name a place, like Thailand — points refunded"
+    for path, _ in shelf():
+        if wanted in clean_title(path.name, SLUG).lower():
+            PICK.write_text(json.dumps({"name": path.name, "at": int(now)}))
+            return True, f"@{who} next up: {clean_title(path.name, SLUG)[:52]}"
+    return False, f"@{who} nothing on the shelf from there — points refunded"
+
+
+ACTIONS = {"skip": reward_skip, "stay": reward_stay,
+           "pick": reward_pick, "place": reward_place}
 
 
 def redeemed(payload):
@@ -461,17 +500,25 @@ def redeemed(payload):
              f"{'honoree' if honoured else 'remboursee'}")
 
 
-def sync_rewards():
-    """Create what is missing, leave what exists alone."""
-    have = {(r.get("title") or "").strip().lower() for r in kickapi.rewards()}
+def sync_rewards(update=False):
+    """Create what is missing. Only push costs when asked to.
+
+    A restart must not undo a price somebody set in the dashboard, so the
+    default is create-and-leave-alone. `bot.py --rewards` is the deliberate act
+    that makes this file the source of truth again.
+    """
+    have = {(r.get("title") or "").strip().lower(): r for r in kickapi.rewards()}
     for spec in REWARDS:
-        if spec["title"].lower() in have:
-            continue
-        if kickapi.create_reward(spec["title"], spec["cost"], spec["description"],
-                                 spec["input"]):
-            chan.log(f"recompense creee: {spec['title']} ({spec['cost']} points)")
-        else:
-            chan.log(f"recompense refusee par Kick: {spec['title']}")
+        found = have.get(spec["title"].lower())
+        if not found:
+            done = kickapi.create_reward(spec["title"], spec["cost"],
+                                         spec["description"], spec["input"])
+            chan.log(f"recompense {'creee' if done else 'refusee'}: "
+                     f"{spec['title']} ({spec['cost']} points)")
+        elif update and found.get("cost") != spec["cost"]:
+            done = kickapi.update_reward(found["id"], spec["cost"], spec["description"])
+            chan.log(f"recompense {'ajustee' if done else 'inchangee'}: "
+                     f"{spec['title']} {found.get('cost')} -> {spec['cost']}")
 
 
 # --- the title -------------------------------------------------------------
@@ -634,7 +681,7 @@ def main(argv):
         print(kickapi.authorize_url(redirect))
         return 0
     if "--rewards" in argv:
-        sync_rewards()
+        sync_rewards(update=True)
         for r in kickapi.rewards():
             print(f"  {r.get('title')}  {r.get('cost')} points  "
                   f"{'actif' if r.get('is_enabled') else 'inactif'}")
