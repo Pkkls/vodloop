@@ -289,10 +289,16 @@ if shutil.which("ffmpeg"):
     check("a 50 fps file is refused", not source.exists()
           and "badvideo001" in (chan.STATE / "rejected.tsv").read_text())
     check("and adds no chunk", len(list(chan.CHUNKS.glob("*.ts"))) == 1)
-    source, origin = cut.next_source()
-    check("with the queue empty, nothing is replayed", source is None, source)
     check("control: what aired is kept in reserve, not thrown away",
           len(chan.media(chan.AIRED)) == 1, chan.media(chan.AIRED))
+    source, origin = cut.next_source()
+    check("with the queue empty the reserve is drawn, never the standby clip",
+          source is not None and origin == "aired", (source, origin))
+    source.replace(chan.AIRED / source.name)
+    for spare in chan.media(chan.AIRED):
+        spare.unlink()
+    check("control: with nothing at all on disk there is nothing to draw",
+          cut.next_source() == (None, None))
 else:
     print("  (ffmpeg absent: real pass skipped)")
 

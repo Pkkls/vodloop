@@ -94,10 +94,17 @@ def next_source():
     same stream: the draw is what mixes the sources, the slice is what bounds
     how long any one of them holds the wire.
 
-    Either way a file that has been on air whole never comes back: a channel
-    that has run out plays its standby clip until it is supplied again.
+    A file that has been on air comes back only when nothing else is left.
+    kil chose never to replay on 2026-09-17, and that holds for as long as the
+    channel is supplied; on 2026-09-19 it ran out and showed "vod loading..."
+    to four viewers for seventy minutes, which is the worse of the two. The
+    reserve in aired/ is there precisely so the wire never goes empty, oldest
+    first, and a file drawn from it has all its hours free again.
     """
-    files = chan.media(chan.QUEUE)
+    files, origin = chan.media(chan.QUEUE), "queue"
+    if not files:
+        files = sorted(chan.media(chan.AIRED), key=lambda p: p.stat().st_mtime)
+        origin = "aired"
     if not files:
         return None, None
     chosen = random.choice(files) if chan.PART_SECONDS else files[0]
@@ -106,7 +113,7 @@ def next_source():
         chosen.replace(target)
     except OSError:
         return None, None
-    return target, "queue"
+    return target, origin
 
 
 def next_seq():
