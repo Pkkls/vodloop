@@ -247,7 +247,12 @@ fill() {
   # to 5199 Mo against a 5120 Mo ceiling, and that file sat unshippable on the
   # card all morning while the channel ran dry. The video rungs leave room for
   # the sound; --max-filesize stays the per-track backstop.
-  vid_mb=$((MAX_FILE_MB - 400))
+  # The ceiling is the channel's, not the board's: the two of them differ now
+  # that one airs 1080p and the other 720p, and a file over the far side's own
+  # limit is one it will never accept, so it would sit in the hangar for ever.
+  chan_mb=$(num "$(field max_file_mb "$want")")
+  [ "$chan_mb" -gt 0 ] && [ "$chan_mb" -lt "$MAX_FILE_MB" ] && cap_mb=$chan_mb || cap_mb=$MAX_FILE_MB
+  vid_mb=$((cap_mb - 400))
   fmt="bv*[vcodec^=avc1][protocol^=https][height<=$maxh][height>=$minh][filesize<${vid_mb}M]+ba[acodec^=mp4a]"
   fmt="$fmt/bv*[vcodec^=avc1][height<=$maxh][height>=$minh][filesize_approx<${vid_mb}M]+ba[acodec^=mp4a]"
   # The rung for a video that publishes no size at all. "<?" keeps a format
@@ -263,7 +268,7 @@ fill() {
   # run and nothing else.
   run="$dir/.part/run.log"
   if yt-dlp --force-ipv4 ${cookies:+--cookies "$cookies"} --no-playlist --restrict-filenames \
-       --no-progress --max-filesize "${MAX_FILE_MB}M" \
+       --no-progress --max-filesize "${cap_mb}M" \
        -f "$fmt" \
        --merge-output-format mkv -P "$dir/.part" -o '%(title).80B-%(id)s.%(ext)s' \
        "https://www.youtube.com/watch?v=$vid" > "$run" 2>&1; then

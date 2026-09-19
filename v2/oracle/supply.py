@@ -313,6 +313,7 @@ def main(argv):
         tmp.replace(CANDIDATES)
         chan.write_json(WANT, {"need_seconds": need, "offer_bytes": offer, "maxh": chan.MAXH,
                                "minh": chan.MINH, "runway_seconds": int(runway),
+                               "max_file_mb": int(chan.MAX_FILE_BYTES / (1024 ** 2)),
                                "queue_files": len(queue), "queue_hours": round(queued / 3600, 1),
                                "candidates": len(candidates), "max_seconds": fetch_seconds,
                                "rate_bps": int(rate), "at": int(now)})
