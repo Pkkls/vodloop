@@ -32,6 +32,9 @@ OFFSET = chan.STATE / "offset"
 # The cutter runs an hour ahead and deletes its job when it finishes, so a title
 # taken from the cutter announced the next hour an hour early and then froze.
 ONAIR = chan.STATE / "onair.json"
+# written by cut.py when the chat skips: the chunk in flight goes too, or the
+# skip is invisible for as long as it has left to run
+FLUSH = chan.STATE / "flush"
 SESSION = chan.STATE / "session.json"
 REOPEN_GAP_SECONDS = 10 * 60
 
@@ -151,11 +154,21 @@ def main():
         tmp = OFFSET.with_suffix(".tmp")
         tmp.write_text(f"{offset:.3f}")
         tmp.replace(OFFSET)
+        FLUSH.unlink(missing_ok=True)
         with open(chan.FIFO, "wb") as pipe:
-            subprocess.run(["ffmpeg", "-v", "error", "-i", str(source), "-c", "copy",
-                            "-output_ts_offset", f"{offset - length:.3f}",
-                            "-mpegts_flags", "+initial_discontinuity", "-f", "mpegts", "-"],
-                           stdout=pipe)
+            sending = subprocess.Popen(
+                ["ffmpeg", "-v", "error", "-i", str(source), "-c", "copy",
+                 "-output_ts_offset", f"{offset - length:.3f}",
+                 "-mpegts_flags", "+initial_discontinuity", "-f", "mpegts", "-"],
+                stdout=pipe)
+            while sending.poll() is None:
+                if FLUSH.exists():
+                    FLUSH.unlink(missing_ok=True)
+                    sending.terminate()
+                    chan.log(f"chunk en vol interrompu pour un saut: {source.name}")
+                    break
+                time.sleep(0.5)
+            sending.wait()
         if chunks:
             source.unlink(missing_ok=True)
         else:

@@ -41,9 +41,13 @@ JOB = chan.STATE / "job.json"
 # the chat's two levers, written by bot.py and consumed here exactly once
 SKIP = chan.STATE / "skip"
 PICK = chan.STATE / "pick"
-# what stays on the wire when an hour is cut short, so a skip is a change of
-# picture and never a gap: ten minutes to cut and move the next one in
-SKIP_KEEP_CHUNKS = 2
+# Nothing is kept: the chunk being sent right now is interrupted too, because a
+# skip somebody paid for that shows up ten minutes later is not a skip. The
+# cutter has the next hour ready in about thirty seconds, well inside the one
+# already in flight, so the wire does not go quiet.
+SKIP_KEEP_CHUNKS = 0
+# tells the feeder to drop what it is sending, not just what is waiting
+FLUSH = chan.STATE / "flush"
 SEQ = chan.STATE / "seq"
 LIST = chan.WORK / "job.list"
 PARTS = chan.STATE / "parts.json"
@@ -427,6 +431,7 @@ def run_job(source, origin, skip):
             job.terminate()
             for stale in sorted(chan.CHUNKS.glob("*.ts"))[SKIP_KEEP_CHUNKS:]:
                 stale.unlink(missing_ok=True)
+            FLUSH.write_text(str(int(time.time())))
             chan.log(f"passage saute ({reason}): {source.name[:60]}")
             skipped = True
             break
