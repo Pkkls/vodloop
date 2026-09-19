@@ -78,9 +78,18 @@ print("supply: catalogue")
 listing = ("dQw4w9WgXcQ\t7200\tDay 1 IRL\nshortvideo1\t600\tclip\nNAvideo0001\tNA\tlive\n"
            "longvideo01\t50000\ttoo long\nmatchvideo1\t7200\tOther stream\n")
 kept = supply.parse_listing(listing, [])
-check("only the band is kept", [v for v, _ in kept] == ["dQw4w9WgXcQ", "matchvideo1"], kept)
+check("only the band is kept", [r[0] for r in kept] == ["dQw4w9WgXcQ", "matchvideo1"], kept)
+check("and the title comes with it, so a place can be looked up later",
+      kept[0][2] == "Day 1 IRL", kept[0])
 kept = supply.parse_listing(listing, ["irl"])
-check("title words narrow it", [v for v, _ in kept] == ["dQw4w9WgXcQ"], kept)
+check("title words narrow it", [r[0] for r in kept] == ["dQw4w9WgXcQ"], kept)
+supply.CATALOG.parent.mkdir(parents=True, exist_ok=True)
+supply.CATALOG.write_text(
+    "dQw4w9WgXcQ\t7200\t0\t0\tDay 7 IRL Cappadocia Turkey\n"
+    "older000001\t7200\t0\t1\tDay 2 IRL Cusco Peru\n")
+check("the catalogue answers on a place now",
+      [v for v, t in supply.catalog_titles().items() if "turkey" in t.lower()]
+      == ["dQw4w9WgXcQ"], supply.catalog_titles())
 check("sources carry their words",
       supply.parse_sources("# note\nhttps://a/videos\nhttps://b/search | Nana, IRL\n")
       == [("https://a/videos", []), ("https://b/search", ["nana", "irl"])])
@@ -620,6 +629,10 @@ try:
               and not bot.PICK.exists())
         check("control: a place too short to mean anything is refunded",
               redeem("Take me somewhere", "a") == ("r1", False))
+        check("a country reaches the cities filmed in it",
+              "osaka" in bot.place_terms("japan") and "cappadocia" in bot.place_terms("turkey"))
+        check("control: a city asked for stays that city",
+              bot.place_terms("osaka") == ("osaka",))
         bot.playing = lambda: None
         check("keeping a nothing going is refunded",
               redeem("Keep this one going") == ("r1", False))

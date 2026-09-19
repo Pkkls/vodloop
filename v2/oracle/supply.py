@@ -19,6 +19,7 @@ an optional "| word, word" to keep only titles containing one of the words.
 Listing works from a datacenter address; only the player API is walled.
 """
 import pathlib
+import re
 import shutil
 import subprocess
 import sys
@@ -32,6 +33,10 @@ import kick  # noqa: E402
 
 CATALOG = chan.STATE / "catalog.tsv"
 CANDIDATES = chan.STATE / "candidates.tsv"
+# ids the chat has paid to see, written by bot.py. They go to the head of the
+# candidate list marked with a "!", which is what tells the board to take that
+# one rather than draw, and they leave the list once they have been fetched.
+REQUESTS = chan.STATE / "requests.tsv"
 WANT = chan.STATE / "want.json"
 SOURCES = chan.ROOT / "sources.txt"
 MARGIN_BYTES = chan.GIB
@@ -79,6 +84,24 @@ def measured_rate(paths, durations, fallback=250_000):
             size += chan.size_of(path)
             secs += length
     return size / secs if secs >= 3600 else fallback
+
+
+def catalog_titles():
+    """{id: title} for the whole catalogue.
+
+    It used to hold ids and nothing else, so nothing could answer "have you got
+    anything from Turkey": the only titles on the box were the handful of files
+    already downloaded. Six hundred entries know the answer, and now they say it.
+    """
+    out = {}
+    try:
+        for line in CATALOG.read_text().splitlines():
+            fields = line.split("	")
+            if len(fields) >= 5 and fields[4].strip():
+                out[fields[0]] = fields[4].strip()
+    except OSError:
+        pass
+    return out
 
 
 def read_catalog():
@@ -141,7 +164,7 @@ def parse_sources(text):
 
 
 def parse_listing(text, words, low=chan.MIN_SECONDS, high=chan.MAX_SECONDS):
-    """id and seconds of the entries in the band whose title matches."""
+    """id, seconds and title of the entries in the band whose title matches."""
     kept = []
     for line in text.splitlines():
         parts = line.split("\t", 2)
@@ -155,7 +178,7 @@ def parse_listing(text, words, low=chan.MIN_SECONDS, high=chan.MAX_SECONDS):
             continue
         if words and not any(w in parts[2].lower() for w in words):
             continue
-        kept.append((parts[0], secs))
+        kept.append((parts[0], secs, re.sub(r"\s+", " ", parts[2]).strip()[:120]))
     return kept
 
 
@@ -179,7 +202,7 @@ def refresh_catalog(apply):
             kept, part = kick.catalogue(url[5:], chan.MAXH, chan.MAX_FILE_BYTES,
                                         chan.MAX_SECONDS)
             for vid, secs, place in kept:
-                rows.setdefault(vid, (secs, rank, place))
+                rows.setdefault(vid, (secs, rank, place, ""))
             table += part
             failed += not kept
             chan.log(f"catalogue {url}: {len(kept)} morceaux")
@@ -196,16 +219,16 @@ def refresh_catalog(apply):
         # that says how recent a video is: the flat listing carries no date.
         # Kept per source, with its place in it, so the draw can stay near the
         # top instead of pulling something from three years ago.
-        for place, (vid, secs) in enumerate(kept):
-            rows.setdefault(vid, (secs, rank, place))
+        for place, (vid, secs, name) in enumerate(kept):
+            rows.setdefault(vid, (secs, rank, place, name))
         chan.log(f"catalogue {url}: {len(kept)} dans la bande")
     if failed == len(sources) or not rows:
         chan.log("aucune liste lue, catalogue precedent conserve")
         return
     if apply:
         tmp = CATALOG.with_suffix(".tmp")
-        tmp.write_text("".join(f"{vid}\t{secs}\t{rank}\t{place}\n"
-                               for vid, (secs, rank, place) in rows.items()))
+        tmp.write_text("".join(f"{vid}\t{secs}\t{rank}\t{place}\t{name}\n"
+                               for vid, (secs, rank, place, name) in rows.items()))
         tmp.replace(CATALOG)
         if table:
             kick.write_table(table)
@@ -307,9 +330,23 @@ def main(argv):
              f"besoin {need / 3600:.1f} h, offre {offer / chan.GIB:.1f} Go, "
              f"libre {free / chan.GIB:.1f} Go, candidats {len(candidates)}/{len(catalog)} "
              f"(<= {fetch_seconds / 3600:.1f} h a {rate / 1e6:.2f} Mo/s)")
+    asked = []
+    try:
+        asked = [line.split("\t")[0].strip()
+                 for line in REQUESTS.read_text().splitlines() if line.strip()]
+    except OSError:
+        pass
+    wanted = {v for v in asked if v not in skip}
+    if apply and len(wanted) != len(asked):
+        # one that has landed, aired or been refused is no longer a request
+        REQUESTS.write_text("".join(f"{v}\n" for v in asked if v in wanted))
+    names = catalog_titles()
     if apply:
         tmp = CANDIDATES.with_suffix(".tmp")
-        tmp.write_text("".join(f"{vid}\t{secs}\n" for vid, secs in candidates))
+        rows = [(("!" if vid in wanted else "") + vid, secs, names.get(vid, ""))
+                for vid, secs in candidates]
+        rows.sort(key=lambda r: not r[0].startswith("!"))
+        tmp.write_text("".join(f"{vid}\t{secs}\t{name}\n" for vid, secs, name in rows))
         tmp.replace(CANDIDATES)
         chan.write_json(WANT, {"need_seconds": need, "offer_bytes": offer, "maxh": chan.MAXH,
                                "minh": chan.MINH, "runway_seconds": int(runway),

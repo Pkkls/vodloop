@@ -231,7 +231,11 @@ fill() {
             awk -v t=$((now - 7 * 86400)) -v m="$MAX_FAILS" \
               '$1 >= t { c[$2]++ } END { for (k in c) if (c[k] >= m) print k }' "$BASE/failed.tsv" 2>/dev/null
           } | tr '\n' ' ')
-  vid=$(printf '%s\n' "$cands" | awk -v skip="$skip" '
+  # A line the far side marked with "!" is one the chat paid for. It is taken
+  # rather than drawn, and it is the only thing that jumps the random pick.
+  vid=$(printf '%s\n' "$cands" | sed -n 's/^!\([A-Za-z0-9_-]\{11\}\).*/\1/p' | head -1)
+  [ -n "$vid" ] && log "$chan: demande du chat, $vid passe devant le tirage"
+  [ -n "$vid" ] || vid=$(printf '%s\n' "$cands" | awk -v skip="$skip" '
     BEGIN { n = split(skip, s, " "); for (i = 1; i <= n; i++) x[s[i]] = 1; srand() }
     NF >= 2 && length($1) == 11 && !($1 in x) { c[++k] = $1 }
     END { if (k) print c[int(rand() * k) + 1] }')

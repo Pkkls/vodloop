@@ -48,6 +48,7 @@ import chan  # noqa: E402
 import cut  # noqa: E402
 import feed  # noqa: E402
 import kickapi  # noqa: E402
+import supply  # noqa: E402
 
 STATE = chan.STATE / "bot.json"
 SKIP = chan.STATE / "skip"
@@ -415,9 +416,11 @@ REWARDS = [
      "description": "Type the number of a video from !list. "
                     "Refunded if the number is not on the shelf."},
     {"key": "place", "title": "Take me somewhere", "cost": 300, "input": True,
-     "description": "Type a place: Thailand, Japan, Argentina, Nepal... "
-                    "The next hour comes from a stream shot there. "
-                    "Refunded if nothing on the shelf matches."},
+     "description": "Type a place: Japan, Turkey, Peru, India, Korea, Chile, "
+                    "Argentina, Vietnam, Thailand, or a city like Osaka or "
+                    "Cappadocia. The next hour comes from a stream shot there, "
+                    "fetched if it is not on the shelf yet. "
+                    "Refunded if the library has nothing from there."},
 ]
 BY_TITLE = {r["title"].lower(): r for r in REWARDS}
 
@@ -462,16 +465,58 @@ def reward_stay(data, now, who, text):
     return False, f"@{who} this one has no hours left — points refunded"
 
 
+# Titles name cities, not countries: "japan" matched six videos while Osaka
+# alone had a hundred and three. Measured against the real catalogue on
+# 2026-09-19, so a country asked for finds the streams shot in it. Ask for a
+# city and you get that city; ask for a country and you get all of it.
+PLACES = {
+    "japan": ("japan", "tokyo", "osaka", "kyoto", "hokkaido", "okinawa",
+              "sapporo", "nara", "kobe", "hiroshima", "fukuoka", "kabuki"),
+    "turkey": ("turkey", "turkiye", "istanbul", "cappadocia", "bursa"),
+    "peru": ("peru", "lima", "cusco"),
+    "india": ("india", "jaipur", "agra", "delhi", "varanasi", "goa"),
+    "korea": ("korea", "seoul", "busan"),
+    "chile": ("chile", "santiago"),
+    "argentina": ("argentina", "ushuaia", "buenos"),
+    "thailand": ("thailand", "bangkok", "phuket"),
+    "vietnam": ("vietnam", "hanoi", "saigon"),
+    "taiwan": ("taiwan", "taipei"),
+    "mexico": ("mexico",),
+    "brazil": ("brazil", "rio"),
+}
+
+
+def place_terms(wanted):
+    """Every spelling worth looking for, given what somebody typed."""
+    return PLACES.get(wanted, (wanted,))
+
+
 def reward_place(data, now, who, text):
-    """A stream shot somewhere in particular, matched on its own title."""
+    """A stream shot somewhere in particular, from the disk or from the shelf's
+    six hundred entries.
+
+    Matching only what is downloaded made this unanswerable: the disk holds two
+    files, so every country but those two was refused. The catalogue knows the
+    other six hundred, so a place it has is either played next or fetched for
+    it, and only a place nobody filmed comes back refunded.
+    """
     wanted = re.sub(r"[^\w ]", "", text or "").strip().lower()
     if len(wanted) < 3:
         return False, f"@{who} name a place, like Thailand — points refunded"
+    terms = place_terms(wanted)
     for path, _ in shelf():
-        if wanted in clean_title(path.name, SLUG).lower():
+        low = clean_title(path.name, SLUG).lower()
+        if any(t in low for t in terms):
             PICK.write_text(json.dumps({"name": path.name, "at": int(now)}))
             return True, f"@{who} next up: {clean_title(path.name, SLUG)[:52]}"
-    return False, f"@{who} nothing on the shelf from there — points refunded"
+    skip = supply.excluded(now)
+    for vid, title in supply.catalog_titles().items():
+        if any(t in title.lower() for t in terms) and vid not in skip:
+            with supply.REQUESTS.open("a") as fh:
+                fh.write("%s\n" % vid)
+            return True, (f"@{who} asked for {wanted}: fetching {title[:44]}, "
+                          f"it goes on when it lands")
+    return False, f"@{who} nothing from there in the library — points refunded"
 
 
 ACTIONS = {"skip": reward_skip, "stay": reward_stay,
