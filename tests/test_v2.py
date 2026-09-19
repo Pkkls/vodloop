@@ -293,24 +293,33 @@ if shutil.which("ffmpeg"):
 else:
     print("  (ffmpeg absent: real pass skipped)")
 
-print("cut: an hour at a time, drawn at random")
+print("cut: an hour at a time, taken from anywhere in the file")
 real_part = chan.PART_SECONDS
+a = pathlib.Path("a.mkv")
 try:
     chan.PART_SECONDS = 0
-    check("unsliced, a file airs whole", cut.window(pathlib.Path("a.mkv"), 18000) == (0.0, 18000))
+    check("unsliced, a file airs whole", cut.window(a, 18000) == (0.0, 18000, 0))
     chan.PART_SECONDS = 3600
     cut.PARTS.unlink(missing_ok=True)
-    check("the first slice starts at zero", cut.window(pathlib.Path("a.mkv"), 18000) == (0.0, 3600.0))
-    cut.set_part("a.mkv", 14400.0)
-    check("the last slice is exactly what is left",
-          cut.window(pathlib.Path("a.mkv"), 18000) == (14400.0, 3600.0))
-    check("and a stub is swallowed by it rather than aired alone",
-          cut.window(pathlib.Path("a.mkv"), 18120) == (14400.0, 3720.0),
-          cut.window(pathlib.Path("a.mkv"), 18120))
-    cut.set_part("a.mkv", 99999.0)
-    start, length = cut.window(pathlib.Path("a.mkv"), 18000)
-    check("control: an offset past the end still yields playable seconds",
-          length > 0 and start + length <= 18000, (start, length))
+    check("a five hour file holds five hours", cut.slices_in(18000) == 5)
+    check("and a stub is folded into the last, not counted as a sixth",
+          cut.slices_in(18120) == 5, cut.slices_in(18120))
+    check("control: a file shorter than a slice still holds one", cut.slices_in(600) == 1)
+    draws = {cut.window(a, 18000)[2] for _ in range(200)}
+    check("the hour is drawn from anywhere in the file, not from the start",
+          draws == {0, 1, 2, 3, 4}, sorted(draws))
+    starts = {cut.window(a, 18000)[0] for _ in range(200)}
+    check("and a draw lands where its hour begins",
+          starts == {0.0, 3600.0, 7200.0, 10800.0, 14400.0}, sorted(starts))
+    cut.set_part("a.mkv", {0, 1, 2, 4})
+    check("an hour already on the wire is never drawn again",
+          {cut.window(a, 18000)[2] for _ in range(50)} == {3})
+    cut.set_part("a.mkv", {0, 1, 2, 3})
+    check("the last hour runs to the end of the file, stub included",
+          cut.window(a, 18120) == (14400.0, 18120 - 14400.0, 4), cut.window(a, 18120))
+    cut.set_part("a.mkv", 10800.0)
+    check("the cursor the old format held reads as the hours it had played",
+          cut.played("a.mkv") == {0, 1, 2}, cut.played("a.mkv"))
     cut.PARTS.unlink(missing_ok=True)
 finally:
     chan.PART_SECONDS = real_part
@@ -327,17 +336,17 @@ if shutil.which("ffmpeg"):
         source, origin = cut.next_source()
         cut.run_job(source, origin, 0)
         back = chan.QUEUE / source.name
-        check("after its first slice it is back in the queue", back.exists())
-        check("at the mark where the next one starts",
-              cut.part_start(source.name) == 5.0, cut.part_start(source.name))
+        check("after its first hour it is back in the queue", back.exists())
+        check("with that hour written down and no other",
+              len(cut.played(source.name)) == 1, cut.played(source.name))
         check("and it has not been recorded as aired",
               not (chan.STATE / "aired.tsv").exists())
         source, origin = cut.next_source()
         cut.run_job(source, origin, 0)
-        check("the last slice retires it", (chan.AIRED / back.name).exists()
+        check("the last hour retires it", (chan.AIRED / back.name).exists()
               and "partvideo01" in (chan.STATE / "aired.tsv").read_text())
         check("control: nothing is left behind in the ledger",
-              cut.part_start(back.name) == 0.0)
+              cut.played(back.name) == set())
     finally:
         chan.PART_SECONDS, cut.TAIL_SECONDS = real_part, real_tail
 

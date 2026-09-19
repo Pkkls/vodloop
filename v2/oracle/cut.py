@@ -42,12 +42,27 @@ def ahead_seconds():
     return len(list(chan.CHUNKS.glob("*.ts"))) * chan.CHUNK_SECONDS
 
 
-def part_start(name):
-    """How far into a file its next slice begins. 0 for a file never aired."""
-    try:
-        return float(chan.read_json(PARTS, {}).get(name, 0.0))
-    except (TypeError, ValueError):
-        return 0.0
+def slices_in(seconds):
+    """How many slices a file of this length holds, the stub folded into the last.
+
+    A 5 h 02 file at an hour a slice holds five, the last one running 1 h 02,
+    rather than five and a two minute offcut nobody wants on the wire.
+    """
+    return max(1, int(seconds // chan.PART_SECONDS)) if chan.PART_SECONDS else 1
+
+
+def played(name):
+    """The slice numbers of a file already aired.
+
+    Tolerates the cursor this file used to hold, a single number saying how far
+    into the file the sequential pass had reached: everything before it played.
+    """
+    value = chan.read_json(PARTS, {}).get(name)
+    if isinstance(value, list):
+        return {int(n) for n in value}
+    if isinstance(value, (int, float)) and chan.PART_SECONDS:
+        return set(range(int(float(value) // chan.PART_SECONDS)))
+    return set()
 
 
 def set_part(name, value):
@@ -55,7 +70,7 @@ def set_part(name, value):
     if value is None:
         data.pop(name, None)
     else:
-        data[name] = value
+        data[name] = sorted(value) if isinstance(value, set) else value
     chan.write_json(PARTS, data)
 
 
@@ -133,22 +148,30 @@ def reject(source, reason, forever=True):
 
 
 def window(source, seconds):
-    """(start, length) of the slice to air now. The whole file when unsliced.
+    """(start, length, slice number) of the hour to air now, drawn at random.
 
-    The last slice swallows what would be left over, so a file never comes back
-    for a stub: with PART_SECONDS at an hour, a 5 h 02 stream airs as four
-    hours and one of 1 h 02, not four, one and two minutes.
+    kil, 2026-09-19: "tu pick aleatoirement dans la video, par exemple tu mets
+    directement a 3h en plein milieu". So an hour is taken from anywhere in the
+    file, not from where the last one stopped: the file is drawn at random and
+    the hour inside it is drawn at random too.
 
-    The marks are nominal. A copy can only start on a keyframe, so a junction
-    repeats up to one GOP, about two seconds on this material, and the error
-    does not accumulate because the next mark is measured from the last one and
-    not from what ffmpeg actually emitted. Making it exact would mean encoding.
+    An hour already aired is not drawn again. When every hour of a file has
+    been on the wire the file retires, which is what keeps a random draw from
+    becoming a loop. Unsliced, the whole file is the one slice.
+
+    The marks are nominal. A copy can only start on a keyframe, so a slice can
+    open up to one GOP early, about two seconds on this material. Making it
+    exact would mean encoding.
     """
     if not chan.PART_SECONDS:
-        return 0.0, seconds
-    start = min(part_start(source.name), max(0.0, seconds - TAIL_SECONDS))
-    left = max(0.0, seconds - start)
-    return start, left if left <= chan.PART_SECONDS + TAIL_SECONDS else float(chan.PART_SECONDS)
+        return 0.0, seconds, 0
+    total = slices_in(seconds)
+    free = [n for n in range(total) if n not in played(source.name)]
+    number = random.choice(free or list(range(total)))
+    start = float(number * chan.PART_SECONDS)
+    # the last slice runs to the end of the file, stub included
+    length = (seconds - start if number == total - 1 else float(chan.PART_SECONDS))
+    return start, max(0.0, length), number
 
 
 def run_job(source, origin, skip):
@@ -170,7 +193,7 @@ def run_job(source, origin, skip):
 
     audio = ["-c:a", "copy"] if chan.audio_copies(info) else \
         ["-c:a", "aac", "-b:a", "160k", "-ar", "44100", "-ac", "2"]
-    start, length = window(source, info["seconds"])
+    start, length, number = window(source, info["seconds"])
     # -ss and -t before -i: seeking on the input costs nothing on a copy, and
     # the same pair after it would decode everything up to the mark
     seek = ["-ss", f"{start:.3f}", "-t", f"{length:.3f}"] if chan.PART_SECONDS else []
@@ -222,12 +245,14 @@ def run_job(source, origin, skip):
         return True
     if job.returncode != 0:
         chan.log(f"decoupe interrompue apres {moved} chunks: {error[-200:]}")
-    if chan.PART_SECONDS and start + length < info["seconds"] - TAIL_SECONDS:
-        set_part(source.name, start + length)
-        source.replace(chan.QUEUE / source.name)
-        chan.log(f"fini {source.name}: {moved} chunks, reste a partir de "
-                 f"{(start + length) / 3600:.1f} h")
-        return True
+    if chan.PART_SECONDS:
+        done = played(source.name) | {number}
+        if len(done) < slices_in(info["seconds"]):
+            set_part(source.name, done)
+            source.replace(chan.QUEUE / source.name)
+            chan.log(f"fini {source.name}: {moved} chunks, "
+                     f"{len(done)}/{slices_in(info['seconds'])} heures diffusees")
+            return True
     set_part(source.name, None)
     settle(source, origin)
     chan.log(f"fini {source.name}: {moved} chunks")

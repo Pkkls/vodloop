@@ -187,40 +187,41 @@ fill() {
   rm -f "$dir/.part"/*
   cookies=""
   [ -s "$BASE/cookies.txt" ] && cookies="$BASE/cookies.txt"
-  # The floor matters as much as the ceiling. YouTube keeps some long VODs in
-  # avc1 at 360p only, "height<=720" takes that gladly, and the far end refuses
-  # it on arrival: three deliveries and six gigabytes were spent that way on
-  # 2026-09-18 before anything said so. Asking for 480 lines at least turns a
-  # wasted hour of the card into a refusal that costs seconds.
-  # A rung known to be over the cap is passed over rather than started and
-  # aborted mid-file: 1080p60 at 5250 Mo against a 5000 Mo cap burned a fetch
-  # slot twice on 2026-09-18, and the rung under it would have landed. Nothing
-  # under the channel's floor is ever taken, whatever the cap: kil, 2026-09-19,
-  # "720p minimum". A video that only exists below it is refused in forty-five
-  # seconds and Oracle is told, rather than fetched and thrown away on arrival.
-  fmt="bv*[vcodec^=avc1][height<=$maxh][height>=$minh][filesize_approx<${MAX_FILE_MB}M]+ba[acodec^=mp4a]"
-  fmt="$fmt/bv*[vcodec^=avc1][height<=$minh][height>=$minh][filesize_approx<${MAX_FILE_MB}M]+ba[acodec^=mp4a]"
-  # YouTube reports no size at all on some long VODs, which takes the rungs
-  # above out of the running and left an earlier version holding a 720p at
-  # 5247 Mo that --max-filesize aborted at the last megabytes (ViNWLOgsWTM,
-  # 32 minutes and a slot). This one is the floor itself, the smallest picture
-  # the channel accepts, with --max-filesize still the backstop under it.
-  fmt="$fmt/bv*[vcodec^=avc1][height<=$minh][height>=$minh]+ba[acodec^=mp4a]"
+  # Nothing under the channel's floor is ever taken, whatever the cap: kil,
+  # 2026-09-19, "720p minimum". Above it, https before m3u8 and a size term on
+  # filesize, for one reason each, both learned the hard way on 2026-09-19:
+  #   - m3u8 carries the same picture at a higher bitrate (4740k against 2960k
+  #     for ax0pvdRtxRI) and yt-dlp reassembles its fragments in memory, which
+  #     on 211 Mo of RAM is how yt-dlp gets killed mid-fetch.
+  #   - an https rung knows its exact size and publishes it as filesize, not as
+  #     filesize_approx, which is null there. Filtering on filesize_approx alone
+  #     excluded every exact rung and collapsed the ladder onto the last one.
+  fmt="bv*[vcodec^=avc1][protocol^=https][height<=$maxh][height>=$minh][filesize<${MAX_FILE_MB}M]+ba[acodec^=mp4a]"
+  fmt="$fmt/bv*[vcodec^=avc1][height<=$maxh][height>=$minh][filesize_approx<${MAX_FILE_MB}M]+ba[acodec^=mp4a]"
+  # a rung that publishes no size at all, with --max-filesize the backstop
+  fmt="$fmt/bv*[vcodec^=avc1][protocol^=https][height<=$minh][height>=$minh]+ba[acodec^=mp4a]"
+  # yt-dlp answers into a file of its own, not into the shared log: the verdict
+  # below was read from "tail -5 $LOG", which on 2026-09-19 still held the line
+  # of the run before it and told Oracle to blacklist ax0pvdRtxRI for a shape
+  # problem it does not have. A rejection is forever, so it is read from this
+  # run and nothing else.
+  run="$dir/.part/run.log"
   if yt-dlp --force-ipv4 ${cookies:+--cookies "$cookies"} --no-playlist --restrict-filenames \
        --no-progress --max-filesize "${MAX_FILE_MB}M" \
        -f "$fmt" \
        --merge-output-format mkv -P "$dir/.part" -o '%(title).80B-%(id)s.%(ext)s' \
-       "https://www.youtube.com/watch?v=$vid" >> "$LOG" 2>&1; then
+       "https://www.youtube.com/watch?v=$vid" > "$run" 2>&1; then
     got=$(ls "$dir/.part"/*-"$vid".mkv 2>/dev/null | head -1)
   else
     got=""
     # A video that does not exist in the shape the wire needs never will, so
     # the far side is told once and stops offering it.
-    if tail -5 "$LOG" | grep -q "Requested format is not available"; then
+    if grep -q "Requested format is not available" "$run"; then
       $OSSH "$ORACLE" "printf '%s\t%s\tavc1 sous %s lignes\n' $(date +%s) '$vid' '$minh' >> $V2/$chan/state/rejected.tsv" 2>/dev/null
       log "$chan: $vid n'existe pas en avc1 a $minh lignes ou plus, signale a Oracle"
     fi
   fi
+  cat "$run" >> "$LOG" 2>/dev/null
   if [ -n "$got" ] && [ -f "$got" ]; then
     kb=$(( $(bytes "$got") / 1024 ))
     mv "$got" "$dir/"
