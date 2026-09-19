@@ -26,6 +26,7 @@ import time
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 
 import chan  # noqa: E402
+import cut  # noqa: E402
 
 OFFSET = chan.STATE / "offset"
 # what is on the wire this second, written here because only this loop knows.
@@ -122,6 +123,11 @@ def note_on_air(chunk):
         if not found:
             return
         row = {"source": found[0], "number": found[1], "seconds": found[2]}
+        # this is the moment a chunk is spent: it is going out. Written here
+        # and not by the cutter, so minutes that a skip throws away before
+        # they are sent stay unseen and come back in the draw.
+        if len(found) >= 4:
+            cut.record_units(found[0], [int(found[3])])
     keys = ("source", "number", "filler")
     was = chan.read_json(ONAIR, {})
     if [was.get(k) for k in keys] == [row.get(k) for k in keys]:

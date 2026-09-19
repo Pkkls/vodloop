@@ -383,29 +383,63 @@ try:
     check("and a stub is folded into the last, not counted as a sixth",
           cut.slices_in(18120) == 5, cut.slices_in(18120))
     check("control: a file shorter than a slice still holds one", cut.slices_in(600) == 1)
-    draws = {cut.window(a, 18000)[2] for _ in range(200)}
-    check("the hour is drawn from anywhere in the file, not from the start",
-          draws == {0, 1, 2, 3, 4}, sorted(draws))
-    starts = {cut.window(a, 18000)[0] for _ in range(200)}
-    check("and a draw lands where its hour begins",
+    span = cut.per_slice()
+    check("the ledger counts in chunks, twelve to an aired hour",
+          (cut.unit_seconds(), span, cut.units_in(18000)) == (300, 12, 60),
+          (cut.unit_seconds(), span, cut.units_in(18000)))
+    starts = {cut.window(a, 18000)[0] for _ in range(300)}
+    check("the block is drawn from anywhere in the file, not from the start",
           starts == {0.0, 3600.0, 7200.0, 10800.0, 14400.0}, sorted(starts))
+    check("and it is a whole hour wherever it lands",
+          {cut.window(a, 18000)[1] for _ in range(50)} == {3600.0})
     cut.set_part("a.mkv", {0, 1, 2, 4})
-    check("an hour already on the wire is never drawn again",
-          {cut.window(a, 18000)[2] for _ in range(50)} == {3})
+    check("a block already on the wire is never drawn again",
+          {cut.window(a, 18000)[2] for _ in range(50)} == {3 * span},
+          {cut.window(a, 18000)[2] for _ in range(50)})
     cut.set_part("a.mkv", {0, 1, 2, 3})
-    check("the last hour runs to the end of the file, stub included",
-          cut.window(a, 18120) == (14400.0, 18120 - 14400.0, 4), cut.window(a, 18120))
+    check("the last block runs to the end of the file, stub included",
+          cut.window(a, 18120) == (14400.0, 18120 - 14400.0, 4 * span),
+          cut.window(a, 18120))
     cut.set_part("a.mkv", {0, 1, 2, 3, 4})
-    check("a file with every hour spent offers no window at all",
+    check("a file with every minute spent offers no window at all",
           cut.window(a, 18000) is None, cut.window(a, 18000))
-    check("but a resume gets back the hour it was cutting, spent or not",
-          cut.window(a, 18000, 2) == (7200.0, 3600.0, 2), cut.window(a, 18000, 2))
+    check("but a resume gets back the block it was cutting, spent or not",
+          cut.window(a, 18000, 2 * span) == (7200.0, 3600.0, 2 * span),
+          cut.window(a, 18000, 2 * span))
+    print("  -- and the minutes a skip never showed come back")
+    cut.PARTS.unlink(missing_ok=True)
+    cut.HOURS.unlink(missing_ok=True)
+    cut.UNITS.unlink(missing_ok=True)
+    # an hour was drawn at 2 h and skipped ten minutes in: two chunks went out
+    cut.record_units("a.mkv", [24, 25])
+    free = set(range(cut.units_in(18000))) - cut.played("a.mkv")
+    check("only what was sent is spent, not the whole hour it came from",
+          len(free) == 58 and 26 in free and 24 not in free, sorted(free)[:4])
+    seen = {cut.window(a, 18000)[:2] for _ in range(300)}
+    check("the minutes nobody saw are drawn again, starting where it stopped",
+          (7800.0, 3600.0) in seen, sorted(seen))
+    check("control: and never the two minutes that did go out",
+          all(start >= 7800.0 or start + length <= 7200.0 for start, length in seen),
+          sorted(seen))
+    cut.UNITS.unlink(missing_ok=True)
     cut.set_part("a.mkv", 10800.0)
-    check("the cursor the old format held reads as the hours it had played",
-          cut.played("a.mkv") == {0, 1, 2}, cut.played("a.mkv"))
+    check("the cursor the old format held reads as the chunks it had played",
+          cut.played("a.mkv") == set(range(3 * span)), len(cut.played("a.mkv")))
     cut.PARTS.unlink(missing_ok=True)
 finally:
     chan.PART_SECONDS = real_part
+
+def send_everything():
+    """Play the feeder: spend every chunk waiting, the way feed.note_on_air
+    does as it puts each one on the wire."""
+    book = cut.ledger()
+    for name in sorted(q.name for q in chan.CHUNKS.glob("*.ts")):
+        row = chan.read_json(cut.CHUNKMAP, {}).get(name)
+        if row and len(row) >= 4:
+            cut.record_units(row[0], [int(row[3])], book)
+            book = cut.ledger()
+        (chan.CHUNKS / name).unlink(missing_ok=True)
+
 
 if shutil.which("ffmpeg"):
     print("cut: a sliced file goes back in the queue until it is spent")
@@ -416,8 +450,12 @@ if shutil.which("ffmpeg"):
             stale.unlink()
         (chan.STATE / "aired.tsv").unlink(missing_ok=True)
         make("3-Longue_video-partvideo01.mkv", 30)
+        cut.UNITS.unlink(missing_ok=True)
         source, origin = cut.next_source()
         cut.run_job(source, origin, 0)
+        check("nothing is spent until the feeder sends it",
+              cut.played(source.name) == set(), cut.played(source.name))
+        send_everything()
         back = chan.QUEUE / source.name
         check("after its first hour it is back in the queue", back.exists())
         check("with that hour written down and no other",
@@ -426,6 +464,8 @@ if shutil.which("ffmpeg"):
               not (chan.STATE / "aired.tsv").exists())
         source, origin = cut.next_source()
         cut.run_job(source, origin, 0)
+        send_everything()
+        cut.next_source()   # the sweep is where a fully spent file retires now
         check("the last hour retires it", (chan.AIRED / back.name).exists()
               and "partvideo01" in (chan.STATE / "aired.tsv").read_text())
         check("control: the ledger keeps every hour, so none comes back",
@@ -581,7 +621,8 @@ check("a file name becomes something a viewer can read",
 check("control: a name with neither prefix nor id survives it",
       bot.pretty("clip.mkv") == "clip")
 chan.write_json(bot.feed.ONAIR, {"source": "1789-Un_Titre-dQw4w9WgXcQ.mkv",
-                                 "number": 2, "seconds": 18000, "at": time.time() - 900})
+                                 "number": 24, "seconds": 18000,
+                                 "at": time.time() - 900})
 was = chan.PART_SECONDS
 chan.PART_SECONDS = 3600
 live = bot.playing()
@@ -688,7 +729,7 @@ try:
     chan.PART_SECONDS = 3600
     chan.write_json(bot.feed.ONAIR,
                     {"source": "1789819373-2026-09-15_SOLO_in_Thailand-k0156a4c001.mkv",
-                     "number": 1, "seconds": 14400, "at": time.time()})
+                     "number": 12, "seconds": 14400, "at": time.time()})
     title = bot.wanted_title()
     check("the handle ends the title", title.endswith("@nanatty"), title)
     check("and the hour is in it", "hour 2/4" in title, title)
@@ -840,7 +881,7 @@ check("serving it puts the chunks on the wire and says what comes next",
       (chan.read_json(cut.PRIMED, {}), chan.read_json(cut.PICK, {})))
 check("and the chunk carries the hour it came from, for the title",
       chan.read_json(cut.CHUNKMAP, {}).get("0000009001.ts")
-      == ["7-Tenue-preteAAAAAAA.mkv", 2, 15654.0],
+      == ["7-Tenue-preteAAAAAAA.mkv", 2, 15654.0, 2],
       chan.read_json(cut.CHUNKMAP, {}))
 check("control: nothing is left held afterwards", cut.ready_set() is None)
 cut.record_hour("7-Tenue-preteAAAAAAA.mkv", 5)
@@ -874,24 +915,37 @@ for stale in chan.media(chan.CURRENT):
     stale.unlink()
 
 
-print("cut: an hour is spent for good, whatever happens to the file")
-cut.HOURS.unlink(missing_ok=True)
-cut.PARTS.unlink(missing_ok=True)
-cut.record_hour("1789819373-Un_Titre-dQw4w9WgXcQ.mkv", 2)
-check("an hour on the wire is written down",
-      cut.played("1789819373-Un_Titre-dQw4w9WgXcQ.mkv") == {2})
-check("the same file fetched again under a new name remembers it",
-      cut.played("1789999999-Un_Titre_Autre_Nom-dQw4w9WgXcQ.mkv") == {2},
-      cut.played("1789999999-Un_Titre_Autre_Nom-dQw4w9WgXcQ.mkv"))
-cut.record_hour("1789819373-Un_Titre-dQw4w9WgXcQ.mkv", 2)
-check("control: written twice it is still one hour",
-      cut.played("1789819373-Un_Titre-dQw4w9WgXcQ.mkv") == {2})
+print("cut: a minute is spent for good, whatever happens to the file")
 was = chan.PART_SECONDS
 chan.PART_SECONDS = 3600
-check("a file whose every hour is spent offers nothing",
+span = cut.per_slice()
+cut.HOURS.unlink(missing_ok=True)
+cut.UNITS.unlink(missing_ok=True)
+cut.PARTS.unlink(missing_ok=True)
+cut.record_units("1789819373-Un_Titre-dQw4w9WgXcQ.mkv", [26])
+check("a chunk on the wire is written down",
+      cut.played("1789819373-Un_Titre-dQw4w9WgXcQ.mkv") == {26})
+check("the same file fetched again under a new name remembers it",
+      cut.played("1789999999-Un_Titre_Autre_Nom-dQw4w9WgXcQ.mkv") == {26},
+      cut.played("1789999999-Un_Titre_Autre_Nom-dQw4w9WgXcQ.mkv"))
+cut.record_units("1789819373-Un_Titre-dQw4w9WgXcQ.mkv", [26])
+check("control: written twice it is still one chunk",
+      cut.played("1789819373-Un_Titre-dQw4w9WgXcQ.mkv") == {26})
+cut.UNITS.unlink(missing_ok=True)
+cut.record_hour("1789819373-Un_Titre-dQw4w9WgXcQ.mkv", 2)
+check("a whole block spent at once covers its twelve chunks",
+      cut.played("1789819373-Un_Titre-dQw4w9WgXcQ.mkv") == set(range(24, 36)),
+      sorted(cut.played("1789819373-Un_Titre-dQw4w9WgXcQ.mkv")))
+check("the hour recorded before the change still reads as its twelve chunks",
       cut.unaired(pathlib.Path("1789819373-Un_Titre-dQw4w9WgXcQ.mkv"), cut.ledger(),
-                  {"1789819373-Un_Titre-dQw4w9WgXcQ.mkv:0": 10800}) == {0, 1},
-      "les heures 0 et 1 restent, la 2 est prise")
+                  {"1789819373-Un_Titre-dQw4w9WgXcQ.mkv:0": 10800})
+      == set(range(2 * span)),
+      "les chunks des heures 0 et 1 restent, ceux de la 2 sont pris")
+check("control: and a chunk held in the cutter's buffer is not offered either",
+      cut.unaired(pathlib.Path("1789819373-Un_Titre-dQw4w9WgXcQ.mkv"), cut.ledger(),
+                  {"1789819373-Un_Titre-dQw4w9WgXcQ.mkv:0": 10800},
+                  {"dQw4w9WgXcQ": {0, 1}}) == set(range(2, 2 * span)),
+      "les deux premiers chunks sont deja coupes, pas encore envoyes")
 chan.PART_SECONDS = was
 cut.HOURS.unlink(missing_ok=True)
 

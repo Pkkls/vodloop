@@ -165,28 +165,38 @@ def playing():
     number = int(live.get("number") or 0)
     started = float(live.get("at") or 0)
     return {"name": live["source"], "title": pretty(live["source"]),
-            "hour": number + 1, "hours": cut.slices_in(seconds) if seconds else 1,
+            "hour": number // cut.per_slice() + 1,
+            "hours": cut.slices_in(seconds) if seconds else 1,
             "started": started,
             "elapsed": max(0.0, time.time() - started) if started else 0.0,
             "vid": chan.video_id(live["source"]) or ""}
 
 
 def shelf():
-    """Files that still hold an hour nobody has seen, queue first then reserve."""
+    """Files that still hold time nobody has seen, queue first then reserve.
+
+    The second value is hours, rounded down, because that is what the chat
+    counts in. The ledger counts in chunks, so a file holding forty unseen
+    minutes reads as nought hours here and is still perfectly drawable.
+    """
     book = cut.ledger()
     durations = chan.read_json(chan.STATE / "durations.json", {})
-    out = []
+    held, out = cut.reserved(), []
     for folder in (chan.QUEUE, chan.AIRED):
         for path in chan.media(folder):
-            free = cut.unaired(path, book, durations)
+            free = cut.unaired(path, book, durations, held)
             if free:
-                out.append((path, len(free)))
+                out.append((path, len(free) * cut.unit_seconds() / 3600.0))
     out.sort(key=lambda row: (not cut.from_board(row[0]), row[0].name))
     return out
 
 
 def unseen_hours():
     return sum(hours for _, hours in shelf())
+
+
+def unseen_seconds():
+    return unseen_hours() * 3600.0
 
 
 # --- state -----------------------------------------------------------------
@@ -641,7 +651,7 @@ def reward_stay(data, now, who, text):
     book, durations = cut.ledger(), chan.read_json(chan.STATE / "durations.json", {})
     for folder in (chan.QUEUE, chan.AIRED):
         path = folder / live["name"]
-        if path.exists() and cut.unaired(path, book, durations):
+        if path.exists() and cut.unaired(path, book, durations, cut.reserved()):
             PICK.write_text(json.dumps({"name": live["name"], "at": int(now)}))
             return True, f"@{who} bought another hour of {live['title'][:44]}"
     return False, f"@{who} this one has no hours left — points refunded"

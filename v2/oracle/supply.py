@@ -358,7 +358,7 @@ def main(argv):
     for p in chan.media(chan.AIRED):
         try:
             st = p.stat()
-            spent = not cut.unaired(p, book, durations)
+            spent = not cut.unaired(p, book, durations, cut.reserved())
             aired.append((p, st.st_size, (0 if spent else 1, st.st_mtime)))
         except OSError:
             continue
@@ -367,7 +367,7 @@ def main(argv):
     # how close the channel is to a loading card, so it is the one the board
     # paces itself on.
     runway = queued + len(list(chan.CHUNKS.glob("*.ts"))) * chan.CHUNK_SECONDS
-    runway += sum(len(cut.unaired(p, book, durations)) * chan.PART_SECONDS
+    runway += sum(len(cut.unaired(p, book, durations)) * cut.unit_seconds()
                   for p in chan.media(chan.AIRED)) if chan.PART_SECONDS else 0
     other = sum(chan.tree_bytes(f) for f in (chan.CURRENT, chan.CHUNKS, chan.UPLOAD))
     free = shutil.disk_usage(chan.ROOT).free

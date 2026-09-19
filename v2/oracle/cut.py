@@ -65,6 +65,14 @@ PARTS = chan.STATE / "parts.json"
 # every hour ever put on the wire: epoch, video id, hour number. Appended to and
 # never rewritten, because what the wire has shown cannot be taken back.
 HOURS = chan.STATE / "hours.tsv"
+# the same ledger at the granularity the wire actually works in. An hour is
+# spent the moment its first chunk goes out, so skipping ten minutes in used
+# to destroy fifty that nobody had seen and nobody ever would. A chunk is
+# spent when it is sent, so a skip now costs what was watched and the rest
+# of the hour goes back in the draw. Separate file on purpose: hour 3 and
+# chunk 3 are the same three and nothing may confuse them. Old rows keep
+# being read as hours, twelve chunks each, so this cannot un-spend anything.
+UNITS = chan.STATE / "units.tsv"
 # which hour of which file each waiting chunk came from. The cutter is an hour
 # ahead of the wire, so this is the only way the feeder, and through it the
 # title, can say what is actually going out rather than what is being prepared.
@@ -83,21 +91,46 @@ def slices_in(seconds):
     """How many slices a file of this length holds, the stub folded into the last.
 
     A 5 h 02 file at an hour a slice holds five, the last one running 1 h 02,
-    rather than five and a two minute offcut nobody wants on the wire.
+    rather than five and a two minute offcut nobody wants on the wire. This is
+    still what a title counts in; the ledger counts in chunks.
     """
     return max(1, int(seconds // chan.PART_SECONDS)) if chan.PART_SECONDS else 1
 
 
-def ledger():
-    """{video id: {hour number: when it was on the wire}}, the whole history.
+def unit_seconds():
+    """The ledger's grain: a chunk, or the whole block when a block is the
+    smaller of the two. They only invert where a slice is seconds long, which
+    is the tests, and the ledger must not have a grain coarser than what it
+    is measuring."""
+    return min(chan.CHUNK_SECONDS, chan.PART_SECONDS) if chan.PART_SECONDS else 0
 
-    Reads the two formats that came before it, so no hour is forgotten across
-    the change: a list of hour numbers, and before that a cursor saying how far
-    into the file the sequential pass had reached.
+
+def units_in(seconds):
+    """How many grains a file of this length holds, the stub folded in."""
+    if not chan.PART_SECONDS:
+        return 1
+    return max(1, int(seconds // unit_seconds()))
+
+
+def per_slice():
+    """Grains in one aired block."""
+    if not chan.PART_SECONDS:
+        return 1
+    return max(1, int(chan.PART_SECONDS // unit_seconds()))
+
+
+def ledger():
+    """{video id: {chunk number: when it was on the wire}}, the whole history.
+
+    Reads every shape that came before it, so nothing is forgotten and nothing
+    is handed back as unseen: an hour written by the old cutter counts as the
+    twelve chunks it covered, a list of hour numbers the same, and before that
+    a cursor saying how far the sequential pass had reached. Each older shape
+    can only mark more spent, never less, which is the direction to be wrong in.
     """
-    out = {}
+    out, span = {}, per_slice()
     try:
-        for line in HOURS.read_text().splitlines():
+        for line in UNITS.read_text().splitlines():
             fields = line.split("\t")
             if len(fields) >= 3:
                 try:
@@ -106,41 +139,84 @@ def ledger():
                     continue
     except OSError:
         pass
+    try:
+        for line in HOURS.read_text().splitlines():
+            fields = line.split("\t")
+            if len(fields) >= 3:
+                try:
+                    when, first = int(fields[0]), int(fields[2]) * span
+                except ValueError:
+                    continue
+                for unit in range(first, first + span):
+                    out.setdefault(fields[1], {}).setdefault(unit, when)
+    except OSError:
+        pass
     for name, value in chan.read_json(PARTS, {}).items():
         vid = chan.video_id(name) or name
         if isinstance(value, list):
-            numbers = [int(n) for n in value]
+            hours = [int(h) for h in value]
         elif isinstance(value, (int, float)) and chan.PART_SECONDS:
-            numbers = list(range(int(float(value) // chan.PART_SECONDS)))
+            hours = list(range(int(float(value) // chan.PART_SECONDS)))
         else:
             continue
-        for n in numbers:
-            out.setdefault(vid, {}).setdefault(n, 0)
+        for hour in hours:
+            for unit in range(hour * span, (hour + 1) * span):
+                out.setdefault(vid, {}).setdefault(unit, 0)
     return out
 
 
 def played(name, book=None):
-    """The hour numbers of this video that have already been on the wire."""
+    """The chunk numbers of this video that have already been on the wire."""
     book = ledger() if book is None else book
     return set(book.get(chan.video_id(name) or str(name), {}))
 
 
-def remember_chunk(chunk, source, number, seconds):
-    """Tie a chunk to the hour it came from, and forget the ones already sent."""
+def reserved(folder=None):
+    """{video id: {chunk number}} for everything cut but not yet sent.
+
+    The cutter runs an hour ahead of the wire and nothing it cuts is spent
+    until the feeder sends it, so without this the draw would hand it the
+    same minutes twice. A skip deletes those chunks, which releases them.
+    """
+    out = {}
+    alive = {q.name for q in (folder or chan.CHUNKS).glob("*.ts")}
+    for name, row in chan.read_json(CHUNKMAP, {}).items():
+        if name in alive and len(row) >= 4:
+            out.setdefault(chan.video_id(row[0]) or row[0], set()).add(int(row[3]))
+    return out
+
+
+def remember_chunk(chunk, source, number, seconds, unit=0):
+    """Tie a chunk to the hour and the minute it came from, and forget the sent."""
     data = chan.read_json(CHUNKMAP, {})
-    data[chunk] = [source, number, seconds]
+    data[chunk] = [source, number, seconds, unit]
     alive = {p.name for p in chan.CHUNKS.glob("*.ts")} | {chunk}
     chan.write_json(CHUNKMAP, {k: v for k, v in data.items() if k in alive})
 
 
-def record_hour(name, number):
-    """Write an hour down once. A resume walks the same branch a second time."""
+def record_units(name, units, book=None):
+    """Write down the chunks that have been on the wire. Called by the feeder.
+
+    Once each: a resume walks the same branch a second time, and the feeder
+    may see the same chunk twice if it restarts mid-send.
+    """
     vid = chan.video_id(name) or str(name)
-    if number in ledger().get(vid, {}):
+    seen = set(ledger().get(vid, {}) if book is None else book.get(vid, {}))
+    fresh = [u for u in units if u not in seen]
+    if not fresh:
         return
     chan.STATE.mkdir(parents=True, exist_ok=True)
-    with HOURS.open("a") as fh:
-        fh.write("%d\t%s\t%d\n" % (int(time.time()), chan.video_id(name) or name, number))
+    now = int(time.time())
+    with UNITS.open("a") as fh:
+        for unit in fresh:
+            fh.write("%d\t%s\t%d\n" % (now, vid, unit))
+
+
+def record_hour(name, number):
+    """Spend a whole block without airing it. Only for a slice that failed to
+    cut, so the draw does not come back to it for ever."""
+    span = per_slice()
+    record_units(name, range(number * span, (number + 1) * span))
 
 
 def set_part(name, value):
@@ -162,7 +238,7 @@ def remaining(path, seconds):
     """
     if not chan.PART_SECONDS:
         return seconds
-    return max(0.0, seconds - len(played(pathlib.Path(path).name)) * chan.PART_SECONDS)
+    return max(0.0, seconds - len(played(pathlib.Path(path).name)) * unit_seconds())
 
 
 # a part id minted by kick.part_id: k, eight hex of the recording, its number
@@ -206,12 +282,15 @@ def from_board(path):
     return not KICK_ID.match(chan.video_id(path) or "")
 
 
-def unaired(path, book, durations):
-    """The hours of this file that have never been on the wire."""
+def unaired(path, book, durations, held=None):
+    """The chunks of this file that have never been on the wire and are not
+    already cut and waiting to go."""
     seconds = chan.duration(path, durations)
     if not seconds:
         return set()
-    return set(range(slices_in(seconds))) - played(path.name, book)
+    vid = chan.video_id(path.name) or path.name
+    taken = played(path.name, book) | set((held or {}).get(vid, ()))
+    return set(range(units_in(seconds))) - taken
 
 
 def next_source():
@@ -245,9 +324,14 @@ def next_source():
     # where supply.py looks for room, so one left there would hold its gigabytes
     # until somebody noticed. It belongs in the reserve, where eviction can see
     # it and where it is still the last thing to go while it holds anything.
+    held = reserved()
     for spent in chan.media(chan.QUEUE):
-        if not unaired(spent, book, durations) and chan.duration(spent, durations):
-            spent.replace(chan.AIRED / spent.name)
+        if not unaired(spent, book, durations, held) and chan.duration(spent, durations):
+            # through settle, not a bare move: aired.tsv is what keeps the id
+            # out of the catalogue, and the feeder spends the last chunk long
+            # after the job that cut it has finished, so this sweep is now the
+            # only place a file is seen to be done.
+            settle(spent, "queue")
             chan.log(f"entierement diffuse, passe en reserve: {spent.name[:60]}")
     just_played = last_recording(book)
     wanted = chan.read_json(PICK, {}).get("name")
@@ -255,11 +339,11 @@ def next_source():
     if wanted:
         for folder in (chan.QUEUE, chan.AIRED):
             path = folder / wanted
-            if path.exists() and unaired(path, book, durations):
+            if path.exists() and unaired(path, book, durations, held):
                 chan.log(f"choix du chat: {wanted[:60]}")
                 return claim(path, "chat")
         chan.log(f"choix du chat introuvable ou deja vu: {str(wanted)[:60]}")
-    path, origin = draw(book, durations, just_played)
+    path, origin = draw(book, durations, just_played, held=held)
     if path is not None:
         return claim(path, origin)
 
@@ -271,11 +355,11 @@ def next_source():
     return None, None
 
 
-def draw(book, durations, just_played, avoid=()):
+def draw(book, durations, just_played, avoid=(), held=None):
     """(path, origin) the draw would take, moving nothing. None when spent."""
     for folder, origin in ((chan.QUEUE, "queue"), (chan.AIRED, "reserve")):
         fresh = [p for p in chan.media(folder)
-                 if p.name not in avoid and unaired(p, book, durations)
+                 if p.name not in avoid and unaired(p, book, durations, held)
                  and not (chan.NO_KICK and not from_board(p))]
         if not fresh:
             continue
@@ -354,30 +438,56 @@ def window(source, seconds, number=None):
     file, not from where the last one stopped: the file is drawn at random and
     the hour inside it is drawn at random too.
 
-    An hour already aired is not drawn again. When every hour of a file has
+    A minute already aired is not drawn again. When every minute of a file has
     been on the wire the file retires, which is what keeps a random draw from
     becoming a loop. Unsliced, the whole file is the one slice.
 
-    The marks are nominal. A copy can only start on a keyframe, so a slice can
+    The block is measured in chunks, not in hours, so a skipped hour leaves
+    its unwatched minutes behind instead of burning them: they are still one
+    run of consecutive chunks and come back as a shorter block later. The
+    number returned is the first chunk, and everything downstream counts in
+    chunks with it.
+
+    The marks are nominal. A copy can only start on a keyframe, so a block can
     open up to one GOP early, about two seconds on this material. Making it
     exact would mean encoding.
     """
     if not chan.PART_SECONDS:
         return 0.0, seconds, 0
-    total = slices_in(seconds)
+    total, span = units_in(seconds), per_slice()
+    count = span
     if number is None:
-        # No fallback to the least recently aired hour. That branch is what put
-        # hour 0 of one file back on the wire on 2026-09-19 at 16:03, four
+        # No fallback to the least recently aired block. That branch is what
+        # put hour 0 of one file back on the wire on 2026-09-19 at 16:03, four
         # hours after hour 0 of the same file, which is the one thing this
         # channel promises not to do. Nothing unseen means the file is spent,
         # and a spent file retires instead of going round again.
-        free = [n for n in range(total) if n not in played(source.name)]
+        free = sorted(set(range(total)) - played(source.name))
         if not free:
             return None
-        number = random.choice(free)
-    start = float(number * chan.PART_SECONDS)
-    # the last slice runs to the end of the file, stub included
-    length = (seconds - start if number == total - 1 else float(chan.PART_SECONDS))
+        runs, run = [], [free[0]]
+        for unit in free[1:]:
+            if unit == run[-1] + 1:
+                run.append(unit)
+            else:
+                runs.append(run)
+                run = [unit]
+        runs.append(run)
+        # a run long enough to fill a block beats a five minute offcut, so
+        # those go first while any are left and the offcuts fill in at the end
+        chosen = random.choice([r for r in runs if len(r) >= span] or runs)
+        # and the block is taken from anywhere inside the run, not from its
+        # start. kil, 2026-09-19: "tu pick aleatoirement dans la video, par
+        # exemple tu mets directement a 3h en plein milieu". With one unseen
+        # run covering the whole file, taking its head would open every file
+        # at its first minute.
+        steps = max(1, (len(chosen) - span) // span + 1)
+        number = chosen[0] + random.randrange(steps) * span
+        count = min(span, chosen[-1] + 1 - number)
+    start = float(number * unit_seconds())
+    # the last grain runs to the end of the file, stub included
+    length = (seconds - start if number + count >= total
+              else float(count * unit_seconds()))
     return start, max(0.0, length), number
 
 
@@ -469,8 +579,8 @@ def prime():
     chan.write_json(READY_JOB, {"source": source.name, "number": number,
                                 "seconds": info["seconds"], "chunks": kept,
                                 "at": int(time.time())})
-    chan.log(f"tenu pret: {source.name[:50]} heure {number + 1}, "
-             f"{len(kept)} chunks")
+    chan.log(f"tenu pret: {source.name[:50]} heure "
+             f"{number // per_slice() + 1} (chunk {number}), {len(kept)} chunks")
 
 
 def serve_ready():
@@ -493,15 +603,16 @@ def serve_ready():
         if not piece.exists():
             break
         piece.replace(chan.CHUNKS / name)
-        remember_chunk(name, source, number, held["seconds"])
+        remember_chunk(name, source, number, held["seconds"], number + len(moved))
         moved.append(name)
     clear_ready()
     if not moved:
         return False
     PICK.write_text(json.dumps({"name": source, "at": int(time.time())}))
     chan.write_json(PRIMED, {"source": source, "number": number, "done": len(moved)})
-    chan.log(f"saut servi par l'heure tenue prete: {source[:50]} "
-             f"heure {number + 1}, {len(moved)} chunks deja sur le fil")
+    chan.log(f"saut servi par l'heure tenue prete: {source[:50]} heure "
+             f"{number // per_slice() + 1} (chunk {number}), "
+             f"{len(moved)} chunks deja sur le fil")
     return True
 
 
@@ -588,11 +699,13 @@ def run_job(source, origin, skip, number=None):
             if moved < skip:
                 piece.unlink(missing_ok=True)
             else:
-                if moved == skip:
-                    record_hour(source.name, number)
                 chunk = f"{next_seq():010d}.ts"
                 piece.replace(chan.CHUNKS / chunk)
-                remember_chunk(chunk, source.name, number, info["seconds"])
+                # nothing is written to the ledger here: a chunk is spent when
+                # the feeder sends it, and one that a skip throws away was
+                # never seen, so its minutes go back in the draw
+                remember_chunk(chunk, source.name, number, info["seconds"],
+                               number + moved)
                 chan.write_json(JOB, {"source": source.name, "origin": origin,
                                       "done": moved + 1, "number": number,
                                       "seconds": info["seconds"], "started": started_at})
@@ -636,8 +749,9 @@ def run_job(source, origin, skip, number=None):
     if chan.PART_SECONDS:
         if moved <= skip:
             record_hour(source.name, number)  # nothing aired, but never retry it blind
-        done = played(source.name)
-        total = slices_in(info["seconds"])
+        done = played(source.name) | set(reserved().get(
+            chan.video_id(source.name) or source.name, ()))
+        total = units_in(info["seconds"])
         if len(done) < total:
             source.replace(chan.QUEUE / source.name)
             chan.log(f"fini {source.name}: {moved} chunks, {len(done)}/{total} heures diffusees")
