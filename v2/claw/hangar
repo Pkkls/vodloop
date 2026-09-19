@@ -158,6 +158,9 @@ fill() {
   want=$($OSSH "$ORACLE" "cat $V2/$chan/state/want.json" 2>/dev/null) || return 1
   maxh=$(num "$(field maxh "$want")")
   case "$maxh" in 1080 | 720 | 480) ;; *) maxh=720 ;; esac
+  minh=$(num "$(field minh "$want")")
+  case "$minh" in 1080 | 720 | 480) ;; *) minh=480 ;; esac
+  [ "$minh" -le "$maxh" ] || minh=$maxh
   cands=$($OSSH "$ORACLE" "cat $V2/$chan/state/candidates.tsv" 2>/dev/null) || return 1
   cands=$(printf '%s\n' "$cands" | head -n "$RECENT")
   # A channel with an empty queue is on its standby clip right now, and the
@@ -191,17 +194,18 @@ fill() {
   # wasted hour of the card into a refusal that costs seconds.
   # A rung known to be over the cap is passed over rather than started and
   # aborted mid-file: 1080p60 at 5250 Mo against a 5000 Mo cap burned a fetch
-  # slot twice on 2026-09-18, and the 720p rung under it would have landed. The
-  # last rung carries no size filter, because YouTube often reports no size at
-  # all and --max-filesize is still the backstop under it.
-  fmt="bv*[vcodec^=avc1][height<=$maxh][height>=480][filesize_approx<${MAX_FILE_MB}M]+ba[acodec^=mp4a]"
-  fmt="$fmt/bv*[vcodec^=avc1][height<=720][height>=480][filesize_approx<${MAX_FILE_MB}M]+ba[acodec^=mp4a]"
-  # YouTube reports no size at all on some long VODs, which takes the two rungs
-  # above out of the running and left this one holding a 720p at 5247 Mo that
-  # --max-filesize then aborted at the last megabytes (ViNWLOgsWTM, 32 minutes
-  # and a slot, 2026-09-19). So the rung that runs without a size term is the
-  # smallest one, where the cap is not in reach.
-  fmt="$fmt/bv*[vcodec^=avc1][height<=480][height>=480]+ba[acodec^=mp4a]"
+  # slot twice on 2026-09-18, and the rung under it would have landed. Nothing
+  # under the channel's floor is ever taken, whatever the cap: kil, 2026-09-19,
+  # "720p minimum". A video that only exists below it is refused in forty-five
+  # seconds and Oracle is told, rather than fetched and thrown away on arrival.
+  fmt="bv*[vcodec^=avc1][height<=$maxh][height>=$minh][filesize_approx<${MAX_FILE_MB}M]+ba[acodec^=mp4a]"
+  fmt="$fmt/bv*[vcodec^=avc1][height<=$minh][height>=$minh][filesize_approx<${MAX_FILE_MB}M]+ba[acodec^=mp4a]"
+  # YouTube reports no size at all on some long VODs, which takes the rungs
+  # above out of the running and left an earlier version holding a 720p at
+  # 5247 Mo that --max-filesize aborted at the last megabytes (ViNWLOgsWTM,
+  # 32 minutes and a slot). This one is the floor itself, the smallest picture
+  # the channel accepts, with --max-filesize still the backstop under it.
+  fmt="$fmt/bv*[vcodec^=avc1][height<=$minh][height>=$minh]+ba[acodec^=mp4a]"
   if yt-dlp --force-ipv4 ${cookies:+--cookies "$cookies"} --no-playlist --restrict-filenames \
        --no-progress --max-filesize "${MAX_FILE_MB}M" \
        -f "$fmt" \
@@ -213,8 +217,8 @@ fill() {
     # A video that does not exist in the shape the wire needs never will, so
     # the far side is told once and stops offering it.
     if tail -5 "$LOG" | grep -q "Requested format is not available"; then
-      $OSSH "$ORACLE" "printf '%s\t%s\tavc1 sous 480 lignes\n' $(date +%s) '$vid' >> $V2/$chan/state/rejected.tsv" 2>/dev/null
-      log "$chan: $vid n'existe pas en avc1 au-dessus de 480 lignes, signale a Oracle"
+      $OSSH "$ORACLE" "printf '%s\t%s\tavc1 sous %s lignes\n' $(date +%s) '$vid' '$minh' >> $V2/$chan/state/rejected.tsv" 2>/dev/null
+      log "$chan: $vid n'existe pas en avc1 a $minh lignes ou plus, signale a Oracle"
     fi
   fi
   if [ -n "$got" ] && [ -f "$got" ]; then

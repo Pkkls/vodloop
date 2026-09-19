@@ -67,6 +67,10 @@ FILLER = ROOT / "filler.ts"
 
 GIB = 1024 ** 3
 MAXH = int(conf_num("MAXH", 720))
+# The shortest picture the channel will put on the wire. Kick's ladder is fixed
+# on the session, so a chunk under it is served upscaled: that is the whole cost
+# of a low floor, and it is kil's call per channel, not a constant.
+MINH = int(conf_num("MINH", 480))
 MIN_SECONDS = int(conf_num("MIN_SECONDS", 3600))
 MAX_SECONDS = int(conf_num("MAX_SECONDS", 43200))
 BUDGET_BYTES = int(conf_num("BUDGET_GB", 28) * GIB)
@@ -186,7 +190,7 @@ def shape_problem(info):
     """None when a file can be copied to the wire as it is, else why not."""
     if info["vcodec"] != "h264":
         return f"video {info['vcodec']}"
-    if not 0 < info["width"] <= 1920 or not 480 <= info["height"] <= 1080:
+    if not 0 < info["width"] <= 1920 or not MINH <= info["height"] <= 1080:
         return f"taille {info['width']}x{info['height']}"
     if not fps_supported(info["fps"]):
         return f"{info['fps']} i/s"

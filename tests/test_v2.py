@@ -154,6 +154,22 @@ check("the tallest rung under the ceiling is taken",
 check("control: a taller ceiling takes the source rung",
       kick.parse_master(master, 1080)[2] == 1080)
 check("control: nothing at all under 480 lines", kick.parse_master(master, 360) is None)
+
+print("the floor is the channel's, not a constant")
+real_minh = chan.MINH
+try:
+    chan.MINH = 720
+    check("a 720p floor refuses a 480p file",
+          chan.shape_problem(dict(good, width=854, height=480)) is not None)
+    check("control: and still takes 720p", chan.shape_problem(good) is None)
+    check("the Kick rung obeys the same floor", kick.parse_master(master, 1080, 720)[2] == 1080)
+    check("control: a recording Kick only serves at 360 is not fetched at all",
+          kick.parse_master("#EXTM3U\n#EXT-X-STREAM-INF:BANDWIDTH=630000,RESOLUTION=640x360\n"
+                            "360p30/playlist.m3u8\n", 1080, 720) is None)
+finally:
+    chan.MINH = real_minh
+check("control: the default floor still takes 480p", chan.shape_problem(
+    dict(good, width=854, height=480)) is None)
 media = "#EXTM3U\n#EXTINF:10.000,\n0.ts\n#EXTINF:10.000,\n1.ts\n#EXTINF:4.000,\n2.ts\n"
 check("segments come back in order with their length",
       kick.parse_media(media) == [("0.ts", 10.0), ("1.ts", 10.0), ("2.ts", 4.0)])

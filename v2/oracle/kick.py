@@ -50,13 +50,16 @@ def safe_title(text, limit=70):
     return keep.strip("_")[:limit] or "kick"
 
 
-def parse_master(text, maxh):
+def parse_master(text, maxh, minh=None):
     """(url, bandwidth, height) of the tallest rendition the channel accepts.
 
     Kick publishes the source rung plus its own transcodes. A rung above the
     channel's ceiling is not taken: 1080p Kick is 3,43 Go/h against 1,10 in
-    720p, and the disk is the thing in short supply, never the pixels.
+    720p, and the disk is the thing in short supply, never the pixels. A rung
+    under the floor is not taken either, or the recording would be fetched and
+    then refused on the way to the wire, which is the expensive order.
     """
+    minh = chan.MINH if minh is None else minh
     best = None
     lines = text.splitlines()
     for n, line in enumerate(lines):
@@ -70,7 +73,7 @@ def parse_master(text, maxh):
             elif part.startswith("BANDWIDTH="):
                 bandwidth = int(part.split("=")[1])
         uri = lines[n + 1].strip() if n + 1 < len(lines) else ""
-        if not uri or not height or height > maxh or height < 480:
+        if not uri or not height or height > maxh or height < minh:
             continue
         if best is None or height > best[2]:
             best = (uri, bandwidth, height)

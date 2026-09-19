@@ -302,6 +302,7 @@ def main(argv):
         tmp.write_text("".join(f"{vid}\t{secs}\n" for vid, secs in candidates))
         tmp.replace(CANDIDATES)
         chan.write_json(WANT, {"need_seconds": need, "offer_bytes": offer, "maxh": chan.MAXH,
+                               "minh": chan.MINH,
                                "queue_files": len(queue), "queue_hours": round(queued / 3600, 1),
                                "candidates": len(candidates), "max_seconds": fetch_seconds,
                                "rate_bps": int(rate), "at": int(now)})
