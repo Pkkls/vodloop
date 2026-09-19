@@ -426,6 +426,11 @@ def prime():
     onair = chan.read_json(chan.STATE / "onair.json", {}).get("source")
     source, _ = draw(book, durations, last_recording(book),
                      avoid=(onair,) if onair else ())
+    if source is None and onair:
+        # the file on air is the only one with anything unseen left. Holding
+        # another of its hours is not the change a skip is asking for, but it
+        # beats the standby clip, which is the real alternative.
+        source, _ = draw(book, durations, last_recording(book))
     if source is None:
         return
     info = chan.probe(source)

@@ -464,6 +464,20 @@ if shutil.which("ffmpeg"):
               cut.played("5-A_tenir_pret-primevideo1.mkv") == set(),
               cut.played("5-A_tenir_pret-primevideo1.mkv"))
         before = dict(held)
+        # the only file on the disk is the one on air: the primer must still
+        # hold an hour of it rather than leave the skip to the standby clip
+        cut.clear_ready()
+        chan.write_json(chan.STATE / "onair.json",
+                        {"source": "5-A_tenir_pret-primevideo1.mkv", "number": 0,
+                         "seconds": 12.0, "at": 0})
+        cut.prime()
+        check("with only the file on air left, it is still held rather than nothing",
+              cut.ready_set() is not None, cut.ready_set())
+        (chan.STATE / "onair.json").unlink(missing_ok=True)
+        cut.clear_ready()
+        cut.prime()
+        held = cut.ready_set()
+        before = dict(held)
         cut.prime()
         check("control: priming again keeps the one already held",
               cut.ready_set() == before)
