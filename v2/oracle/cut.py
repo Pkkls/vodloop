@@ -24,6 +24,7 @@ of the file: v1 cut whole items ahead and held 3.58 h of chunks against a 2 h ca
 A job interrupted by a restart is cut again from the start and its first N
 chunks, already sent, are dropped: segmenting a copy is deterministic.
 """
+import json
 import os
 import pathlib
 import random
@@ -46,6 +47,16 @@ PICK = chan.STATE / "pick"
 # cutter has the next hour ready in about thirty seconds, well inside the one
 # already in flight, so the wire does not go quiet.
 SKIP_KEEP_CHUNKS = 0
+# An hour cut ahead of time and held aside, so a skip has something to put on
+# the wire in the same second. Without it the chat votes, everything waiting is
+# dropped, and the channel shows its standby clip for as long as ffmpeg needs
+# to write a first segment of a new hour.
+READY = chan.ROOT / "ready"
+READY_JOB = chan.STATE / "ready.json"
+# what main() must know about a skip that was served from the ready set: which
+# hour it is now on, and how much of it is already on the wire
+PRIMED = chan.STATE / "primed.json"
+PRIMER_SECONDS = chan.CHUNK_SECONDS + 30
 # tells the feeder to drop what it is sending, not just what is waiting
 FLUSH = chan.STATE / "flush"
 SEQ = chan.STATE / "seq"
@@ -248,20 +259,29 @@ def next_source():
                 chan.log(f"choix du chat: {wanted[:60]}")
                 return claim(path, "chat")
         chan.log(f"choix du chat introuvable ou deja vu: {str(wanted)[:60]}")
-    for folder, origin in ((chan.QUEUE, "queue"), (chan.AIRED, "reserve")):
-        fresh = [p for p in chan.media(folder) if unaired(p, book, durations)]
-        if not fresh:
-            continue
-        # two turns in a row from the same stream read as a repeat whatever the
-        # hours say, so another recording wins whenever one is available
-        elsewhere = [p for p in fresh if recording_of(p) != just_played] or fresh
-        return claim(random.choice([p for p in elsewhere if from_board(p)] or elsewhere), origin)
+    path, origin = draw(book, durations, just_played)
+    if path is not None:
+        return claim(path, origin)
 
     # No third tier. kil, 2026-09-19: "tu me repasses PAS 2 fois le meme chunk
     # d'une heure". An hour that has been on the wire is spent for good, so when
     # the disk holds nothing unseen the answer is the standby clip and an alarm,
     # never the same hour again. The cure is supply, and watch.py is what says
     # the supply failed.
+    return None, None
+
+
+def draw(book, durations, just_played, avoid=()):
+    """(path, origin) the draw would take, moving nothing. None when spent."""
+    for folder, origin in ((chan.QUEUE, "queue"), (chan.AIRED, "reserve")):
+        fresh = [p for p in chan.media(folder)
+                 if p.name not in avoid and unaired(p, book, durations)]
+        if not fresh:
+            continue
+        # two turns in a row from the same stream read as a repeat whatever the
+        # hours say, so another recording wins whenever one is available
+        elsewhere = [p for p in fresh if recording_of(p) != just_played] or fresh
+        return random.choice([p for p in elsewhere if from_board(p)] or elsewhere), origin
     return None, None
 
 
@@ -360,6 +380,125 @@ def window(source, seconds, number=None):
     return start, max(0.0, length), number
 
 
+def audio_for(info):
+    """The audio arguments a chunk of this file needs. Used twice, so shared:
+    a primer cut with different arguments than the job that follows it would
+    change codec parameters at the junction, which is the one thing the muxer
+    will not take."""
+    return ["-c:a", "copy"] if chan.audio_copies(info) else         ["-c:a", "aac", "-b:a", "160k", "-ar", "44100", "-ac", "2"]
+
+
+def ready_set():
+    """The hour held aside, or None when nothing usable is waiting.
+
+    Validated against the files on disk rather than trusted: a stop in the
+    middle of priming leaves the note without the chunks it names.
+    """
+    held = chan.read_json(READY_JOB, None)
+    if not held or not held.get("chunks") or not held.get("source"):
+        return None
+    if not all((READY / name).exists() for name in held["chunks"]):
+        return None
+    return held
+
+
+def clear_ready():
+    for stale in READY.glob("*.ts"):
+        stale.unlink(missing_ok=True)
+    READY_JOB.unlink(missing_ok=True)
+
+
+def prime():
+    """Cut the head of another hour and hold it, so a skip is instant.
+
+    Run only when the wire is an hour ahead and the cutter has nothing else to
+    do, so it never competes with the job that is feeding the channel. The
+    hour is not written to the ledger here: it is not on the wire, it may
+    never be, and an hour marked played that nobody saw is a repeat in the
+    other direction.
+    """
+    if ready_set():
+        return
+    clear_ready()
+    book = ledger()
+    durations = chan.read_json(chan.STATE / "durations.json", {})
+    onair = chan.read_json(chan.STATE / "onair.json", {}).get("source")
+    source, _ = draw(book, durations, last_recording(book),
+                     avoid=(onair,) if onair else ())
+    if source is None:
+        return
+    info = chan.probe(source)
+    if info is None or chan.shape_problem(info):
+        return
+    drawn = window(source, info["seconds"])
+    if drawn is None:
+        return
+    start, _, number = drawn
+    READY.mkdir(parents=True, exist_ok=True)
+    job = subprocess.run(
+        ["ffmpeg", "-hide_banner", "-loglevel", "error",
+         "-ss", f"{start:.3f}", "-t", f"{PRIMER_SECONDS:.3f}", "-i", str(source),
+         "-map", "0:v:0", "-map", "0:a:0", "-c:v", "copy"] + audio_for(info)
+        + chan.DROP_SEI
+        + ["-f", "segment", "-segment_time", str(chan.CHUNK_SECONDS),
+           "-segment_format", "mpegts", "-segment_list", str(READY / "list"),
+           "-reset_timestamps", "1", str(READY / "ready_%05d.ts")],
+        capture_output=True)
+    names = completed(READY / "list")
+    (READY / "list").unlink(missing_ok=True)
+    kept = []
+    for raw in names:
+        piece = READY / raw
+        if not piece.exists():
+            continue
+        chunk = f"{next_seq():010d}.ts"
+        piece.replace(READY / chunk)
+        kept.append(chunk)
+    for leftover in READY.glob("ready_*.ts"):
+        leftover.unlink(missing_ok=True)
+    if not kept:
+        chan.log(f"rien a tenir pret pour {source.name[:50]}: "
+                 f"{job.stderr.decode(errors='replace')[-120:].strip()}")
+        return
+    chan.write_json(READY_JOB, {"source": source.name, "number": number,
+                                "seconds": info["seconds"], "chunks": kept,
+                                "at": int(time.time())})
+    chan.log(f"tenu pret: {source.name[:50]} heure {number + 1}, "
+             f"{len(kept)} chunks")
+
+
+def serve_ready():
+    """Put the held hour on the wire this second. True when there was one.
+
+    The hour is not written to the ledger here either: run_job does that when
+    its own first chunk lands, which is the same branch it has always used and
+    the one a restart resumes correctly.
+    """
+    held = ready_set()
+    if not held:
+        return False
+    source, number = held["source"], held["number"]
+    if number in played(source):
+        clear_ready()  # drawn and aired the normal way while it sat here
+        return False
+    moved = []
+    for name in held["chunks"]:
+        piece = READY / name
+        if not piece.exists():
+            break
+        piece.replace(chan.CHUNKS / name)
+        remember_chunk(name, source, number, held["seconds"])
+        moved.append(name)
+    clear_ready()
+    if not moved:
+        return False
+    PICK.write_text(json.dumps({"name": source, "at": int(time.time())}))
+    chan.write_json(PRIMED, {"source": source, "number": number, "done": len(moved)})
+    chan.log(f"saut servi par l'heure tenue prete: {source[:50]} "
+             f"heure {number + 1}, {len(moved)} chunks deja sur le fil")
+    return True
+
+
 def run_job(source, origin, skip, number=None):
     """Cut one hour of a file into chunks. number is set only on a resume.
 
@@ -451,6 +590,12 @@ def run_job(source, origin, skip, number=None):
             job.terminate()
             for stale in sorted(chan.CHUNKS.glob("*.ts"))[SKIP_KEEP_CHUNKS:]:
                 stale.unlink(missing_ok=True)
+            # everything waiting has just been dropped, so this is the second
+            # the channel has nothing to send. The held hour goes on now; the
+            # loop below picks the same file up and carries on from where the
+            # primer stopped.
+            if not serve_ready():
+                chan.log("rien de tenu pret, le clip d'attente couvre le saut")
             FLUSH.write_text(str(int(time.time())))
             chan.log(f"passage saute ({reason}): {source.name[:60]}")
             skipped = True
@@ -489,6 +634,8 @@ def run_job(source, origin, skip, number=None):
 
 def recover():
     """What a stop left behind: a job to resume, or files to put back in line."""
+    if not ready_set():
+        clear_ready()
     job = chan.read_json(JOB, None)
     resumed = None
     if job and (chan.CURRENT / job["source"]).exists():
@@ -511,11 +658,23 @@ def main():
             resumed[0].replace(chan.QUEUE / resumed[0].name)
     while True:
         if ahead_seconds() >= chan.AHEAD_SECONDS:
+            # an hour in hand: the spare minute goes into holding the head of
+            # another hour ready, which is what makes a skip instant
+            prime()
             time.sleep(10)
             continue
         source, origin = next_source()
         if source is None:
             time.sleep(30)
+            continue
+        primed = chan.read_json(PRIMED, {})
+        PRIMED.unlink(missing_ok=True)
+        if primed.get("source") == source.name:
+            if not run_job(source, origin, int(primed.get("done", 0)),
+                           int(primed["number"])):
+                source.replace((chan.QUEUE if origin == "queue" else chan.AIRED)
+                               / source.name)
+                time.sleep(60)
             continue
         if not run_job(source, origin, 0):
             # could not measure: back where it came from, and give the box a minute

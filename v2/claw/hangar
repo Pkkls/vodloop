@@ -330,19 +330,35 @@ fill() {
   return 0
 }
 
-# The pacing below is one download at a time for the whole board, so taking the
-# channels in the order they are configured gives the first one every turn:
-# cx247 took all four fetches of 2026-09-18 and nanatty247 none, which left that
-# channel running on its Kick supply alone and airing nothing from YouTube.
-# The channel that has waited longest goes first instead.
+# kil, 2026-09-19: ninety per cent of the board to nanatty247, ten to cx247.
+# The board runs one download at a time, so the split is a split of turns and
+# not of bytes. A channel that has taken more than its share waits; one about
+# to put up a loading card is served whatever it has taken, because a share is
+# a budget and not a reason to go off the air. cx247 can afford the small end:
+# its Kick line runs on the far side and costs the board nothing.
+#
+# SHARES is "chan:weight ..." in hangar.conf; a channel not named there counts
+# as 1. SHARE_WINDOW is how many past fetches the split is measured over.
+share_of() {
+  s=$(printf '%s\n' ${SHARES:-} | tr ' ' '\n' | awk -F: -v c="$1" '$1 == c { print $2 }')
+  case "$s" in '' | *[!0-9]*) s=1 ;; esac
+  [ "$s" -gt 0 ] || s=1
+  echo "$s"
+}
+
 turn() {
   for c in $CHANNELS; do
     w=$($OSSH "$ORACLE" "cat $V2/$c/state/want.json" 2>/dev/null)
-    # The channel closest to showing a loading card goes first; the time since
-    # its last turn only breaks a tie. Taking them oldest first handed the slot
-    # to cx247 with six hours in hand while nanatty247 sat on two.
-    printf '%s %s %s\n' "$(num "$(field runway_seconds "$w")")" \
-      "$(num "$(cat "$BASE/$c.tried" 2>/dev/null)")" "$c"
+    r=$(num "$(field runway_seconds "$w")")
+    had=$(tail -n "${SHARE_WINDOW:-20}" "$BASE/fetched.tsv" 2>/dev/null |
+          awk -v c="$c" '$4 == c { n++ } END { print n + 0 }')
+    # turns already taken per unit of share; the lowest is owed this one
+    if [ "$r" -lt "${URGENT_SECONDS:-7200}" ]; then
+      debt=0
+    else
+      debt=$(( (had * 1000) / $(share_of "$c") + 1 ))
+    fi
+    printf '%s %s %s\n' "$debt" "$r" "$c"
   done | sort -n -k1,1 -k2,2 | awk '{print $3}'
 }
 

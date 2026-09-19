@@ -404,6 +404,56 @@ if shutil.which("ffmpeg"):
         chan.PART_SECONDS, cut.TAIL_SECONDS = real_part, real_tail
 
 
+if shutil.which("ffmpeg"):
+    print("cut: the primer really cuts, and a skip is served from it")
+    real_part2 = chan.PART_SECONDS
+    try:
+        chan.PART_SECONDS = 5
+        cut.clear_ready()
+        cut.HOURS.unlink(missing_ok=True)
+        cut.PARTS.unlink(missing_ok=True)
+        cut.PICK.unlink(missing_ok=True)
+        cut.PRIMED.unlink(missing_ok=True)
+        for stale in (list(chan.media(chan.QUEUE)) + list(chan.media(chan.CURRENT))
+                      + list(chan.media(chan.AIRED))):
+            stale.unlink()
+        for stale in chan.CHUNKS.glob("*.ts"):
+            stale.unlink()
+        subprocess.run(["ffmpeg", "-hide_banner", "-loglevel", "error", "-f", "lavfi",
+                        "-i", "testsrc2=s=854x480:r=30:d=12", "-f", "lavfi",
+                        "-i", "sine=f=440:sample_rate=44100:d=12", "-c:v", "libx264",
+                        "-g", "60", "-c:a", "aac", "-ac", "2", "-y",
+                        str(chan.QUEUE / "5-A_tenir_pret-primevideo1.mkv")], check=True)
+        cut.prime()
+        held = cut.ready_set()
+        check("the primer cuts a real head and writes down what it is",
+              held is not None and held["source"] == "5-A_tenir_pret-primevideo1.mkv"
+              and held["chunks"], held)
+        check("and the hour it holds is not written to the ledger, it is not on air",
+              cut.played("5-A_tenir_pret-primevideo1.mkv") == set(),
+              cut.played("5-A_tenir_pret-primevideo1.mkv"))
+        before = dict(held)
+        cut.prime()
+        check("control: priming again keeps the one already held",
+              cut.ready_set() == before)
+        check("serving it fills the wire in one move",
+              cut.serve_ready() and len(list(chan.CHUNKS.glob("*.ts"))) == len(before["chunks"]))
+        check("and the loop is told to carry on with that same hour",
+              chan.read_json(cut.PICK, {}).get("name") == before["source"]
+              and chan.read_json(cut.PRIMED, {})["number"] == before["number"],
+              (chan.read_json(cut.PICK, {}), chan.read_json(cut.PRIMED, {})))
+    finally:
+        chan.PART_SECONDS = real_part2
+        cut.clear_ready()
+        cut.PICK.unlink(missing_ok=True)
+        cut.PRIMED.unlink(missing_ok=True)
+        for stale in chan.CHUNKS.glob("*.ts"):
+            stale.unlink()
+        for stale in (list(chan.media(chan.QUEUE)) + list(chan.media(chan.CURRENT))
+                      + list(chan.media(chan.AIRED))):
+            stale.unlink()
+
+
 print("bot: reading the pipeline")
 import bot  # noqa: E402
 
@@ -594,6 +644,49 @@ check("and the wait lands in front of the estimate, not beside it",
       bot.fetch_eta(3600) >= waited + bot.BOARD_SLOT_MIN, bot.fetch_eta(3600))
 small.unlink()
 big.unlink()
+
+
+print("cut: an hour held ready, so a skip has something to send at once")
+cut.clear_ready()
+cut.PRIMED.unlink(missing_ok=True)
+cut.PICK.unlink(missing_ok=True)
+for stale in chan.media(chan.CURRENT):
+    stale.unlink()
+check("with nothing held, there is nothing to serve",
+      cut.ready_set() is None and cut.serve_ready() is False)
+cut.READY.mkdir(parents=True, exist_ok=True)
+chan.write_json(cut.READY_JOB, {"source": "7-Tenue-preteAAAAAAA.mkv", "number": 2,
+                                "seconds": 15654.0, "chunks": ["0000009001.ts"]})
+check("control: a note whose chunks are gone is not trusted",
+      cut.ready_set() is None, cut.ready_set())
+(cut.READY / "0000009001.ts").write_bytes(b"x")
+check("with its chunks on disk it is usable", cut.ready_set() is not None)
+for stale in chan.CHUNKS.glob("*.ts"):
+    stale.unlink()
+check("serving it puts the chunks on the wire and says what comes next",
+      cut.serve_ready()
+      and [q.name for q in chan.CHUNKS.glob("*.ts")] == ["0000009001.ts"]
+      and chan.read_json(cut.PRIMED, {}) == {"source": "7-Tenue-preteAAAAAAA.mkv",
+                                             "number": 2, "done": 1}
+      and chan.read_json(cut.PICK, {}).get("name") == "7-Tenue-preteAAAAAAA.mkv",
+      (chan.read_json(cut.PRIMED, {}), chan.read_json(cut.PICK, {})))
+check("and the chunk carries the hour it came from, for the title",
+      chan.read_json(cut.CHUNKMAP, {}).get("0000009001.ts")
+      == ["7-Tenue-preteAAAAAAA.mkv", 2, 15654.0],
+      chan.read_json(cut.CHUNKMAP, {}))
+check("control: nothing is left held afterwards", cut.ready_set() is None)
+cut.record_hour("7-Tenue-preteAAAAAAA.mkv", 5)
+(cut.READY / "0000009002.ts").write_bytes(b"x")
+chan.write_json(cut.READY_JOB, {"source": "7-Tenue-preteAAAAAAA.mkv", "number": 5,
+                                "seconds": 15654.0, "chunks": ["0000009002.ts"]})
+check("an hour that went out the normal way while it waited is dropped, not replayed",
+      cut.serve_ready() is False and cut.ready_set() is None
+      and not list(chan.CHUNKS.glob("0000009002.ts")))
+for stale in chan.CHUNKS.glob("*.ts"):
+    stale.unlink()
+cut.PRIMED.unlink(missing_ok=True)
+cut.PICK.unlink(missing_ok=True)
+cut.HOURS.unlink(missing_ok=True)
 
 
 print("cut: a restart resumes the hour it was cutting, not another one")
