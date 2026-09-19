@@ -75,8 +75,20 @@ throttle_level() {
 }
 # Real signals only: the refusal YouTube sends, not a failure of ours. A format
 # that does not exist or a file over the cap says nothing about the address.
+# a wall is the address being refused, and it says so in words. A bare 403 on
+# the media URL is usually one video's signature going stale: on 2026-09-19 one
+# arrived an hour after a 4.2 Go download had succeeded, with eleven fetches and
+# 28 Go behind it in the day, and halved the budget for six hours. It counts
+# only once it keeps happening, which is what tells a stale link from a wall.
 throttled_by() {
-  grep -qiE "HTTP Error 429|Too Many Requests|Sign in to confirm|not a bot|HTTP Error 403" "$1" 2>/dev/null
+  grep -qiE "HTTP Error 429|Too Many Requests|Sign in to confirm|not a bot" "$1" 2>/dev/null && return 0
+  grep -qi "HTTP Error 403" "$1" 2>/dev/null || return 1
+  seen=$(awk -v t=$(( $(date +%s) - 3600 )) '$1 >= t { n++ } END { print n + 0 }' \
+         "$BASE/forbidden.tsv" 2>/dev/null)
+  date +%s >> "$BASE/forbidden.tsv"
+  tail -n 40 "$BASE/forbidden.tsv" > "$BASE/forbidden.tmp" 2>/dev/null &&
+    mv "$BASE/forbidden.tmp" "$BASE/forbidden.tsv"
+  [ "$(num "$seen")" -ge "${FORBIDDEN_BEFORE_WALL:-2}" ]
 }
 note_throttle() {
   lvl=$(throttle_level)
