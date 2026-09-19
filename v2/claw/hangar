@@ -29,6 +29,9 @@ CHANNELS=""
 GAP_MIN=90
 FAIL_GAP_MIN=180
 DAY_MB=16000
+# how long a refusal keeps the budget halved, and how far down it can go
+THROTTLE_HOLD_MIN=360
+THROTTLE_MAX_LEVEL=3
 KEEP_FREE_MB=12000
 HANGAR_MB=80000
 MAX_FILE_MB=10000
@@ -50,6 +53,31 @@ log() { [ -z "$DRY" ] || { echo "$*"; return; }; echo "$(ts) $*" >> "$LOG"; }
 num() { case "$1" in "" | *[!0-9]*) echo 0 ;; *) echo "$1" ;; esac; }
 field() { printf '%s' "$2" | sed -n "s/.*\"$1\": *\([0-9]*\).*/\1/p" | head -1; }
 bytes() { ls -ln "$1" 2>/dev/null | awk '{print $5}'; }
+# --- what the address is allowed to carry ----------------------------------
+# level 0 is the full budget, each step halves it. It goes up the moment YouTube
+# says no and comes back down on its own once it has been quiet for the hold.
+throttle_level() {
+  lvl=0; until=0
+  [ -f "$BASE/throttle" ] && read -r lvl until < "$BASE/throttle"
+  lvl=$(num "$lvl"); until=$(num "$until")
+  if [ "$lvl" -gt 0 ] && [ "$(date +%s)" -gt "$until" ]; then
+    lvl=$((lvl - 1))
+    echo "$lvl $(( $(date +%s) + THROTTLE_HOLD_MIN * 60 ))" > "$BASE/throttle"
+    log "adresse calme, budget remonte au niveau $lvl"
+  fi
+  echo "$lvl"
+}
+# Real signals only: the refusal YouTube sends, not a failure of ours. A format
+# that does not exist or a file over the cap says nothing about the address.
+throttled_by() {
+  grep -qiE "HTTP Error 429|Too Many Requests|Sign in to confirm|not a bot|HTTP Error 403" "$1" 2>/dev/null
+}
+note_throttle() {
+  lvl=$(throttle_level)
+  [ "$lvl" -lt "$THROTTLE_MAX_LEVEL" ] && lvl=$((lvl + 1))
+  echo "$lvl $(( $(date +%s) + THROTTLE_HOLD_MIN * 60 ))" > "$BASE/throttle"
+  log "YouTube a refuse: budget divise par $((1 << lvl)) pendant $THROTTLE_HOLD_MIN min"
+}
 
 mkdir -p "$BASE"
 # yt-dlp writes into this log, so it grows by megabytes a day on a card that
@@ -165,7 +193,14 @@ fill() {
   wait_s=$(( $(num "$last_at") + gap * 60 - now ))
   [ "$wait_s" -le 0 ] || { [ -z "$DRY" ] || log "$chan: reserve ${runway_h} h, prochain telechargement dans $((wait_s / 60 + 1)) min"; return 1; }
   day_kb=$(awk -v t=$((now - 86400)) '$1 >= t { s += $2 } END { print s + 0 }' "$BASE/fetched.tsv" 2>/dev/null)
-  [ "$(num "$day_kb")" -lt $((DAY_MB * 1024)) ] || { log "plafond 24 h atteint ($((day_kb / 1024)) Mo)"; return 1; }
+  # The daily budget is not a constant any more, it is whatever the address is
+  # currently allowed to carry. A fixed number is wrong in both directions: 16 Go
+  # fed neither channel (the two of them want 64 Go a day at their own bitrates),
+  # and any larger number guessed the same way would be too much on the day
+  # YouTube decides otherwise. So the ceiling is high and every sign of throttling
+  # halves it for six hours, twice over if it keeps coming.
+  budget_mb=$((DAY_MB >> $(throttle_level)))
+  [ "$(num "$day_kb")" -lt $((budget_mb * 1024)) ] || { log "budget 24 h atteint ($((day_kb / 1024)) sur $budget_mb Mo)"; return 1; }
 
   maxh=$(num "$(field maxh "$want")")
   case "$maxh" in 1080 | 720 | 480) ;; *) maxh=720 ;; esac
@@ -255,6 +290,7 @@ fill() {
   else
     echo "$(date +%s) $vid $chan" >> "$BASE/failed.tsv"
     echo "$(date +%s) fail" > "$BASE/last"
+    throttled_by "$run" && note_throttle
     log "$chan: echec $vid, pas de nouvel essai avant $FAIL_GAP_MIN min"
   fi
   rm -f "$dir/.part"/*
