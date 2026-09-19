@@ -589,6 +589,7 @@ class Handler(BaseHTTPRequestHandler):
         chan.log(f"callback oauth: {message}")
         if ok:
             ensure_subscription()
+            sync_rewards()
         return self._send(200 if ok else 400,
                           html.escape(message).encode(), "text/plain; charset=utf-8")
 

@@ -41,6 +41,8 @@ SCOPES = ("user:read channel:read channel:write chat:write events:subscribe "
 REFRESH_MARGIN = 300
 # Kick's own clock against ours: a webhook older than this is a replay
 SIGNATURE_WINDOW = 300
+# how long a link stays the same link, so one handed out is one that still works
+PENDING_LIFE = 12 * 3600
 
 
 def _write_private(path, data):
@@ -58,6 +60,11 @@ def _write_private(path, data):
 
 # --- authorization ---------------------------------------------------------
 
+def _challenge(verifier):
+    return base64.urlsafe_b64encode(
+        hashlib.sha256(verifier.encode()).digest()).decode().rstrip("=")
+
+
 def authorize_url(redirect_uri):
     """The URL to open once, and the verifier kept for the exchange.
 
@@ -65,9 +72,21 @@ def authorize_url(redirect_uri):
     control: without the verifier, anyone who sees the code in a log or a
     referrer can spend it.
     """
+    # A link already handed out has to keep working. Minting a new verifier on
+    # every call quietly killed the one in somebody's chat window, and the
+    # callback page calls this on every visit, so opening it to read the link
+    # was enough to break the link it had just given.
+    held = chan.read_json(PENDING, {})
+    if (held.get("state") and held.get("verifier")
+            and held.get("redirect_uri") == redirect_uri
+            and time.time() - held.get("at", 0) < PENDING_LIFE):
+        # the challenge is the verifier's own hash, so it never has to be stored
+        return f"{ID_BASE}/oauth/authorize?" + urllib.parse.urlencode({
+            "response_type": "code", "client_id": APP.get("KICK_CLIENT_ID", ""),
+            "redirect_uri": redirect_uri, "scope": SCOPES, "state": held["state"],
+            "code_challenge": _challenge(held["verifier"]), "code_challenge_method": "S256"})
     verifier = secrets.token_urlsafe(64)[:86]
-    challenge = base64.urlsafe_b64encode(
-        hashlib.sha256(verifier.encode()).digest()).decode().rstrip("=")
+    challenge = _challenge(verifier)
     state = secrets.token_urlsafe(24)
     _write_private(PENDING, {"verifier": verifier, "state": state,
                              "redirect_uri": redirect_uri, "at": int(time.time())})
