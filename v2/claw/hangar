@@ -29,6 +29,12 @@ CHANNELS=""
 GAP_MIN=90
 FAIL_GAP_MIN=180
 DAY_MB=16000
+# The address was refused at 28 Go in ten hours on 2026-09-14, which is a rate
+# and not a total, so the rate is what is capped. Under this ceiling the board
+# never reaches the speed that lost the address, whatever the daily budget says,
+# and the daily budget goes back to being what it should be: a long stop, not
+# the thing that decides how fast a starving channel may be fed.
+HOUR_MB=2500
 # how long a refusal keeps the budget halved, and how far down it can go
 THROTTLE_HOLD_MIN=360
 THROTTLE_MAX_LEVEL=3
@@ -199,8 +205,12 @@ fill() {
   # and any larger number guessed the same way would be too much on the day
   # YouTube decides otherwise. So the ceiling is high and every sign of throttling
   # halves it for six hours, twice over if it keeps coming.
-  budget_mb=$((DAY_MB >> $(throttle_level)))
+  lvl=$(throttle_level)
+  budget_mb=$((DAY_MB >> lvl))
   [ "$(num "$day_kb")" -lt $((budget_mb * 1024)) ] || { log "budget 24 h atteint ($((day_kb / 1024)) sur $budget_mb Mo)"; return 1; }
+  hour_kb=$(awk -v t=$((now - 3600)) '$1 >= t { s += $2 } END { print s + 0 }' "$BASE/fetched.tsv" 2>/dev/null)
+  hour_mb=$((HOUR_MB >> lvl))
+  [ "$(num "$hour_kb")" -lt $((hour_mb * 1024)) ] || { log "debit horaire atteint ($((hour_kb / 1024)) sur $hour_mb Mo)"; return 1; }
 
   maxh=$(num "$(field maxh "$want")")
   case "$maxh" in 1080 | 720 | 480) ;; *) maxh=720 ;; esac
