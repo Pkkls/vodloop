@@ -209,6 +209,15 @@ fill() {
   [ "$last_res" = fail ] && [ "$runway_h" -ge 8 ] && gap=$FAIL_GAP_MIN
   [ "$last_res" = fail ] && [ "$runway_h" -lt 8 ] && gap=$((gap + 10))
   wait_s=$(( $(num "$last_at") + gap * 60 - now ))
+  # Somebody spent channel points and is being quoted a wait: the pacing gap
+  # is the board being polite to itself, not a limit that keeps the address,
+  # so a paid request goes past it. The hourly cap and the daily budget below
+  # are the ones that matter and they still apply, which is what stops three
+  # pending requests turning into three downloads back to back.
+  if [ "$wait_s" -gt 0 ] && [ "$(num "$(field requested "$want")")" -gt 0 ]; then
+    log "$chan: une demande du chat attend, on ne patiente pas les $((wait_s / 60 + 1)) min"
+    wait_s=0
+  fi
   [ "$wait_s" -le 0 ] || { [ -z "$DRY" ] || log "$chan: reserve ${runway_h} h, prochain telechargement dans $((wait_s / 60 + 1)) min"; return 1; }
   day_kb=$(awk -v t=$((now - 86400)) '$1 >= t { s += $2 } END { print s + 0 }' "$BASE/fetched.tsv" 2>/dev/null)
   # The daily budget is not a constant any more, it is whatever the address is

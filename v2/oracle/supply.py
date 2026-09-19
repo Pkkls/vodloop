@@ -397,6 +397,13 @@ def main(argv):
                   if vid not in skip and vid not in mine and secs <= fetch_seconds]
     titles = catalog_titles()
     candidates = mix_countries(candidates, titles, aired_countries(titles))
+    # REFETCH_DAYS is short now, so a video that aired comes back into the
+    # pool while hundreds have never been seen at all. Those go first: the
+    # board gets one video every ninety minutes and spending a slot on a
+    # rerun while new material is waiting is the one thing that pool ordering
+    # can get wrong. Within each group the country rotation is kept.
+    seen_before = {vid for _, vid in ledger_ids("aired.tsv")}
+    candidates.sort(key=lambda row: row[0] in seen_before)
     chan.log(f"file {len(queue)} ({queued / 3600:.1f} h), reserve {runway / 3600:.1f} h, "
              f"diffuses {len(aired) - len(evict)}, "
              f"besoin {need / 3600:.1f} h, offre {offer / chan.GIB:.1f} Go, "
@@ -425,6 +432,7 @@ def main(argv):
                                "max_file_mb": int(chan.MAX_FILE_BYTES / (1024 ** 2)),
                                "queue_files": len(queue), "queue_hours": round(queued / 3600, 1),
                                "candidates": len(candidates), "max_seconds": fetch_seconds,
+                               "requested": len(wanted),
                                "rate_bps": int(rate), "at": int(now)})
     return 0
 
