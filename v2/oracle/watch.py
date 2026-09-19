@@ -64,7 +64,12 @@ def main(argv):
     data = chan.read_json(STATEFILE, {})
     faults = {}
 
-    for role in ("push", "feed", "cut"):
+    # the bot is watched only where it is installed: a channel without a Kick
+    # app has its unit disabled on purpose, and starting it would alarm forever
+    roles = ["push", "feed", "cut"]
+    if chan.systemctl("is-enabled", chan.unit("bot")) == "enabled":
+        roles.append("bot")
+    for role in roles:
         if chan.systemctl("is-active", chan.unit(role)) != "active":
             faults[f"unit-{role}"] = f"{chan.unit(role)} arrete"
             if apply:
