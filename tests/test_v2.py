@@ -291,14 +291,44 @@ if shutil.which("ffmpeg"):
     check("and adds no chunk", len(list(chan.CHUNKS.glob("*.ts"))) == 1)
     check("control: what aired is kept in reserve, not thrown away",
           len(chan.media(chan.AIRED)) == 1, chan.media(chan.AIRED))
+    spare = chan.media(chan.AIRED)[0]
     source, origin = cut.next_source()
-    check("with the queue empty the reserve is drawn, never the standby clip",
-          source is not None and origin == "aired", (source, origin))
-    source.replace(chan.AIRED / source.name)
-    for spare in chan.media(chan.AIRED):
-        spare.unlink()
-    check("control: with nothing at all on disk there is nothing to draw",
-          cut.next_source() == (None, None))
+    check("unsliced, an empty queue still draws the reserve before the clip",
+          source is not None and origin == "repeat", (source, origin))
+    source.replace(chan.AIRED / spare.name)
+
+    print("cut: the three tiers, and no hour twice")
+    was = chan.PART_SECONDS
+    try:
+        chan.PART_SECONDS = 5
+        cut.HOURS.unlink(missing_ok=True)
+        cut.PARTS.unlink(missing_ok=True)
+        spare = chan.media(chan.AIRED)[0]
+        source, origin = cut.next_source()
+        check("with an empty queue the reserve is drawn, not the standby clip",
+              source is not None and origin == "reserve", (source, origin))
+        check("and it is the file that still holds unseen hours", source.name == spare.name)
+        # every hour of it on the wire: the reserve has nothing unseen left
+        for n in range(cut.slices_in(chan.duration(source))):
+            cut.record_hour(source.name, n)
+        source.replace(chan.AIRED / source.name)
+        check("control: a spent file offers no unaired hour",
+              cut.unaired(chan.AIRED / source.name, cut.ledger(), {}) == set())
+        again, origin = cut.next_source()
+        check("only then does an hour go back on, and it is named as a repeat",
+              again is not None and origin == "repeat", (again, origin))
+        book = cut.ledger()
+        oldest = min(book[chan.video_id(again.name)].items(), key=lambda kv: kv[1])[0]
+        check("the hour drawn is the one off the wire the longest",
+              cut.window(again, chan.duration(again))[2] == oldest, oldest)
+        again.replace(chan.AIRED / again.name)
+        for leftover in chan.media(chan.AIRED):
+            leftover.unlink()
+        check("control: with nothing at all on disk there is nothing to draw",
+              cut.next_source() == (None, None))
+    finally:
+        chan.PART_SECONDS = was
+        cut.HOURS.unlink(missing_ok=True)
 else:
     print("  (ffmpeg absent: real pass skipped)")
 
@@ -354,8 +384,9 @@ if shutil.which("ffmpeg"):
         cut.run_job(source, origin, 0)
         check("the last hour retires it", (chan.AIRED / back.name).exists()
               and "partvideo01" in (chan.STATE / "aired.tsv").read_text())
-        check("control: nothing is left behind in the ledger",
-              cut.played(back.name) == set())
+        check("control: the ledger keeps every hour, so none comes back",
+              len(cut.played(back.name)) == cut.slices_in(chan.duration(chan.AIRED / back.name)),
+              cut.played(back.name))
     finally:
         chan.PART_SECONDS, cut.TAIL_SECONDS = real_part, real_tail
 

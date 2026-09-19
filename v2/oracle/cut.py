@@ -1,11 +1,17 @@
 #!/usr/bin/env python3
 """Turn the next file into five minute chunks, copy only. A service.
 
-What airs next is the oldest file in queue/, and nothing else. A video that has
-been on air moves to aired/, where it is kept as a reserve but never drawn
-again, and its id leaves the catalogue: the channel does not repeat itself, and
-an empty queue means the standby clip until the board delivers. That is kil's
-call, taken 2026-09-17 with the cost stated.
+An hour of a video at a time, the video drawn at random and the hour drawn at
+random inside it. An hour that has been on the wire is never sent again: the
+ledger that says so is keyed by video id and appended to, so it survives the
+file being retired, evicted to make room, and fetched back.
+
+Material is drawn in three tiers, and the wire decides the order, not taste:
+  1. an unaired hour of something in queue/
+  2. an unaired hour of something in aired/, the reserve on disk
+  3. only when every hour of everything on disk has been on the wire, the one
+     aired longest ago. A repeat is worse than new material and better than a
+     loading card, and this tier is the one that says the channel is starving.
 
 One ffmpeg segment job per file. Chunks are only moved into chunks/ once the
 muxer has listed them as complete, so the feeder never reads a half-written
@@ -32,6 +38,9 @@ JOB = chan.STATE / "job.json"
 SEQ = chan.STATE / "seq"
 LIST = chan.WORK / "job.list"
 PARTS = chan.STATE / "parts.json"
+# every hour ever put on the wire: epoch, video id, hour number. Appended to and
+# never rewritten, because what the wire has shown cannot be taken back.
+HOURS = chan.STATE / "hours.tsv"
 POLL = 2
 # a slice that would leave less than this behind takes the rest of the file
 # with it, rather than coming back for ninety seconds
@@ -51,21 +60,51 @@ def slices_in(seconds):
     return max(1, int(seconds // chan.PART_SECONDS)) if chan.PART_SECONDS else 1
 
 
-def played(name):
-    """The slice numbers of a file already aired.
+def ledger():
+    """{video id: {hour number: when it was on the wire}}, the whole history.
 
-    Tolerates the cursor this file used to hold, a single number saying how far
-    into the file the sequential pass had reached: everything before it played.
+    Reads the two formats that came before it, so no hour is forgotten across
+    the change: a list of hour numbers, and before that a cursor saying how far
+    into the file the sequential pass had reached.
     """
-    value = chan.read_json(PARTS, {}).get(name)
-    if isinstance(value, list):
-        return {int(n) for n in value}
-    if isinstance(value, (int, float)) and chan.PART_SECONDS:
-        return set(range(int(float(value) // chan.PART_SECONDS)))
-    return set()
+    out = {}
+    try:
+        for line in HOURS.read_text().splitlines():
+            fields = line.split("\t")
+            if len(fields) >= 3:
+                try:
+                    out.setdefault(fields[1], {})[int(fields[2])] = int(fields[0])
+                except ValueError:
+                    continue
+    except OSError:
+        pass
+    for name, value in chan.read_json(PARTS, {}).items():
+        vid = chan.video_id(name) or name
+        if isinstance(value, list):
+            numbers = [int(n) for n in value]
+        elif isinstance(value, (int, float)) and chan.PART_SECONDS:
+            numbers = list(range(int(float(value) // chan.PART_SECONDS)))
+        else:
+            continue
+        for n in numbers:
+            out.setdefault(vid, {}).setdefault(n, 0)
+    return out
+
+
+def played(name, book=None):
+    """The hour numbers of this video that have already been on the wire."""
+    book = ledger() if book is None else book
+    return set(book.get(chan.video_id(name) or str(name), {}))
+
+
+def record_hour(name, number):
+    chan.STATE.mkdir(parents=True, exist_ok=True)
+    with HOURS.open("a") as fh:
+        fh.write("%d\t%s\t%d\n" % (int(time.time()), chan.video_id(name) or name, number))
 
 
 def set_part(name, value):
+    """Kept for the tests and for a hand repair; the ledger is the truth."""
     data = chan.read_json(PARTS, {})
     if value is None:
         data.pop(name, None)
@@ -86,28 +125,59 @@ def remaining(path, seconds):
     return max(0.0, seconds - len(played(pathlib.Path(path).name)) * chan.PART_SECONDS)
 
 
+def unaired(path, book, durations):
+    """The hours of this file that have never been on the wire."""
+    seconds = chan.duration(path, durations)
+    if not seconds:
+        return set()
+    return set(range(slices_in(seconds))) - played(path.name, book)
+
+
 def next_source():
     """(path, origin) of what airs next, moved into current/, or (None, None).
 
-    Whole files air oldest first. Sliced ones are drawn at random, because the
-    point of slicing is that two hours of the channel are not two hours of the
-    same stream: the draw is what mixes the sources, the slice is what bounds
-    how long any one of them holds the wire.
+    Three tiers, taken in order, and the wire decides the order:
 
-    A file that has been on air comes back only when nothing else is left.
-    kil chose never to replay on 2026-09-17, and that holds for as long as the
-    channel is supplied; on 2026-09-19 it ran out and showed "vod loading..."
-    to four viewers for seventy minutes, which is the worse of the two. The
-    reserve in aired/ is there precisely so the wire never goes empty, oldest
-    first, and a file drawn from it has all its hours free again.
+      queue     something delivered and never aired. Drawn at random, because
+                the point of slicing is that two hours of the channel are not
+                two hours of the same stream.
+      reserve   something in aired/ that still holds an hour nobody has seen.
+                It is on the disk already, so it beats a loading card by the
+                whole time a delivery would take.
+      repeat    every hour of everything on disk has been on the wire. The file
+                holding the hour aired longest ago goes back on. This tier is
+                the channel starving, and watch.py is what says so.
+
+    Unsliced, the tiers collapse to the oldest file in the queue, as before.
     """
-    files, origin = chan.media(chan.QUEUE), "queue"
-    if not files:
-        files = sorted(chan.media(chan.AIRED), key=lambda p: p.stat().st_mtime)
-        origin = "aired"
-    if not files:
+    if not chan.PART_SECONDS:
+        files = chan.media(chan.QUEUE)
+        if files:
+            return claim(files[0], "queue")
+        # an unsliced channel has no hours to account for, but it has the same
+        # reserve and the same reason to prefer it to a loading card
+        spare = sorted(chan.media(chan.AIRED), key=lambda p: p.stat().st_mtime)
+        return claim(spare[0], "repeat") if spare else (None, None)
+
+    book, durations = ledger(), chan.read_json(chan.STATE / "durations.json", {})
+    for folder, origin in ((chan.QUEUE, "queue"), (chan.AIRED, "reserve")):
+        fresh = [p for p in chan.media(folder) if unaired(p, book, durations)]
+        if fresh:
+            return claim(random.choice(fresh), origin)
+
+    oldest, held = None, None
+    for folder in (chan.QUEUE, chan.AIRED):
+        for path in chan.media(folder):
+            when = min(book.get(chan.video_id(path) or path.name, {0: 0}).values())
+            if held is None or when < held:
+                oldest, held = path, when
+    if oldest is None:
         return None, None
-    chosen = random.choice(files) if chan.PART_SECONDS else files[0]
+    chan.log(f"plus une heure inedite sur le disque: {oldest.name[:60]} repasse")
+    return claim(oldest, "repeat")
+
+
+def claim(chosen, origin):
     target = chan.CURRENT / chosen.name
     try:
         chosen.replace(target)
@@ -142,8 +212,8 @@ def settle(source, origin):
     offers the board needs it. With an empty queue the channel shows its
     standby clip rather than repeating, and the cure is supply, not memory.
     """
-    with (chan.STATE / "aired.tsv").open("a") as ledger:
-        ledger.write(f"{int(time.time())}\t{chan.video_id(source) or source.name}\n")
+    with (chan.STATE / "aired.tsv").open("a") as fh:
+        fh.write(f"{int(time.time())}\t{chan.video_id(source) or source.name}\n")
     target = chan.AIRED / source.name
     source.replace(target)
     os.utime(target)
@@ -158,8 +228,8 @@ def reject(source, reason, forever=True):
     goes to failed.tsv, where supply.py forgives it once.
     """
     chan.log(f"refuse {source.name}: {reason}")
-    ledger = "rejected.tsv" if forever else "failed.tsv"
-    with (chan.STATE / ledger).open("a") as fh:
+    book = "rejected.tsv" if forever else "failed.tsv"
+    with (chan.STATE / book).open("a") as fh:
         fh.write(f"{int(time.time())}\t{chan.video_id(source) or source.name}\t{reason}\n")
     set_part(source.name, None)
     source.unlink(missing_ok=True)
@@ -185,8 +255,15 @@ def window(source, seconds):
     if not chan.PART_SECONDS:
         return 0.0, seconds, 0
     total = slices_in(seconds)
-    free = [n for n in range(total) if n not in played(source.name)]
-    number = random.choice(free or list(range(total)))
+    book = ledger()
+    free = [n for n in range(total) if n not in played(source.name, book)]
+    if free:
+        number = random.choice(free)
+    else:
+        # nothing unseen left in this file: the hour that has been off the wire
+        # longest is the one a viewer is least likely to recognise
+        seen = book.get(chan.video_id(source) or source.name, {})
+        number = min(range(total), key=lambda n: seen.get(n, 0))
     start = float(number * chan.PART_SECONDS)
     # the last slice runs to the end of the file, stub included
     length = (seconds - start if number == total - 1 else float(chan.PART_SECONDS))
@@ -265,14 +342,13 @@ def run_job(source, origin, skip):
     if job.returncode != 0:
         chan.log(f"decoupe interrompue apres {moved} chunks: {error[-200:]}")
     if chan.PART_SECONDS:
-        done = played(source.name) | {number}
-        if len(done) < slices_in(info["seconds"]):
-            set_part(source.name, done)
+        record_hour(source.name, number)
+        done = played(source.name)
+        total = slices_in(info["seconds"])
+        if len(done) < total:
             source.replace(chan.QUEUE / source.name)
-            chan.log(f"fini {source.name}: {moved} chunks, "
-                     f"{len(done)}/{slices_in(info['seconds'])} heures diffusees")
+            chan.log(f"fini {source.name}: {moved} chunks, {len(done)}/{total} heures diffusees")
             return True
-    set_part(source.name, None)
     settle(source, origin)
     chan.log(f"fini {source.name}: {moved} chunks")
     return True

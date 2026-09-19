@@ -109,18 +109,29 @@ def main(argv):
         chan.log("want.json perime, supply.py d'abord")
         return 0
     need, offer = want.get("need_seconds", 0), want.get("offer_bytes", 0)
-    # This line runs four times an hour and lands a part in half an hour; the
-    # board is paced at one download every ninety minutes and only ships when
-    # the queue is short. So Kick refilled the window every time and the board
-    # was never asked: nanatty247 aired twenty-four hours of Kick and nothing
-    # from YouTube on 2026-09-18, which is not the mix it is configured for.
-    # Kick fills its share and stops, and what is left is the board's to fill.
-    ceiling = chan.conf_num("KICK_SHARE", 1.0) * chan.WINDOW_SECONDS
-    held = kick_hours_queued(kick.read_table())
-    if held >= ceiling:
-        chan.log(f"part Kick en file {held / 3600:.1f} h sur {ceiling / 3600:.1f} h "
-                 f"autorisees: la place restante est a la carte")
+    # This line lands a part in half an hour from this server's own address, at
+    # no cost to the board's paced daily budget. That makes it the wrong thing
+    # to run first and the right thing to run last:
+    #   - first, it wins every race. It runs four times an hour against the
+    #     board's one delivery in ninety minutes, so it refilled the window
+    #     every time and the board was never asked at all: nanatty247 aired
+    #     twenty-four hours of Kick and nothing from YouTube on 2026-09-18.
+    #   - last, it is the only supply that answers within the hour, and the
+    #     board cannot carry two channels around the clock on its own: the two
+    #     of them want about 25 Go a day against a 16 Go daily cap that exists
+    #     because the address was refused at 28 Go in ten hours on 2026-09-14.
+    # So it holds off while the wire has KICK_FLOOR_HOURS of unseen material
+    # ahead of it, and steps in under that, which is the only moment a repeat
+    # or a loading card is in reach.
+    floor = chan.conf_num("KICK_FLOOR_HOURS", 0) * 3600
+    runway = want.get("runway_seconds", 0)
+    if runway >= floor:
+        chan.log(f"reserve inedite {runway / 3600:.1f} h au-dessus du plancher "
+                 f"{floor / 3600:.1f} h: la place est a la carte")
         return 0
+    held = kick_hours_queued(kick.read_table())
+    chan.log(f"reserve inedite {runway / 3600:.1f} h sous le plancher "
+             f"{floor / 3600:.1f} h ({held / 3600:.1f} h de Kick en file)")
     chosen = pick()
     if not need or chosen is None:
         chan.log(f"rien a prendre (besoin {need / 3600:.1f} h, "

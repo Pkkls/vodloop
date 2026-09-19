@@ -256,13 +256,26 @@ def main(argv):
     chan.write_json(chan.STATE / "durations.json",
                     {k: v for k, v in durations.items()
                      if any(k.startswith(p.name + ":") for p in held)})
+    # What is evicted first is what the channel can no longer use: a file whose
+    # every hour has been on the wire. A file still holding an unseen hour is
+    # reserve against a dry spell, so it is the last thing to go, whatever its
+    # age. Before this the oldest went first and took unseen hours with it.
+    book = cut.ledger()
     aired = []
     for p in chan.media(chan.AIRED):
         try:
             st = p.stat()
-            aired.append((p, st.st_size, st.st_mtime))
+            spent = not cut.unaired(p, book, durations)
+            aired.append((p, st.st_size, (0 if spent else 1, st.st_mtime)))
         except OSError:
             continue
+    # what the wire can still show without a repeat: the queue, what is already
+    # cut, and the unseen hours of the reserve. It is the one number that says
+    # how close the channel is to a loading card, so it is the one the board
+    # paces itself on.
+    runway = queued + len(list(chan.CHUNKS.glob("*.ts"))) * chan.CHUNK_SECONDS
+    runway += sum(len(cut.unaired(p, book, durations)) * chan.PART_SECONDS
+                  for p in chan.media(chan.AIRED)) if chan.PART_SECONDS else 0
     other = sum(chan.tree_bytes(f) for f in (chan.CURRENT, chan.CHUNKS, chan.UPLOAD))
     free = shutil.disk_usage(chan.ROOT).free
     need, offer, evict = plan(sum(chan.size_of(p) for p in queue), queued, other, aired, free)
@@ -289,7 +302,8 @@ def main(argv):
     mine = set(kick.read_table())
     candidates = [(vid, secs) for vid, secs in newest_first(catalog)
                   if vid not in skip and vid not in mine and secs <= fetch_seconds]
-    chan.log(f"file {len(queue)} ({queued / 3600:.1f} h), diffuses {len(aired) - len(evict)}, "
+    chan.log(f"file {len(queue)} ({queued / 3600:.1f} h), reserve {runway / 3600:.1f} h, "
+             f"diffuses {len(aired) - len(evict)}, "
              f"besoin {need / 3600:.1f} h, offre {offer / chan.GIB:.1f} Go, "
              f"libre {free / chan.GIB:.1f} Go, candidats {len(candidates)}/{len(catalog)} "
              f"(<= {fetch_seconds / 3600:.1f} h a {rate / 1e6:.2f} Mo/s)")
@@ -298,7 +312,7 @@ def main(argv):
         tmp.write_text("".join(f"{vid}\t{secs}\n" for vid, secs in candidates))
         tmp.replace(CANDIDATES)
         chan.write_json(WANT, {"need_seconds": need, "offer_bytes": offer, "maxh": chan.MAXH,
-                               "minh": chan.MINH,
+                               "minh": chan.MINH, "runway_seconds": int(runway),
                                "queue_files": len(queue), "queue_hours": round(queued / 3600, 1),
                                "candidates": len(candidates), "max_seconds": fetch_seconds,
                                "rate_bps": int(rate), "at": int(now)})
