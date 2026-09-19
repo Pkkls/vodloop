@@ -359,8 +359,22 @@ if shutil.which("ffmpeg"):
         source.replace(chan.AIRED / source.name)
         check("control: a spent file offers no unaired hour",
               cut.unaired(chan.AIRED / source.name, cut.ledger(), {}) == set())
-        check("with every hour spent, nothing is drawn rather than repeated",
-              cut.next_source() == (None, None), cut.next_source())
+        check("with every hour spent just now, nothing is drawn rather than repeated",
+              cut.next_source() == (None, None))
+        # the same disk, but everything on it aired longer ago than the window
+        old = int(time.time()) - cut.REPEAT_AFTER - 86400
+        rows = [(old, chan.video_id(source.name), u) for u in
+                range(cut.units_in(chan.duration(chan.AIRED / source.name)))]
+        cut.UNITS.write_text("".join(
+            chr(9).join(str(x) for x in row) + chr(10) for row in rows))
+        cut.HOURS.unlink(missing_ok=True)
+        cut.PARTS.unlink(missing_ok=True)
+        again, origin2 = cut.next_source()
+        check("but once it is older than the window it comes back round",
+              again is not None and again.name == source.name, (again, origin2))
+        if again is not None:
+            again.replace(chan.AIRED / again.name)
+        cut.UNITS.unlink(missing_ok=True)
         for leftover in chan.media(chan.AIRED):
             leftover.unlink()
         check("control: and an empty disk answers the same way",

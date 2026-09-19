@@ -73,6 +73,20 @@ HOURS = chan.STATE / "hours.tsv"
 # chunk 3 are the same three and nothing may confuse them. Old rows keep
 # being read as hours, twelve chunks each, so this cannot un-spend anything.
 UNITS = chan.STATE / "units.tsv"
+# kil, 2026-09-19: never repeating is too strong. The library holds about 1740
+# reachable hours against 24 aired a day and 5 published, so it empties in
+# three months and then the channel has nothing to show at all. A chunk older
+# than this may go round again, but only once nothing unseen is left anywhere,
+# so it changes nothing until the day it is the difference between a repeat
+# and a standby clip. It has to be shorter than a full pass of the library,
+# which is 72 days, or at that moment nothing would be eligible either.
+REPEAT_AFTER = int(chan.conf_num("REPEAT_AFTER_DAYS", 45) * 86400)
+# next_source found nothing unseen and opened the window; main() reads this to
+# tell run_job which moment counts as "already aired". A file, not a return
+# value, because next_source has nine callers in the tests and none of them
+# care. Only ever set on a fresh draw: a resume carries its own chunk number
+# and never asks the draw anything.
+REPLAY = chan.STATE / "replay.json"
 # which hour of which file each waiting chunk came from. The cutter is an hour
 # ahead of the wire, so this is the only way the feeder, and through it the
 # title, can say what is actually going out rather than what is being prepared.
@@ -165,10 +179,17 @@ def ledger():
     return out
 
 
-def played(name, book=None):
-    """The chunk numbers of this video that have already been on the wire."""
+def played(name, book=None, since=0):
+    """The chunk numbers of this video that have already been on the wire.
+
+    With since set, only what went out after that moment counts, which is how
+    the draw falls back: everything older is treated as unseen again. Rows
+    carried over from the old hour ledger have no usable timestamp of their
+    own and read as aired at that hour's time, which is right.
+    """
     book = ledger() if book is None else book
-    return set(book.get(chan.video_id(name) or str(name), {}))
+    rows = book.get(chan.video_id(name) or str(name), {})
+    return {u for u, when in rows.items() if when >= since}
 
 
 def reserved(folder=None):
@@ -282,14 +303,15 @@ def from_board(path):
     return not KICK_ID.match(chan.video_id(path) or "")
 
 
-def unaired(path, book, durations, held=None):
+def unaired(path, book, durations, held=None, since=0):
     """The chunks of this file that have never been on the wire and are not
-    already cut and waiting to go."""
+    already cut and waiting to go. With since, chunks older than it count as
+    unseen again."""
     seconds = chan.duration(path, durations)
     if not seconds:
         return set()
     vid = chan.video_id(path.name) or path.name
-    taken = played(path.name, book) | set((held or {}).get(vid, ()))
+    taken = played(path.name, book, since) | set((held or {}).get(vid, ()))
     return set(range(units_in(seconds))) - taken
 
 
@@ -343,8 +365,11 @@ def next_source():
                 chan.log(f"choix du chat: {wanted[:60]}")
                 return claim(path, "chat")
         chan.log(f"choix du chat introuvable ou deja vu: {str(wanted)[:60]}")
-    path, origin = draw(book, durations, just_played, held=held)
+    path, origin, since = draw_or_repeat(book, durations, just_played, held=held)
+    REPLAY.unlink(missing_ok=True)
     if path is not None:
+        if since:
+            chan.write_json(REPLAY, {"name": path.name, "since": since})
         return claim(path, origin)
 
     # No third tier. kil, 2026-09-19: "tu me repasses PAS 2 fois le meme chunk
@@ -355,11 +380,11 @@ def next_source():
     return None, None
 
 
-def draw(book, durations, just_played, avoid=(), held=None):
+def draw(book, durations, just_played, avoid=(), held=None, since=0):
     """(path, origin) the draw would take, moving nothing. None when spent."""
     for folder, origin in ((chan.QUEUE, "queue"), (chan.AIRED, "reserve")):
         fresh = [p for p in chan.media(folder)
-                 if p.name not in avoid and unaired(p, book, durations, held)
+                 if p.name not in avoid and unaired(p, book, durations, held, since)
                  and not (chan.NO_KICK and not from_board(p))]
         if not fresh:
             continue
@@ -368,6 +393,39 @@ def draw(book, durations, just_played, avoid=(), held=None):
         elsewhere = [p for p in fresh if recording_of(p) != just_played] or fresh
         return random.choice([p for p in elsewhere if from_board(p)] or elsewhere), origin
     return None, None
+
+
+def draw_or_repeat(book, durations, just_played, avoid=(), held=None, now=None):
+    """The draw, and what to fall back on when nothing on the disk is unseen.
+
+    (path, origin, since). since is 0 while anything unseen is left, which is
+    the normal case and the one that must never change. Below that the window
+    opens: material older than REPEAT_AFTER is offered again, oldest first,
+    and only if even that finds nothing does anything recent come back.
+
+    The fallback lives here and not in window(), which is where it used to be
+    and where it put hour 0 of a file back on the wire four hours after hour 0
+    of the same file on 2026-09-19: down there it fired whenever one *file*
+    was spent, with plenty unseen elsewhere. A repeat is only ever the right
+    answer when the whole disk has nothing new on it.
+    """
+    now = time.time() if now is None else now
+    path, origin = draw(book, durations, just_played, avoid, held)
+    if path is not None:
+        return path, origin, 0
+    # One window and no last resort. A tier below this one would have to
+    # accept something aired minutes ago, which is the complaint that started
+    # all of this, and it would make the window mean nothing. If everything on
+    # the disk is younger than REPEAT_AFTER the answer is the standby clip and
+    # the alarm in watch.py, because that is supply having failed and it is a
+    # thing to fix rather than to paper over.
+    since = now - REPEAT_AFTER
+    path, origin = draw(book, durations, just_played, avoid, held, since)
+    if path is not None:
+        chan.log(f"plus rien d'inedit, rediffusion de ce qui a plus de "
+                 f"{REPEAT_AFTER // 86400} jours: {path.name[:52]}")
+        return path, origin, since
+    return None, None, 0
 
 
 def claim(chosen, origin):
@@ -429,7 +487,7 @@ def reject(source, reason, forever=True):
     chan.telegram(f"video refusee ({reason}): {source.name[:80]}")
 
 
-def window(source, seconds, number=None):
+def window(source, seconds, number=None, since=0):
     """(start, length, slice number) of the hour to air now, drawn at random,
     or None when the file has nothing unseen left in it.
 
@@ -462,7 +520,7 @@ def window(source, seconds, number=None):
         # hours after hour 0 of the same file, which is the one thing this
         # channel promises not to do. Nothing unseen means the file is spent,
         # and a spent file retires instead of going round again.
-        free = sorted(set(range(total)) - played(source.name))
+        free = sorted(set(range(total)) - played(source.name, since=since))
         if not free:
             return None
         runs, run = [], [free[0]]
@@ -534,19 +592,19 @@ def prime():
     book = ledger()
     durations = chan.read_json(chan.STATE / "durations.json", {})
     onair = chan.read_json(chan.STATE / "onair.json", {}).get("source")
-    source, _ = draw(book, durations, last_recording(book),
-                     avoid=(onair,) if onair else ())
+    source, _, since = draw_or_repeat(book, durations, last_recording(book),
+                                      avoid=(onair,) if onair else ())
     if source is None and onair:
         # the file on air is the only one with anything unseen left. Holding
         # another of its hours is not the change a skip is asking for, but it
         # beats the standby clip, which is the real alternative.
-        source, _ = draw(book, durations, last_recording(book))
+        source, _, since = draw_or_repeat(book, durations, last_recording(book))
     if source is None:
         return
     info = chan.probe(source)
     if info is None or chan.shape_problem(info):
         return
-    drawn = window(source, info["seconds"])
+    drawn = window(source, info["seconds"], None, since)
     if drawn is None:
         return
     start, _, number = drawn
@@ -634,7 +692,7 @@ def do_skip(reason, name=""):
     chan.log(f"passage saute ({reason}): {name[:60]}")
 
 
-def run_job(source, origin, skip, number=None):
+def run_job(source, origin, skip, number=None, since=0):
     """Cut one hour of a file into chunks. number is set only on a resume.
 
     A restart used to come back through here with the chunks of one hour
@@ -662,7 +720,7 @@ def run_job(source, origin, skip, number=None):
 
     audio = ["-c:a", "copy"] if chan.audio_copies(info) else \
         ["-c:a", "aac", "-b:a", "160k", "-ar", "44100", "-ac", "2"]
-    drawn = window(source, info["seconds"], number)
+    drawn = window(source, info["seconds"], number, since)
     if drawn is None:
         chan.log(f"plus rien d'inedit dans {source.name[:60]}, passe en reserve")
         settle(source, origin)
@@ -802,6 +860,8 @@ def main():
         if source is None:
             time.sleep(30)
             continue
+        replay = chan.read_json(REPLAY, {})
+        since = replay.get("since", 0) if replay.get("name") == source.name else 0
         primed = chan.read_json(PRIMED, {})
         PRIMED.unlink(missing_ok=True)
         if primed.get("source") == source.name:
@@ -811,7 +871,7 @@ def main():
                                / source.name)
                 time.sleep(60)
             continue
-        if not run_job(source, origin, 0):
+        if not run_job(source, origin, 0, None, since):
             # could not measure: back where it came from, and give the box a minute
             source.replace((chan.QUEUE if origin == "queue" else chan.AIRED) / source.name)
             time.sleep(60)
