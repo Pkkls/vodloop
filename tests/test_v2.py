@@ -592,9 +592,10 @@ print("bot: channel points do the thing or hand the points back")
 check("no reward description would be cut in half by Kick's limit",
       bot.check_rewards(),
       [(r["title"], len(r["description"])) for r in bot.REWARDS])
-check("control: the two that take typing say so",
-      [r["input"] for r in bot.REWARDS] == [False, False, True, True],
-      [r["input"] for r in bot.REWARDS])
+check("the ones that need typing are the ones that ask a question",
+      [r["input"] for r in bot.REWARDS]
+      == [r["key"] in ("pick", "place", "request") for r in bot.REWARDS],
+      [(r["key"], r["input"]) for r in bot.REWARDS])
 settled = []
 real_settle, real_unseen, real_playing = bot.kickapi.settle_redemption, bot.unseen_hours, bot.playing
 try:
@@ -621,6 +622,34 @@ try:
           redeem("Some other reward") is None)
     check("control: a redemption already settled is not acted on twice",
           redeem("Skip this hour", status="accepted") is None)
+    print("  -- a stream asked for by link")
+    for shape in ("https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+                  "https://youtu.be/dQw4w9WgXcQ?t=42",
+                  "youtube.com/live/dQw4w9WgXcQ",
+                  "https://m.youtube.com/watch?app=desktop&v=dQw4w9WgXcQ",
+                  "dQw4w9WgXcQ"):
+        if bot.video_asked(shape) != "dQw4w9WgXcQ":
+            check("every shape of link gives the id", False, shape)
+            break
+    else:
+        check("every shape of link gives the id", True)
+    check("control: something that is not a link gives nothing",
+          bot.video_asked("vas y stp") is None and bot.video_asked("") is None)
+    real_titles = supply.catalog_titles
+    try:
+        supply.catalog_titles = lambda: {"dQw4w9WgXcQ": "Day 7 IRL Cappadocia Turkey"}
+        supply.REQUESTS.unlink(missing_ok=True)
+        check("a link to something the channel follows is fetched",
+              redeem("Request a stream", "https://youtu.be/dQw4w9WgXcQ") == ("r1", True)
+              and "dQw4w9WgXcQ" in supply.REQUESTS.read_text())
+        check("control: a link to anything else is refunded, not fetched blind",
+              redeem("Request a stream", "https://youtu.be/AAAAAAAAAAA") == ("r1", False))
+        check("control: nonsense is refunded",
+              redeem("Request a stream", "coucou") == ("r1", False))
+    finally:
+        supply.catalog_titles = real_titles
+        supply.REQUESTS.unlink(missing_ok=True)
+
     print("  -- keep going, and take me somewhere")
     real_shelf2 = bot.shelf
     try:

@@ -41,6 +41,10 @@ SCOPES = ("user:read channel:read channel:write chat:write events:subscribe "
 REFRESH_MARGIN = 300
 # Kick's own clock against ours: a webhook older than this is a replay
 SIGNATURE_WINDOW = 300
+# Measured against the live API on 2026-09-19 by bisection: 200 is accepted and
+# 201 is "Invalid request". The documented schema gives no length at all, and
+# assuming the usual 255 had a reward silently refused.
+DESCRIPTION_MAX = 200
 # how long a link stays the same link, so one handed out is one that still works
 PENDING_LIFE = 12 * 3600
 
@@ -257,14 +261,14 @@ def create_reward(title, cost, description="", user_input=False):
     engineering against.
     """
     return _call("POST", "/channels/rewards", json={
-        "title": title, "cost": int(cost), "description": description[:255],
+        "title": title, "cost": int(cost), "description": description[:DESCRIPTION_MAX],
         "is_enabled": True, "is_user_input_required": bool(user_input),
         "should_redemptions_skip_request_queue": False})
 
 
 def update_reward(reward_id, cost, description=""):
     return _call("PATCH", f"/channels/rewards/{reward_id}",
-                 json={"cost": int(cost), "description": description[:255]}) is not None
+                 json={"cost": int(cost), "description": description[:DESCRIPTION_MAX]}) is not None
 
 
 def delete_reward(reward_id):
@@ -275,6 +279,17 @@ def settle_redemption(redemption_id, honoured):
     """Spend the points, or hand them back. One call, one redemption."""
     path = "/channels/rewards/redemptions/" + ("accept" if honoured else "reject")
     return _call("POST", path, json={"ids": [redemption_id]}) is not None
+
+
+def live_title(slug):
+    """The title the channel is actually showing, read without a token."""
+    try:
+        got = requests.get(f"https://kick.com/api/v2/channels/{slug}", timeout=20,
+                           headers={"User-Agent": "Mozilla/5.0"}).json()
+        live = got.get("livestream")
+        return (live or {}).get("session_title") or ""
+    except (requests.RequestException, ValueError, AttributeError):
+        return ""
 
 
 def viewers(slug):

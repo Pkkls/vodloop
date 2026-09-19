@@ -66,6 +66,7 @@ SKIP_MAX_PER_HOUR = int(chan.conf_num("SKIP_MAX_PER_HOUR", 3))
 SKIP_MIN_AIRED = int(chan.conf_num("SKIP_MIN_AIRED_SECONDS", 600))
 USER_COOLDOWN = int(chan.conf_num("USER_COOLDOWN_SECONDS", 15))
 TITLE_MIN_INTERVAL = int(chan.conf_num("TITLE_MIN_INTERVAL_SECONDS", 90))
+TITLE_CHECK_INTERVAL = int(chan.conf_num("TITLE_CHECK_INTERVAL_SECONDS", 300))
 SEEN_KEPT = 300
 
 _lock = threading.Lock()
@@ -415,11 +416,15 @@ REWARDS = [
     {"key": "pick", "title": "Pick what plays next", "cost": 250, "input": True,
      "description": "Type the number of a video from !list. "
                     "Refunded if the number is not on the shelf."},
+    {"key": "request", "title": "Request a stream", "cost": 400, "input": True,
+     "description": "Paste a YouTube link to a nanatty stream and it gets "
+                    "fetched and played. It has to come from a channel this "
+                    "rerun follows, so it can be checked first. "
+                    "Points back otherwise."},
     {"key": "place", "title": "Take me somewhere", "cost": 300, "input": True,
      "description": "Type a country or a city: Japan, Turkey, Peru, India, "
-                    "Korea, Chile, Argentina, Vietnam, Osaka, Cappadocia, Lima. "
-                    "The next hour is a stream filmed there. Not downloaded "
-                    "yet, it gets fetched and plays when it lands. "
+                    "Korea, Chile, Argentina, Osaka, Cappadocia, Lima. The "
+                    "next hour is filmed there, fetched if it is not here yet. "
                     "Points back if nothing matches."},
 ]
 BY_TITLE = {r["title"].lower(): r for r in REWARDS}
@@ -491,6 +496,45 @@ def place_terms(wanted):
     return PLACES.get(wanted, (wanted,))
 
 
+# every shape a viewer might paste, down to the bare id
+LINK = re.compile(
+    r"(?:youtu\.be/|youtube\.com/(?:watch\?(?:[\w=&]*&)?v=|live/|embed/|shorts/|v/)|^)"
+    r"([A-Za-z0-9_-]{11})(?![A-Za-z0-9_-])")
+
+
+def video_asked(text):
+    """The video id in whatever somebody pasted, or None."""
+    found = LINK.search((text or "").strip())
+    return found.group(1) if found else None
+
+
+def reward_request(data, now, who, text):
+    """A stream a viewer found on YouTube, fetched next.
+
+    Only what the channel already lists as a source is accepted. Oracle cannot
+    ask YouTube about a single video at all, the player API is walled from a
+    datacenter address, so anything outside the catalogue could not be checked
+    for length, shape or content before the board spent an hour on it. Inside
+    the catalogue every one of those is already known.
+    """
+    vid = video_asked(text)
+    if not vid:
+        return False, f"@{who} that is not a YouTube link — points refunded"
+    titles = supply.catalog_titles()
+    if vid not in titles:
+        return False, (f"@{who} that one is not in this channel's sources, "
+                       f"so it cannot be checked before fetching — points refunded")
+    if vid in supply.excluded(now):
+        return False, f"@{who} {titles[vid][:40]} has already been on, or was refused"
+    for path, _ in shelf():
+        if chan.video_id(path) == vid:
+            PICK.write_text(json.dumps({"name": path.name, "at": int(now)}))
+            return True, f"@{who} it is already here: {titles[vid][:44]} plays next"
+    with supply.REQUESTS.open("a") as fh:
+        fh.write(vid + "\n")
+    return True, f"@{who} fetching {titles[vid][:46]}, it goes on when it lands"
+
+
 def reward_place(data, now, who, text):
     """A stream shot somewhere in particular, from the disk or from the shelf's
     six hundred entries.
@@ -519,8 +563,8 @@ def reward_place(data, now, who, text):
     return False, f"@{who} nothing from there in the library — points refunded"
 
 
-ACTIONS = {"skip": reward_skip, "stay": reward_stay,
-           "pick": reward_pick, "place": reward_place}
+ACTIONS = {"skip": reward_skip, "stay": reward_stay, "pick": reward_pick,
+           "place": reward_place, "request": reward_request}
 
 
 def redeemed(payload):
@@ -547,7 +591,8 @@ def redeemed(payload):
 
 def check_rewards():
     """Nothing here may be silently cut in half by the API's own limit."""
-    too_long = [r["title"] for r in REWARDS if len(r["description"]) > 255]
+    too_long = [r["title"] for r in REWARDS
+                if len(r["description"]) > kickapi.DESCRIPTION_MAX]
     if too_long:
         chan.log(f"descriptions trop longues, elles seraient tronquees: {too_long}")
     return not too_long
@@ -569,7 +614,8 @@ def sync_rewards(update=False):
                                          spec["description"], spec["input"])
             chan.log(f"recompense {'creee' if done else 'refusee'}: "
                      f"{spec['title']} ({spec['cost']} points)")
-        elif update and found.get("cost") != spec["cost"]:
+        elif update and (found.get("cost") != spec["cost"]
+                         or (found.get("description") or "") != spec["description"]):
             done = kickapi.update_reward(found["id"], spec["cost"], spec["description"])
             chan.log(f"recompense {'ajustee' if done else 'inchangee'}: "
                      f"{spec['title']} {found.get('cost')} -> {spec['cost']}")
@@ -610,11 +656,20 @@ def keep_title():
     title rewritten every poll is a call to the API every poll, and the channel
     gains nothing from it.
     """
+    checked = 0
     while True:
         try:
             data = load()
             want = wanted_title()
             now = time.time()
+            # Every few minutes, believe the channel rather than our own memory.
+            # Comparing a wanted title to the last one we think we set means a
+            # failed call, or somebody editing the title by hand, is never
+            # noticed: the channel then says one thing while playing another.
+            if want and now - checked > TITLE_CHECK_INTERVAL:
+                checked = now
+                if kickapi.live_title(SLUG) not in ("", want):
+                    data["title"] = ""
             if (want and want != data.get("title")
                     and now - data.get("title_at", 0) > TITLE_MIN_INTERVAL):
                 if kickapi.set_title(want):
