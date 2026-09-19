@@ -36,6 +36,12 @@ sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 import chan  # noqa: E402
 
 JOB = chan.STATE / "job.json"
+# the chat's two levers, written by bot.py and consumed here exactly once
+SKIP = chan.STATE / "skip"
+PICK = chan.STATE / "pick"
+# what stays on the wire when an hour is cut short, so a skip is a change of
+# picture and never a gap: ten minutes to cut and move the next one in
+SKIP_KEEP_CHUNKS = 2
 SEQ = chan.STATE / "seq"
 LIST = chan.WORK / "job.list"
 PARTS = chan.STATE / "parts.json"
@@ -178,6 +184,15 @@ def next_source():
         return claim(spare[0], "repeat") if spare else (None, None)
 
     book, durations = ledger(), chan.read_json(chan.STATE / "durations.json", {})
+    wanted = chan.read_json(PICK, {}).get("name")
+    PICK.unlink(missing_ok=True)
+    if wanted:
+        for folder in (chan.QUEUE, chan.AIRED):
+            path = folder / wanted
+            if path.exists() and unaired(path, book, durations):
+                chan.log(f"choix du chat: {wanted[:60]}")
+                return claim(path, "chat")
+        chan.log(f"choix du chat introuvable ou deja vu: {str(wanted)[:60]}")
     for folder, origin in ((chan.QUEUE, "queue"), (chan.AIRED, "reserve")):
         fresh = [p for p in chan.media(folder) if unaired(p, book, durations)]
         if fresh:
@@ -314,7 +329,10 @@ def run_job(source, origin, skip):
     chan.WORK.mkdir(parents=True, exist_ok=True)
     for stale in chan.WORK.iterdir():
         stale.unlink(missing_ok=True)
-    chan.write_json(JOB, {"source": source.name, "origin": origin, "done": skip})
+    chan.write_json(JOB, {"source": source.name, "origin": origin, "done": skip,
+                          "number": number, "seconds": info["seconds"],
+                          "started": int(time.time())})
+    SKIP.unlink(missing_ok=True)
     job = subprocess.Popen(
         ["ffmpeg", "-hide_banner", "-loglevel", "error"] + seek + ["-i", str(source),
          "-map", "0:v:0", "-map", "0:a:0", "-c:v", "copy"] + audio + chan.DROP_SEI
@@ -322,6 +340,7 @@ def run_job(source, origin, skip):
            "-segment_format", "mpegts", "-segment_list", str(LIST),
            "-reset_timestamps", "1", str(chan.WORK / "job_%05d.ts")],
         stderr=subprocess.PIPE)
+    started_at, skipped = int(time.time()), False
     chan.log(f"decoupe {source.name} ({origin}, {info['seconds'] / 3600:.1f} h, "
              + (f"tranche {start / 3600:.1f}-{(start + length) / 3600:.1f} h, " if seek else "")
              + f"son {'copie' if audio[1] == 'copy' else 'transcode'}, saut {skip})")
@@ -336,11 +355,30 @@ def run_job(source, origin, skip):
                 piece.unlink(missing_ok=True)
             else:
                 piece.replace(chan.CHUNKS / f"{next_seq():010d}.ts")
-                chan.write_json(JOB, {"source": source.name, "origin": origin, "done": moved + 1})
+                chan.write_json(JOB, {"source": source.name, "origin": origin,
+                                      "done": moved + 1, "number": number,
+                                      "seconds": info["seconds"], "started": started_at})
             moved += 1
 
     while job.poll() is None:
         collect()
+        if SKIP.exists():
+            # the chat has voted this hour off. Cutting more of it is wasted work
+            # and the chunks already waiting are the hour itself, so both go; two
+            # are kept so the wire has something while the next hour is cut.
+            reason = chan.read_json(SKIP, {}).get("reason", "demande")
+            SKIP.unlink(missing_ok=True)
+            if paused:
+                # a stopped process does not act on SIGTERM, it just stays
+                # stopped, and the buffer is full exactly when a skip is asked
+                job.send_signal(signal.SIGCONT)
+                paused = False
+            job.terminate()
+            for stale in sorted(chan.CHUNKS.glob("*.ts"))[SKIP_KEEP_CHUNKS:]:
+                stale.unlink(missing_ok=True)
+            chan.log(f"passage saute ({reason}): {source.name[:60]}")
+            skipped = True
+            break
         full = ahead_seconds() >= chan.AHEAD_SECONDS + 2 * chan.CHUNK_SECONDS
         if full and not paused:
             job.send_signal(signal.SIGSTOP)
@@ -354,10 +392,10 @@ def run_job(source, origin, skip):
     for stale in chan.WORK.iterdir():
         stale.unlink(missing_ok=True)
     JOB.unlink(missing_ok=True)
-    if job.returncode != 0 and moved == 0:
+    if job.returncode != 0 and moved == 0 and not skipped:
         reject(source, (error.splitlines() or ["ffmpeg a echoue"])[-1][:120], forever=False)
         return True
-    if job.returncode != 0:
+    if job.returncode != 0 and not skipped:
         chan.log(f"decoupe interrompue apres {moved} chunks: {error[-200:]}")
     if chan.PART_SECONDS:
         record_hour(source.name, number)

@@ -9,6 +9,7 @@ import os
 import pathlib
 import shutil
 import subprocess
+import time
 import sys
 import tempfile
 
@@ -25,6 +26,7 @@ import chan  # noqa: E402
 import cut  # noqa: E402
 import feed  # noqa: E402
 import kick  # noqa: E402
+import kickapi  # noqa: E402
 import supply  # noqa: E402
 
 failures = []
@@ -392,6 +394,96 @@ if shutil.which("ffmpeg"):
               cut.played(back.name))
     finally:
         chan.PART_SECONDS, cut.TAIL_SECONDS = real_part, real_tail
+
+
+print("bot: reading the pipeline")
+import bot  # noqa: E402
+
+check("a file name becomes something a viewer can read",
+      bot.pretty("1789784406-260120_nanatty_-_Day_2_IRL_Santiago-JEELzhY-PGQ.mkv")
+      == "260120 nanatty - Day 2 IRL Santiago",
+      bot.pretty("1789784406-260120_nanatty_-_Day_2_IRL_Santiago-JEELzhY-PGQ.mkv"))
+check("control: a name with neither prefix nor id survives it",
+      bot.pretty("clip.mkv") == "clip")
+chan.write_json(cut.JOB, {"source": "1789-Un_Titre-dQw4w9WgXcQ.mkv", "origin": "queue",
+                          "done": 2, "number": 2, "seconds": 18000,
+                          "started": time.time() - 900})
+was = chan.PART_SECONDS
+chan.PART_SECONDS = 3600
+live = bot.playing()
+chan.PART_SECONDS = was
+check("what is on the wire is read from the cutter's own job",
+      live["hour"] == 3 and live["hours"] == 5 and 890 < live["elapsed"] < 960, live)
+check("and its source is named", live["vid"] == "dQw4w9WgXcQ")
+
+print("bot: the guards on skipping")
+real_unseen = bot.unseen_hours
+try:
+    bot.unseen_hours = lambda: 0
+    check("no vote opens when there is nothing unseen to move on to",
+          bot.skip_blocked({"skips": []}, 1000000, None) is not None)
+    bot.unseen_hours = lambda: 5
+    check("control: with material in hand the hour itself is the only gate",
+          bot.skip_blocked({"skips": []}, 1000000, None) is None)
+    fresh = {"elapsed": 60, "hour": 1, "hours": 5}
+    check("an hour cannot be voted off in its first minutes",
+          "votable in" in (bot.skip_blocked({"skips": []}, 1000000, fresh) or ""))
+    settled = {"elapsed": bot.SKIP_MIN_AIRED + 1, "hour": 1, "hours": 5}
+    check("control: once it has run long enough it can",
+          bot.skip_blocked({"skips": []}, 1000000, settled) is None)
+    just = {"skips": [1000000 - 60]}
+    check("a skip locks the next one for the cooldown",
+          "next vote possible" in (bot.skip_blocked(just, 1000000, settled) or ""))
+    many = {"skips": [1000000 - 100 * n for n in range(1, bot.SKIP_MAX_PER_HOUR + 1)]}
+    check("and an hour holds only so many of them",
+          "that is the limit" in (bot.skip_blocked(many, 1000000, settled) or ""),
+          bot.skip_blocked(many, 1000000, settled))
+    old = {"skips": [1000000 - 7000]}
+    check("control: skips older than the hour do not count",
+          bot.skip_blocked(old, 1000000, settled) is None)
+finally:
+    bot.unseen_hours = real_unseen
+
+print("bot: one voice per account, and the skip only at the threshold")
+real_threshold, real_viewers = bot.threshold, bot.unseen_hours
+try:
+    bot.threshold = lambda: 3
+    bot.unseen_hours = lambda: 5
+    bot.SKIP.unlink(missing_ok=True)
+    data = {"skips": [], "vote": None, "users": {}, "seen": []}
+    settled = {"elapsed": bot.SKIP_MIN_AIRED + 1, "hour": 1, "hours": 5}
+    real_playing = bot.playing
+    bot.playing = lambda: settled
+    now = 2000000
+    first = bot.cmd_vote(data, now, {"user_id": "u1", "privileged": False}, [])
+    check("the first voice opens the vote and says what it needs",
+          "3 votes needed" in (first or ""), first)
+    again = bot.cmd_vote(data, now + 1, {"user_id": "u1", "privileged": False}, [])
+    check("the same account cannot vote twice", again is None and len(data["vote"]["voters"]) == 1)
+    bot.cmd_vote(data, now + 2, {"user_id": "u2", "privileged": False}, [])
+    check("a second voice counts but does not carry it",
+          len(data["vote"]["voters"]) == 2 and not bot.SKIP.exists())
+    done = bot.cmd_vote(data, now + 3, {"user_id": "u3", "privileged": False}, [])
+    check("the third carries it, and the cutter is told", bot.SKIP.exists(), done)
+    check("and the vote is closed behind it", data["vote"] is None)
+    check("control: the skip is written down so the next one is on cooldown",
+          len(data["skips"]) == 1)
+    bot.SKIP.unlink(missing_ok=True)
+    plain = bot.cmd_force(data, now + 4, {"user_id": "u4", "privileged": False, "name": "x"}, [])
+    check("a viewer cannot force", plain is None and not bot.SKIP.exists())
+    bot.playing = real_playing
+finally:
+    bot.threshold, bot.unseen_hours = real_threshold, real_viewers
+    bot.SKIP.unlink(missing_ok=True)
+    cut.JOB.unlink(missing_ok=True)
+
+print("bot: a webhook is read only once it is proven to be Kick's")
+check("a POST with no signature at all is refused",
+      not kickapi.verify({"Kick-Event-Message-Id": "1"}, b"{}"))
+check("control: a signature over the wrong body is refused too",
+      not kickapi.verify({"Kick-Event-Message-Id": "1",
+                          "Kick-Event-Message-Timestamp": "2026-09-19T12:00:00Z",
+                          "Kick-Event-Signature": "Zm9v"}, b"{}"))
 
 print()
 if failures:

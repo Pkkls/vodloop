@@ -1,0 +1,23 @@
+[Unit]
+Description=vodloop v2 chat bot (%i)
+After=network-online.target
+
+[Service]
+Type=exec
+User=ubuntu
+Environment=CHAN_ROOT=/home/ubuntu/v2/%i
+ExecStart=/usr/bin/python3 /home/ubuntu/v2/bin/bot.py
+Restart=always
+RestartSec=10
+TimeoutStopSec=15
+Nice=5
+CPUWeight=20
+MemoryMax=200M
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=/home/ubuntu/v2/%i
+
+[Install]
+WantedBy=multi-user.target
