@@ -424,9 +424,21 @@ def main(argv):
     # exactly one destination, so the board is told how many recordings still
     # hold unseen time, not only how many hours they add up to.
     held = cut.reserved()
-    streams = sum(1 for folder in (chan.QUEUE, chan.CURRENT, chan.AIRED)
-                  for p in chan.media(folder)
-                  if cut.unaired(p, book, durations, held))
+    streams, on_disk, spent = 0, 0, 0.0
+    for folder in (chan.QUEUE, chan.CURRENT, chan.AIRED):
+        for p in chan.media(folder):
+            free = len(cut.unaired(p, book, durations, held))
+            streams += bool(free)
+            # what a file weighs against the part of it nobody will be shown
+            # again. A file is kept whole until its last hour has gone out, so
+            # this share climbs from nothing to everything over its life and
+            # sits near a half in the middle. Written down every ten minutes
+            # rather than measured the day it matters, because on the day it
+            # matters the disk is already full.
+            total = cut.units_in(chan.duration(p, durations))
+            on_disk += chan.size_of(p)
+            spent += chan.size_of(p) * max(0, total - free) / max(1, total)
+    seen_share = 100 * spent / on_disk if on_disk else 0
     other = sum(chan.tree_bytes(f) for f in (chan.CURRENT, chan.CHUNKS, chan.UPLOAD))
     free = shutil.disk_usage(chan.ROOT).free
     need, offer, evict = plan(sum(chan.size_of(p) for p in queue), queued, other, aired, free)
@@ -463,7 +475,7 @@ def main(argv):
     seen_before = {vid for _, vid in ledger_ids("aired.tsv")}
     candidates.sort(key=lambda row: row[0] in seen_before)
     chan.log(f"file {len(queue)} ({queued / 3600:.1f} h), {streams} inedites, "
-             f"reserve {runway / 3600:.1f} h, "
+             f"{seen_share:.0f}% deja vu, reserve {runway / 3600:.1f} h, "
              f"diffuses {len(aired) - len(evict)}, "
              f"besoin {need / 3600:.1f} h, offre {offer / chan.GIB:.1f} Go, "
              f"libre {free / chan.GIB:.1f} Go, candidats {len(candidates)}/{len(catalog)} "
