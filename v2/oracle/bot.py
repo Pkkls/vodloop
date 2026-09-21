@@ -1387,6 +1387,11 @@ def main(argv):
     threading.Thread(target=keep_title, daemon=True).start()
     if TG_TOKEN and TG_CHAT:
         threading.Thread(target=relay_loop, daemon=True).start()
+        # kil, 2026-09-21: "logs tout ce qui se passe dans le bot telegram".
+        # Everything this process writes down goes out with the chat, in the
+        # same fifteen second batch, so a redemption, a refund and the answer
+        # a viewer saw read in one place and in order.
+        chan.on_log = lambda line: relay(f"[log] {line}")
         if TG_POLL:
             threading.Thread(target=tg_loop, daemon=True).start()
         chan.log(f"telegram: chat relaye, reponse depuis telegram "

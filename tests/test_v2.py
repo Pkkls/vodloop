@@ -854,6 +854,21 @@ try:
     bot.tg_reply({"chat": {"id": 42}, "text": "   "})
     check("control: an empty line says nothing", said_tg == ["bonsoir"], said_tg)
     bot._relay.clear()
+    chan.on_log = lambda line: bot.relay(f"[log] {line}")
+    chan.log("recompense jump par v: honoree")
+    check("what the bot writes down goes out with the chat",
+          bot._relay == ["[log] recompense jump par v: honoree"], bot._relay)
+    bot._relay.clear()
+    chan.on_log = lambda line: chan.log("et me revoila")
+    chan.log("une ligne")
+    check("control: a hook that logs goes round once, not for ever", True)
+    chan.on_log = lambda line: 1 / 0
+    chan.log("une autre")
+    check("control: a hook that throws does not take the bot down with it", True)
+    chan.on_log = None
+    bot._relay.clear()
+    chan.log("plus personne n ecoute")
+    check("control: with no hook set nothing is queued at all", bot._relay == [], bot._relay)
     bot.relay("viewer: salut")
     check("the chat waits in one batch instead of a message per line",
           bot._relay == ["viewer: salut"], bot._relay)

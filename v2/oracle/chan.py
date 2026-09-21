@@ -144,8 +144,26 @@ VIDEO_ID = re.compile(r"-([A-Za-z0-9_-]{11})\.(?:mkv|mp4)$")
 DROP_SEI = ["-bsf:v", "filter_units=remove_types=6"]
 
 
+# a process that wants its own log lines carried somewhere else sets this.
+# bot.py sends them to the Telegram room, which is how an operator away from
+# the server sees what the channel did. Nothing else in here knows about it.
+on_log = None
+_relaying = False
+
+
 def log(message):
     print(f"{time.strftime('%Y-%m-%d %H:%M:%S')} {message}", flush=True)
+    global _relaying
+    if on_log and not _relaying:
+        # whatever the hook does, a failure inside it logs, and that log would
+        # come straight back in here: once round is enough
+        _relaying = True
+        try:
+            on_log(message)
+        except Exception:
+            pass
+        finally:
+            _relaying = False
 
 
 def media(folder):
