@@ -457,13 +457,46 @@ def cmd_vod(*_):
     return f"{live['title']}{piece}{tail}"
 
 
-def cmd_liste(*_):
-    rows = shelf()[:5]
+LIST_PAGE = int(chan.conf_num("LIST_PAGE", 8))
+
+
+def pickable():
+    """(ready, fetchable): what is on the disk, then what the board can bring.
+
+    kil, 2026-09-21: "ca doit avoir des dizaines de videos disponibles, pas
+    uniquement 2 ou 3". Under a 28 Go share the disk holds one or two videos at
+    a time, so a list of the disk is a list of two, and it was. The catalogue
+    holds five hundred and the board can put any of them on the wire within the
+    hour, so the list is the catalogue with what is already here at its head.
+
+    Both halves carry (id, file name or None, title, seconds), so one number
+    from !list means one row here whichever half it falls in.
+    """
+    ready = [(chan.video_id(path), path.name, clean_title(path.name, SLUG), 0)
+             for path, _ in shelf()]
+    here = {vid for vid, _, _, _ in ready}
+    # the catalogue carries the uploader's own file name, so it goes through the
+    # same cleaning as the title on air rather than spending half a chat line on
+    # a date prefix and the channel's own name
+    return ready, [(vid, None, clean_title(title, SLUG) if title else vid, seconds)
+                   for vid, seconds, title in supply.candidates() if vid not in here]
+
+
+def cmd_liste(data, now, sender, args):
+    ready, pool = pickable()
+    rows = ready + pool
     if not rows:
         return "nothing ready yet, more is downloading"
-    listing = " · ".join(f"{n + 1} {pretty(p.name)[:38]}"
-                         for n, (p, h) in enumerate(rows))
-    return f"next: {listing} · !pick 1 to vote for one"
+    pages = (len(rows) - 1) // LIST_PAGE + 1
+    try:
+        page = min(max(1, int(args[0])), pages)
+    except (IndexError, ValueError):
+        page = 1
+    start = (page - 1) * LIST_PAGE
+    listing = " · ".join(f"{start + n + 1} {title[:34]}"
+                         for n, (_, _, title, _) in enumerate(rows[start:start + LIST_PAGE]))
+    more = f" · !list {page + 1} of {pages}" if page < pages else ""
+    return f"{len(rows)} videos: {listing}{more} · !pick <n>"
 
 
 def cmd_source(*_):
@@ -521,17 +554,47 @@ def cmd_vote(data, now, sender, args):
     return f"skip vote: {need} needed, type !skip"
 
 
+def ask_for(data, now, sender, row):
+    """Put a video the chat picked, and that is not here, in the board's way.
+
+    kil, 2026-09-21: "une nouvelle video doit etre ajoutee si on utilise un
+    vote". Picking something the channel does not hold is what adds it, and it
+    costs nothing. The guards are the ones the paid request already needed: the
+    board fetches one video at a time under a ceiling the channel's own supply
+    mostly spends, so three waiting is the cap, and one per viewer stops a
+    single person holding all three.
+    """
+    vid, _, title, seconds = row
+    held = waiting_requests(data)
+    asked = data.get("asked") or {}
+    if vid in held:
+        return f"{title[:40]} is already coming, {waiting_for(seconds)}"
+    if any(asked.get(v, {}).get("who") == sender["name"] for v in held):
+        return "you already have one on its way, wait for it to land"
+    if len(held) >= REQUEST_MAX_PENDING:
+        return f"{len(held)} already downloading, ask again when one lands"
+    with supply.REQUESTS.open("a") as fh:
+        fh.write(vid + "\n")
+    data.setdefault("asked", {})[vid] = {"who": sender["name"], "title": title,
+                                         "at": int(now), "state": "waiting",
+                                         "redemption": None}
+    return f"downloading {title[:40]}, {waiting_for(seconds)}"
+
+
 def cmd_pick(data, now, sender, args):
-    rows = shelf()
+    ready, pool = pickable()
+    rows = ready + pool
     if not rows:
         return "nothing to pick from yet"
     try:
         index = int(args[0]) - 1
     except (IndexError, ValueError):
         return "!pick <number>, numbers come from !list"
-    if not 0 <= index < min(5, len(rows)):
-        return f"pick 1 to {min(5, len(rows))}, see !list"
-    target = rows[index][0].name
+    if not 0 <= index < len(rows):
+        return f"pick 1 to {len(rows)}, see !list"
+    if index >= len(ready):
+        return ask_for(data, now, sender, rows[index])
+    target, said = ready[index][1], ready[index][2]
     vote = data.get("vote")
     if vote and vote["closes"] > now and vote["kind"] == "pick" and vote["target"] == target:
         return cmd_vote(data, now, sender, args)
@@ -543,8 +606,8 @@ def cmd_pick(data, now, sender, args):
     if need <= 1:
         PICK.write_text(json.dumps({"name": target, "at": int(now)}))
         data["vote"] = None
-        return f"{pretty(target)} is next"
-    return (f"vote to play {pretty(target)[:40]}: {need} needed, "
+        return f"{said} is next"
+    return (f"vote to play {said[:40]}: {need} needed, "
             f"type !pick {index + 1}")
 
 
@@ -718,15 +781,25 @@ def reward_skip(data, now, who, text):
 
 
 def reward_pick(data, now, who, text):
-    rows = shelf()
+    ready, pool = pickable()
+    rows = ready + pool
     try:
         index = int(re.sub(r"\D", "", text or "")) - 1
     except ValueError:
         return False, f"@{who} that is not a number from !list, points back"
-    if not rows or not 0 <= index < min(5, len(rows)):
+    if not rows or not 0 <= index < len(rows):
         return False, f"@{who} no video at that number, points back"
-    PICK.write_text(json.dumps({"name": rows[index][0].name, "at": int(now)}))
-    return True, f"@{who} picked {pretty(rows[index][0].name)[:48]}, it is next"
+    if index >= len(ready):
+        # the numbers in !list run on into the catalogue, so a paid pick can
+        # land on something that has to be fetched first. That is the request
+        # reward under another name, and it settles the same way
+        vid, _, title, seconds = rows[index]
+        ok, refusal = queue_request(data, now, who, vid, title)
+        if not ok:
+            return False, refusal
+        return True, f"@{who} picked {title[:44]}, {waiting_for(seconds)}"
+    PICK.write_text(json.dumps({"name": ready[index][1], "at": int(now)}))
+    return True, f"@{who} picked {ready[index][2][:48]}, it is next"
 
 
 def reward_stay(data, now, who, text):
@@ -1069,15 +1142,18 @@ def announce_arrivals(data):
         if vid in landing:
             continue  # mid-transfer from the board, not a failure
         barred = supply.excluded(now) if barred is None else barred
+        # a request from the chat costs nothing, so telling that viewer their
+        # points are back names points they never spent
+        back = ", points back" if row.get("redemption") else ""
         if vid in barred:
             settle_request(row, False)
-            say(f"@{who} {title} cannot be fetched after all, points back")
+            say(f"@{who} {title} cannot be fetched after all{back}")
             asked.pop(vid)
         elif now - row.get("at", 0) > REQUEST_DEADLINE:
             settle_request(row, False)
             say(f"@{who} {title} did not arrive within "
                 f"{REQUEST_DEADLINE // 3600} h, the board is at its daily "
-                f"ceiling, points back")
+                f"ceiling{back}")
             asked.pop(vid)
     data["asked"] = asked
 

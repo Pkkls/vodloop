@@ -685,7 +685,8 @@ try:
     check("nothing a viewer is told names a file, an hour count or a floor",
           all(not any(word in (message or "") for word in ("reserve", "shelf", "h back"))
               for message in (bot.skip_blocked({"skips": []}, 1000000, settled),
-                              bot.cmd_aide(), bot.cmd_liste())))
+                              bot.cmd_aide(),
+                              bot.cmd_liste({}, 1000000, {"user_id": "u"}, []))))
 finally:
     bot.shelf = real_shelf
 
@@ -721,6 +722,57 @@ finally:
     bot.threshold, bot.shelf = real_threshold, real_shelf
     bot.SKIP.unlink(missing_ok=True)
     bot.feed.ONAIR.unlink(missing_ok=True)
+
+print("bot: the list is the catalogue, and picking what is not here fetches it")
+real_shelf, real_cand = bot.shelf, supply.candidates
+real_threshold, real_waiting = bot.threshold, bot.waiting_for
+chan.STATE.mkdir(parents=True, exist_ok=True)
+supply.REQUESTS.unlink(missing_ok=True)
+try:
+    on_disk = pathlib.Path("1789819373-Deja_La-dQw4w9WgXcQ.mkv")
+    bot.shelf = lambda: [(on_disk, 4)]
+    supply.candidates = lambda: [(f"id{n:09d}", 3600, f"Stream number {n}") for n in range(40)]
+    bot.threshold, bot.waiting_for = lambda: 1, lambda seconds: "ready in ~30 min"
+    viewer = {"user_id": "u1", "name": "u1", "privileged": False}
+    listed = bot.cmd_liste({}, 1000, viewer, [])
+    check("the list counts everything the board can bring, not only the disk",
+          listed.startswith("41 videos:"), listed)
+    supply.candidates = lambda: []
+    check("control: with nothing fetchable the list is the disk again",
+          bot.cmd_liste({}, 1000, viewer, []).startswith("1 videos:"))
+    supply.candidates = lambda: [(f"id{n:09d}", 3600, f"Stream number {n}") for n in range(40)]
+    check("one page stays inside a single chat line", len(listed) <= 500, len(listed))
+    page2 = bot.cmd_liste({}, 1000, viewer, ["2"])
+    check("the numbers run on across the pages rather than restarting",
+          page2.split(": ")[1].startswith(f"{bot.LIST_PAGE + 1} "), page2)
+    check("control: a page past the end lands on the last one, never empty",
+          bot.cmd_liste({}, 1000, viewer, ["99"]).split(": ")[1].split(" ")[0].isdigit())
+
+    data = {}
+    answer = bot.cmd_pick(data, 1000, viewer, ["7"])
+    check("picking something the channel does not hold puts it on the board",
+          supply.REQUESTS.read_text().strip() == "id000000005", answer)
+    check("and the viewer is told it is coming, with a wait", "downloading" in answer, answer)
+    check("control: the same viewer cannot hold two of the board's slots",
+          "on its way" in bot.cmd_pick(data, 1010, viewer, ["8"]) and
+          supply.REQUESTS.read_text().count("\n") == 1)
+    other = {"user_id": "u2", "name": "u2", "privileged": False}
+    bot.cmd_pick(data, 1020, other, ["9"])
+    bot.cmd_pick(data, 1030, {"user_id": "u3", "name": "u3", "privileged": False}, ["10"])
+    full = bot.cmd_pick(data, 1040, {"user_id": "u4", "name": "u4", "privileged": False}, ["11"])
+    check("the board's queue is capped, and the refusal appends nothing",
+          "already downloading" in full and supply.REQUESTS.read_text().count("\n") == 3, full)
+
+    bot.PICK.unlink(missing_ok=True)
+    before = supply.REQUESTS.read_text()
+    picked = bot.cmd_pick({}, 1050, other, ["1"])
+    check("control: a number that is on the disk plays, it does not fetch",
+          bot.PICK.exists() and supply.REQUESTS.read_text() == before, picked)
+finally:
+    bot.shelf, supply.candidates = real_shelf, real_cand
+    bot.threshold, bot.waiting_for = real_threshold, real_waiting
+    supply.REQUESTS.unlink(missing_ok=True)
+    bot.PICK.unlink(missing_ok=True)
 
 print("bot: telegram carries the chat out and one room's answers back")
 said_tg, real_say_tg = [], bot.say

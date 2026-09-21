@@ -86,6 +86,28 @@ def measured_rate(paths, durations, fallback=250_000):
     return size / secs if secs >= 3600 else fallback
 
 
+def candidates():
+    """(id, seconds, title) the board may still be fetched for, recent first.
+
+    The same file the board draws from, read back, so a number the chat picks
+    cannot point at something that is already here, was refused, or aired
+    lately. The leading "!" of an id already requested is dropped: it is a mark
+    for the board, not part of the id.
+    """
+    rows = []
+    try:
+        for line in CANDIDATES.read_text(encoding="utf-8").splitlines():
+            fields = line.split("\t")
+            try:
+                rows.append((fields[0].lstrip("!"), int(fields[1]),
+                             fields[2].strip() if len(fields) > 2 else ""))
+            except (IndexError, ValueError):
+                continue
+    except OSError:
+        pass
+    return rows
+
+
 def catalog_titles():
     """{id: title} for the whole catalogue.
 
