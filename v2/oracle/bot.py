@@ -461,6 +461,9 @@ SAID = {
                     "最終到着{min}分前", "son {min} dk önce"),
     "help": ("playing, list, choose, skip, downloads, source", "sonando, lista, elegir, saltar, descargas, fuente",
             "再生中 / 一覧 / 選ぶ / スキップ / 取得中 / 元動画", "çalan, liste, seç, atla, indirilenler, kaynak"),
+    "short_playing": ("a short while the next stream downloads",
+                      "un short mientras baja el siguiente",
+                      "次の配信の取得中、ショート再生", "sonraki yayın inerken bir short"),
     "nothing_on": ("nothing on air right now", "nada en directo ahora",
                   "今は配信なし", "şu anda yayın yok"),
     "nothing_ready": ("nothing ready yet, downloading more",
@@ -563,6 +566,10 @@ def cmd_aide(*_):
 def cmd_vod(*_):
     live = playing()
     if not live:
+        # the wire is never silent: when it is not the channel's material it is
+        # a short, and a viewer arriving then deserves better than "nothing on"
+        if chan.read_json(feed.ONAIR, {}).get("short"):
+            return four("short_playing")
         return four("nothing_on")
     left = max(0, chan.PART_SECONDS - live["elapsed"]) if chan.PART_SECONDS else 0
     # hours and minutes as numbers: a viewer reads 3/9 in any language

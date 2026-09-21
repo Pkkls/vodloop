@@ -888,6 +888,20 @@ try:
           feed.next_short() == second)
     check("control: nothing is deleted, both are kept for their next turn",
           len(list(chan.SHORTS.glob("*.ts"))) == 2)
+    # kil, 2026-09-21: "si il n y a pas de vod dispo, tu dois afficher les shorts"
+    feed.SHORT.unlink(missing_ok=True)
+    check("with nothing to send at all a short goes out without being asked",
+          feed.oldest_short() is not None)
+    feed.note_on_air(feed.oldest_short())
+    row = chan.read_json(feed.ONAIR, {})
+    check("and it is written down as a wait, not as an hour of the channel",
+          row.get("filler") is True and row.get("short") and "source" not in row, row)
+    check("control: the watchdog still sees an empty buffer, so the alarm holds",
+          len(list(chan.CHUNKS.glob("*.ts"))) == 0)
+    for stale in chan.SHORTS.glob("*.ts"):
+        stale.unlink()
+    check("control: with none prepared the clip is what is left",
+          feed.oldest_short() is None)
     for stale in chan.SHORTS.glob("*.ts"):
         stale.unlink()
 finally:

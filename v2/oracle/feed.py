@@ -118,26 +118,34 @@ def reopen_if_above(chunk, may_reopen, now=time.time):
     return True
 
 
-def next_short():
-    """The short to play now, or None. Oldest first, so they take turns.
+def oldest_short():
+    """The short whose turn it is, or None. Oldest first, so they take turns.
 
     Nothing is deleted: a short is a few megabytes and the rotation is the
     point. The one sent is touched, which puts it last in line, which is the
     whole of the bookkeeping.
     """
+    ready = sorted(chan.SHORTS.glob("*.ts"), key=lambda p: p.stat().st_mtime)
+    return ready[0] if ready else None
+
+
+def next_short():
+    """The short the chat has paid for, or None. The marker is spent either way."""
     if not SHORT.exists():
         return None
     SHORT.unlink(missing_ok=True)
-    ready = sorted(chan.SHORTS.glob("*.ts"), key=lambda p: p.stat().st_mtime)
-    if not ready:
-        return None
-    return ready[0]
+    return oldest_short()
 
 
 def note_on_air(chunk):
     """Say which hour of which file is going out, and since when."""
     if chunk == chan.FILLER:
         row = {"filler": True, "at": int(time.time())}
+    elif chunk.parent == chan.SHORTS:
+        # a short is not the channel's material: the hour on air has not moved
+        # and nothing is spent in the ledger, so it is marked as a wait, which
+        # is what the chat and the watchdog both need to read
+        row = {"filler": True, "short": chunk.stem, "at": int(time.time())}
     else:
         found = chan.read_json(chan.STATE / "chunkmap.json", {}).get(chunk.name)
         if not found:
@@ -148,7 +156,7 @@ def note_on_air(chunk):
         # they are sent stay unseen and come back in the draw.
         if len(found) >= 4:
             cut.record_units(found[0], [int(found[3])])
-    keys = ("source", "number", "filler")
+    keys = ("source", "number", "filler", "short")
     was = chan.read_json(ONAIR, {})
     if [was.get(k) for k in keys] == [row.get(k) for k in keys]:
         return  # same hour still going out, so the clock on it does not restart
@@ -166,16 +174,33 @@ def main():
         time.sleep(30)
     while True:
         chunks = sorted(chan.CHUNKS.glob("*.ts"))
-        if open_session(pusher_pid()):
+        opened = open_session(pusher_pid())
+        if opened:
             chan.log(f"session ouverte sur le clip d'attente: {profile_of(chan.FILLER)}")
             chunks = []
-        source = chunks[0] if chunks else chan.FILLER
-        short = next_short() if chunks else None
-        if short is not None:
-            # it goes out between two chunks, so nothing is cut short and the
-            # hour on air resumes exactly where it was
-            chan.log(f"short intercale: {short.name}")
-            source = short
+        short = None
+        if chunks:
+            source = chunks[0]
+            short = next_short()
+            if short is not None:
+                # it goes out between two chunks, so nothing is cut short and
+                # the hour on air resumes exactly where it was
+                chan.log(f"short intercale: {short.name}")
+                source = short
+        elif opened:
+            # the first picture of a session is always the clip: it is the one
+            # file whose profile is certain, and Kick fixes its ladder on it
+            source = chan.FILLER
+        else:
+            # kil, 2026-09-21: "si il n'y a pas de vod dispo, tu dois afficher
+            # les shorts". Nothing to send is the case the clip was written for,
+            # and twenty seconds of "vod loading" on a loop is the worst thing
+            # the channel can show. A short says the same thing and is worth
+            # watching. The clip stays underneath for the day there are none.
+            short = oldest_short()
+            source = short or chan.FILLER
+            if short is not None:
+                chan.log(f"rien a envoyer, short: {short.name}")
         if reopen_if_above(source, may_reopen=bool(chunks)):
             chan.log(f"session rouverte pour {source.name}: {profile_of(source)}")
             time.sleep(30)
