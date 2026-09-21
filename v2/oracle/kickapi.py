@@ -266,9 +266,16 @@ def create_reward(title, cost, description="", user_input=False):
         "should_redemptions_skip_request_queue": False})
 
 
-def update_reward(reward_id, cost, description=""):
-    return _call("PATCH", f"/channels/rewards/{reward_id}",
-                 json={"cost": int(cost), "description": description[:DESCRIPTION_MAX]}) is not None
+def update_reward(reward_id, cost, description="", title=None):
+    """The title travels too when it is given: a redemption is matched on it.
+
+    Creating a renamed reward instead would leave the old one on the channel
+    taking points for something nothing answers any more.
+    """
+    body = {"cost": int(cost), "description": description[:DESCRIPTION_MAX]}
+    if title:
+        body["title"] = title
+    return _call("PATCH", f"/channels/rewards/{reward_id}", json=body) is not None
 
 
 def delete_reward(reward_id):

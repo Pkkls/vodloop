@@ -749,27 +749,45 @@ def waiting_for(seconds):
 # kil, 2026-09-21: the five at a hundred points each. They were priced against
 # each other, a skip cheap and a fetch dear, which only made the dear ones
 # never happen; one price says every lever is worth pulling.
+# kil, 2026-09-21: "c'est tres geek, il faut quelque chose international". The
+# channel films Japan, Turkey and South America and its chat follows, so each
+# reward says what it does in the four languages that watch it, English first
+# because that is what the rest of the interface is in. "was" carries the title
+# a reward had before, which is what lets an existing one be renamed in place:
+# a redemption is matched on its title, so creating the new one beside the old
+# would leave the old taking points for something nothing answers any more.
 REWARDS = [
-    {"key": "skip", "title": "Skip this hour", "cost": 100, "input": False,
-     "description": "Ends the stream playing now and moves on to another one. "
-                    "Points back if there is nothing else to move to."},
-    {"key": "stay", "title": "Keep this one going", "cost": 100, "input": False,
-     "description": "One more hour of the stream playing now, instead of "
-                    "moving on. Points back if it has no hours left."},
-    {"key": "pick", "title": "Pick what plays next", "cost": 100, "input": True,
-     "description": "Type !list in the chat, then put the number you want "
-                    "here. It plays next, or gets downloaded first when it is "
-                    "not here yet. Points back if the number is not in the list."},
-    {"key": "request", "title": "Request a stream", "cost": 100, "input": True,
-     "description": "Paste a YouTube link to one of this channel's streams "
-                    "and it gets downloaded, then played. Points back if the "
-                    "link is from somewhere else."},
-    {"key": "place", "title": "Take me somewhere", "cost": 100, "input": True,
-     "description": "Type a country or a city: Japan, Turkey, Peru, India, "
-                    "Korea, Chile, Argentina, Osaka, Lima. The next stream is "
-                    "one filmed there. Points back if nobody filmed it."},
+    {"key": "skip", "title": "Skip · Saltar · スキップ · Geç", "cost": 100, "input": False,
+     "was": ["Skip this hour"],
+     "description": "Another stream now, points back if not · Otro directo ya, "
+                    "si no, puntos devueltos · 今すぐ別の配信へ、無理なら返却 · "
+                    "Hemen başka yayına, olmazsa iade"},
+    {"key": "stay", "title": "Stay · Seguir · 続ける · Devam", "cost": 100, "input": False,
+     "was": ["Keep this one going"],
+     "description": "One more hour of this one, points back if none left · "
+                    "Una hora más, si no queda, puntos devueltos · "
+                    "この配信をもう1時間、残りが無ければ返却 · "
+                    "Bir saat daha, kalmadıysa iade"},
+    {"key": "pick", "title": "Pick · Elegir · 選ぶ · Seç", "cost": 100, "input": True,
+     "was": ["Pick what plays next"],
+     "description": "Type !list in chat, put its number here · Escribe !list "
+                    "en el chat y pon el número aquí · チャットで!list、その番号をここに · "
+                    "Sohbette !list yaz, numarasını buraya"},
+    {"key": "request", "title": "Request · Pedir · リクエスト · İste", "cost": 100, "input": True,
+     "was": ["Request a stream"],
+     "description": "Paste a YouTube link from this channel, it gets "
+                    "downloaded · Pega un enlace de YouTube del canal · "
+                    "このチャンネルのYouTubeリンクを貼る · "
+                    "Kanalın YouTube linkini yapıştır"},
+    {"key": "place", "title": "Travel · Viajar · 旅先 · Gezi", "cost": 100, "input": True,
+     "was": ["Take me somewhere"],
+     "description": "A country or a city: Japan, Turkey, Peru, Chile, Korea · "
+                    "Un país o una ciudad · 国名か都市名を · Bir ülke veya şehir"},
 ]
-BY_TITLE = {r["title"].lower(): r for r in REWARDS}
+# the old spellings answer too: a redemption made in the seconds before the
+# rename lands carries the title the viewer saw, and it was paid for all the same
+BY_TITLE = {title.lower(): r for r in REWARDS
+            for title in [r["title"], *r.get("was", ())]}
 
 
 def reward_skip(data, now, who, text):
@@ -1000,16 +1018,20 @@ def sync_rewards(update=False):
     have = {(r.get("title") or "").strip().lower(): r for r in kickapi.rewards()}
     for spec in REWARDS:
         found = have.get(spec["title"].lower())
+        for old in spec.get("was", ()):
+            found = found or have.get(old.lower())
         if not found:
             done = kickapi.create_reward(spec["title"], spec["cost"],
                                          spec["description"], spec["input"])
             chan.log(f"recompense {'creee' if done else 'refusee'}: "
                      f"{spec['title']} ({spec['cost']} points)")
         elif update and (found.get("cost") != spec["cost"]
-                         or (found.get("description") or "") != spec["description"]):
-            done = kickapi.update_reward(found["id"], spec["cost"], spec["description"])
+                         or (found.get("description") or "") != spec["description"]
+                         or (found.get("title") or "") != spec["title"]):
+            done = kickapi.update_reward(found["id"], spec["cost"],
+                                         spec["description"], spec["title"])
             chan.log(f"recompense {'ajustee' if done else 'inchangee'}: "
-                     f"{spec['title']} {found.get('cost')} -> {spec['cost']}")
+                     f"{found.get('title')} -> {spec['title']} ({spec['cost']} points)")
 
 
 # --- the title -------------------------------------------------------------
