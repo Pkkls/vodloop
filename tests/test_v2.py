@@ -784,7 +784,7 @@ try:
     cut.FLUSH.unlink(missing_ok=True)
     bot.playing = lambda: {"title": "t", "name": "t.mkv", "hour": 1, "hours": 2,
                            "vid": "x", "started": 0, "elapsed": 900}
-    cut.ahead_seconds = lambda: 600
+    cut.ahead_seconds = lambda: bot.JUMP_SECONDS - chan.CHUNK_SECONDS
     ok, said = bot.reward_jump({}, 1000, "v", "")
     check("with less cut ahead than the jump it is refused and refunded",
           ok is False and "points back" in said and not cut.JUMP.exists(), said)
@@ -794,17 +794,18 @@ try:
           ok is True and cut.JUMP.read_text() == str(bot.JUMP_SECONDS), said)
     for n in range(12):
         (chan.CHUNKS / f"{n:05d}.ts").write_bytes(b"x")
+    goes = int(bot.JUMP_SECONDS // chan.CHUNK_SECONDS)
     dropped = cut.do_jump()
-    left = sorted(p.name for p in chan.CHUNKS.glob("*.ts"))
+    left = sorted(path.name for path in chan.CHUNKS.glob("*.ts"))
     check("the cutter drops exactly the minutes paid for, oldest first",
-          dropped == bot.JUMP_SECONDS and len(left) == 6 and left[0] == "00006.ts",
-          (dropped, left))
+          dropped == bot.JUMP_SECONDS and len(left) == 12 - goes
+          and left[0] == f"{goes:05d}.ts", (dropped, left))
     check("and flushes what is going out, so the jump is seen now and not in five minutes",
           cut.FLUSH.exists())
     cut.FLUSH.unlink(missing_ok=True)
     check("control: nothing asked drops nothing and flushes nothing",
           cut.do_jump() == 0 and not cut.FLUSH.exists()
-          and len(list(chan.CHUNKS.glob("*.ts"))) == 6)
+          and len(list(chan.CHUNKS.glob("*.ts"))) == 12 - goes)
     bot.playing = lambda: None
     ok, said = bot.reward_jump({}, 1000, "v", "")
     check("control: with nothing on air there is nothing to jump into",
@@ -1338,6 +1339,32 @@ try:
               and not bot.PICK.exists())
         check("control: a place too short to mean anything is refunded",
               redeem("Take me somewhere", "a") == ("r1", False))
+        # kil, 2026-09-21: "peru" came back refunded because the one video the
+        # loop reached first was already on its way to somebody else
+        real_titles3, real_excluded3, real_queue = (supply.catalog_titles,
+                                                    supply.excluded, bot.queue_request)
+        try:
+            bot.shelf = lambda: []
+            supply.excluded = lambda now: set()
+            supply.catalog_titles = lambda: {"AAAAAAAAAAA": "Day 1 IRL Lima, Peru",
+                                             "BBBBBBBBBBB": "Day 2 IRL Cusco, Peru"}
+            taken = []
+            bot.queue_request = lambda data, now, who, vid, title: (taken.append(vid), (True, None))[1]
+            asked = {"asked": {"AAAAAAAAAAA": {"who": "other", "title": "Day 1",
+                                               "state": "waiting", "redemption": None}}}
+            ok, said = bot.reward_place(asked, 1000, "v", "peru")
+            check("a place steps over what is already coming and takes the next one",
+                  ok is True and taken == ["BBBBBBBBBBB"], (ok, said, taken))
+            asked["asked"]["BBBBBBBBBBB"] = {"who": "other", "title": "Day 2",
+                                             "state": "waiting", "redemption": None}
+            ok, said = bot.reward_place(asked, 1000, "v", "peru")
+            check("control: with every one of them coming already it says so, not "
+                  "that nothing was filmed there",
+                  ok is False and "already on its way" in said, said)
+        finally:
+            supply.catalog_titles, supply.excluded = real_titles3, real_excluded3
+            bot.queue_request = real_queue
+            bot.shelf = lambda: [(here, 2)]
         check("a country reaches the cities filmed in it",
               "osaka" in bot.place_terms("japan") and "cappadocia" in bot.place_terms("turkey"))
         check("control: a city asked for stays that city",

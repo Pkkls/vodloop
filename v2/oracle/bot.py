@@ -85,7 +85,7 @@ SKIP_WASTE_CAP = int(chan.conf_num("SKIP_WASTE_MINUTES_PER_HOUR", 60)) * 60
 SKIP_SPREAD_HOURS = int(chan.conf_num("SKIP_SPREAD_HOURS", 6))
 USER_SKIP_COOLDOWN = int(chan.conf_num("USER_SKIP_COOLDOWN_SECONDS", 3600))
 REQUEST_MAX_PENDING = int(chan.conf_num("REQUEST_MAX_PENDING", 3))
-JUMP_SECONDS = int(chan.conf_num("JUMP_MINUTES", 30)) * 60
+JUMP_SECONDS = int(chan.conf_num("JUMP_MINUTES", 10)) * 60
 REQUEST_DEADLINE = int(chan.conf_num("REQUEST_DEADLINE_HOURS", 6)) * 3600
 TITLE_MIN_INTERVAL = int(chan.conf_num("TITLE_MIN_INTERVAL_SECONDS", 90))
 TITLE_CHECK_INTERVAL = int(chan.conf_num("TITLE_CHECK_INTERVAL_SECONDS", 300))
@@ -822,11 +822,11 @@ REWARDS = [
                     "downloaded · Pega un enlace de YouTube del canal · "
                     "このチャンネルのYouTubeリンクを貼る · "
                     "Kanalın YouTube linkini yapıştır"},
-    {"key": "jump", "title": "+30 min · Avanzar · 30分進む · İleri sar", "cost": 100,
-     "input": False,
-     "description": "Moves 30 minutes forward in this stream · Avanza 30 "
-                    "minutos en este directo · この配信を30分進める · "
-                    "Bu yayında 30 dakika ileri sarar"},
+    {"key": "jump", "title": "+10 min · Avanzar · 10分進む · İleri sar", "cost": 100,
+     "input": False, "was": ["+30 min · Avanzar · 30分進む · İleri sar"],
+     "description": "Moves 10 minutes forward in this stream · Avanza 10 "
+                    "minutos en este directo · この配信を10分進める · "
+                    "Bu yayında 10 dakika ileri sarar"},
     {"key": "place", "title": "Travel · Viajar · 旅先 · Gezi", "cost": 100, "input": True,
      "was": ["Take me somewhere"],
      "description": "A country or a city: Japan, Turkey, Peru, Chile, Korea · "
@@ -1012,14 +1012,27 @@ def reward_place(data, now, who, text):
         if any(t in low for t in terms):
             PICK.write_text(json.dumps({"name": path.name, "at": int(now)}))
             return True, f"@{who} ok, {clean_title(path.name, SLUG)[:52]} is next"
-    skip = supply.excluded(now)
+    # kil, 2026-09-21: two "peru" and a "vietnam" came back refunded while the
+    # catalogue held plenty of both. The first match was one somebody had
+    # already asked for, and that refusal was the whole answer. A place is not
+    # one video, so the ones already on their way are stepped over. The board's
+    # own cap is different: it refuses every candidate alike, so once it speaks
+    # there is nothing left to try.
+    skip, held = supply.excluded(now), set(waiting_requests(data))
+    already = False
     for vid, title in supply.catalog_titles().items():
-        if any(t in title.lower() for t in terms) and vid not in skip:
-            queued, refusal = queue_request(data, now, who, vid, title)
-            if not queued:
-                return False, refusal
-            return True, (f"@{who} ok, {clean_title(title, SLUG)[:38]} is downloading, "
-                          f"{waiting_for(catalog_seconds(vid))}")
+        if vid in skip or not any(t in title.lower() for t in terms):
+            continue
+        if vid in held:
+            already = True
+            continue
+        queued, refusal = queue_request(data, now, who, vid, title)
+        if not queued:
+            return False, refusal
+        return True, (f"@{who} ok, {clean_title(title, SLUG)[:38]} is downloading, "
+                      f"{waiting_for(catalog_seconds(vid))}")
+    if already:
+        return False, f"@{who} {wanted} is already on its way, points back"
     return False, f"@{who} nothing from there in the library, points back"
 
 
