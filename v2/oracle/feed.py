@@ -133,9 +133,14 @@ def oldest_short():
     """
     session = chan.read_json(SESSION, {}).get("profile")
     for path in sorted(chan.SHORTS.glob("*.ts"), key=lambda p: p.stat().st_mtime):
-        profile = profile_of(path)
-        if profile is None:
+        info = chan.probe(path)
+        if info is None or info["seconds"] < 1:
+            # a file ffmpeg sends in no time is one this loop would pick again
+            # immediately, and again, as fast as the pipe accepts it
+            chan.log(f"short ecarte, illisible ou vide: {path.name}")
+            path.unlink(missing_ok=True)
             continue
+        profile = (info["width"], info["height"], info["fps"])
         if session and exceeds(profile, tuple(session)):
             chan.log(f"short ecarte, plus grand que la session: {path.name} {profile}")
             continue

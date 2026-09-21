@@ -46,6 +46,11 @@ def prepare(source, into=None):
         chan.log(f"short refuse, image illisible: {source.name}")
         return None
     seconds = chan.duration(source, {})
+    if seconds < 1:
+        # unknown is not short. A video that lands here by mistake would be
+        # built at about a second of vCPU per second of film, for hours
+        chan.log(f"short refuse, duree illisible: {source.name}")
+        return None
     if seconds > MAX_SECONDS:
         chan.log(f"short refuse, {seconds / 60:.1f} min pour un plafond "
                  f"de {MAX_SECONDS} s: {source.name}")
