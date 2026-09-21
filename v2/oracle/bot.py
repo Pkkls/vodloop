@@ -748,24 +748,28 @@ def waiting_for(seconds):
 # title, so renaming one in the dashboard unhooks it, which is the honest
 # failure: better a reward that does nothing and refunds than one that does
 # something nobody expected.
+# kil, 2026-09-21: the five at a hundred points each. They were priced against
+# each other, a skip cheap and a fetch dear, which only made the dear ones
+# never happen; one price says every lever is worth pulling.
 REWARDS = [
-    {"key": "skip", "title": "Skip this hour", "cost": 150, "input": False,
-     "description": "Moves on to another stream. Points back if there is "
-                    "nothing else to move to."},
-    {"key": "stay", "title": "Keep this one going", "cost": 150, "input": False,
-     "description": "One more hour of the stream playing now. Points back if "
-                    "it has no hours left."},
-    {"key": "pick", "title": "Pick what plays next", "cost": 250, "input": True,
-     "description": "Type a number from !list and that video plays next. "
-                    "Points back if the number is not in the list."},
-    {"key": "request", "title": "Request a stream", "cost": 400, "input": True,
-     "description": "Paste a YouTube link to a stream this channel follows "
+    {"key": "skip", "title": "Skip this hour", "cost": 100, "input": False,
+     "description": "Ends the stream playing now and moves on to another one. "
+                    "Points back if there is nothing else to move to."},
+    {"key": "stay", "title": "Keep this one going", "cost": 100, "input": False,
+     "description": "One more hour of the stream playing now, instead of "
+                    "moving on. Points back if it has no hours left."},
+    {"key": "pick", "title": "Pick what plays next", "cost": 100, "input": True,
+     "description": "Type !list in the chat, then put the number you want "
+                    "here. It plays next, or gets downloaded first when it is "
+                    "not here yet. Points back if the number is not in the list."},
+    {"key": "request", "title": "Request a stream", "cost": 100, "input": True,
+     "description": "Paste a YouTube link to one of this channel's streams "
                     "and it gets downloaded, then played. Points back if the "
-                    "link is from anywhere else."},
-    {"key": "place", "title": "Take me somewhere", "cost": 300, "input": True,
+                    "link is from somewhere else."},
+    {"key": "place", "title": "Take me somewhere", "cost": 100, "input": True,
      "description": "Type a country or a city: Japan, Turkey, Peru, India, "
-                    "Korea, Chile, Argentina, Osaka, Lima. The next hour is "
-                    "one filmed there. Points back if there is none."},
+                    "Korea, Chile, Argentina, Osaka, Lima. The next stream is "
+                    "one filmed there. Points back if nobody filmed it."},
 ]
 BY_TITLE = {r["title"].lower(): r for r in REWARDS}
 
@@ -777,7 +781,7 @@ def reward_skip(data, now, who, text):
     if blocked:
         return False, f"@{who} {blocked}, points back"
     do_skip(data, now, f"points from {who}", live, data.get("redeemer_id") or who)
-    return True, f"@{who} skipped it"
+    return True, f"@{who} ok, moving on"
 
 
 def reward_pick(data, now, who, text):
@@ -797,9 +801,9 @@ def reward_pick(data, now, who, text):
         ok, refusal = queue_request(data, now, who, vid, title)
         if not ok:
             return False, refusal
-        return True, f"@{who} picked {title[:44]}, {waiting_for(seconds)}"
+        return True, f"@{who} ok, {title[:44]} is downloading, {waiting_for(seconds)}"
     PICK.write_text(json.dumps({"name": ready[index][1], "at": int(now)}))
-    return True, f"@{who} picked {ready[index][2][:48]}, it is next"
+    return True, f"@{who} ok, {ready[index][2][:48]} is next"
 
 
 def reward_stay(data, now, who, text):
@@ -817,7 +821,7 @@ def reward_stay(data, now, who, text):
         path = folder / live["name"]
         if path.exists() and cut.unaired(path, book, durations, cut.reserved()):
             PICK.write_text(json.dumps({"name": live["name"], "at": int(now)}))
-            return True, f"@{who} added another hour of {live['title'][:44]}"
+            return True, f"@{who} ok, one more hour of {live['title'][:44]}"
     return False, f"@{who} no hours left on this one, points back"
 
 
@@ -902,11 +906,11 @@ def reward_request(data, now, who, text):
     for path, _ in shelf():
         if chan.video_id(path) == vid:
             PICK.write_text(json.dumps({"name": path.name, "at": int(now)}))
-            return True, f"@{who} it is already here: {titles[vid][:44]} plays next"
+            return True, f"@{who} ok, {clean_title(titles[vid], SLUG)[:44]} is next"
     queued, refusal = queue_request(data, now, who, vid, titles[vid])
     if not queued:
         return False, refusal
-    return True, (f"@{who} fetching {titles[vid][:40]}: "
+    return True, (f"@{who} ok, {clean_title(titles[vid], SLUG)[:40]} is downloading, "
                   f"{waiting_for(catalog_seconds(vid))}")
 
 
@@ -927,14 +931,14 @@ def reward_place(data, now, who, text):
         low = clean_title(path.name, SLUG).lower()
         if any(t in low for t in terms):
             PICK.write_text(json.dumps({"name": path.name, "at": int(now)}))
-            return True, f"@{who} next up: {clean_title(path.name, SLUG)[:52]}"
+            return True, f"@{who} ok, {clean_title(path.name, SLUG)[:52]} is next"
     skip = supply.excluded(now)
     for vid, title in supply.catalog_titles().items():
         if any(t in title.lower() for t in terms) and vid not in skip:
             queued, refusal = queue_request(data, now, who, vid, title)
             if not queued:
                 return False, refusal
-            return True, (f"@{who} {wanted}: fetching {title[:38]}, "
+            return True, (f"@{who} ok, {clean_title(title, SLUG)[:38]} is downloading, "
                           f"{waiting_for(catalog_seconds(vid))}")
     return False, f"@{who} nothing from there in the library, points back"
 
