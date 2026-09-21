@@ -47,6 +47,10 @@ MAX_FAILS=3
 # Without this the draw was uniform over three years of catalogue and the
 # channel aired a batch of very old videos in a row.
 RECENT=120
+# How few recordings still holding unseen time is too few. Under this the draw
+# takes the shortest candidates: a skip has to land on another recording, and
+# one long file is a single destination however many hours it carries.
+BREADTH=3
 [ -f "$CONF" ] && . "$CONF"
 
 DRY=""
@@ -244,9 +248,20 @@ fill() {
   # question stops being which video deserves a turn: it is which one is on the
   # air soonest. A fetch costs about the same whatever it brings back, so the
   # shortest candidates go first until something is queued.
+  # kil, 2026-09-21: "les viewers peuvent avoir le droit de skip sans que ca
+  # retrieve que 2 videos". Depth and breadth are not the same reserve. Three
+  # three hour videos cost the board what one nine hour video costs and give
+  # the chat three places to go instead of one, so the shortest go first in
+  # two cases: nothing queued at all, and too few recordings left with unseen
+  # time. An older far side writes no streams field, which reads as 0 and
+  # leaves this rule exactly as it was.
+  streams=$(num "$(field streams "$want")")
   if [ "$(num "$(field queue_files "$want")")" -eq 0 ]; then
     cands=$(printf '%s\n' "$cands" | sort -k2 -n | head -20)
     log "$chan: file vide, tirage parmi les 20 plus courtes"
+  elif [ "$streams" -gt 0 ] && [ "$streams" -lt "$BREADTH" ]; then
+    cands=$(printf '%s\n' "$cands" | sort -k2 -n | head -20)
+    log "$chan: $streams inedite(s) seulement, tirage parmi les 20 plus courtes"
   fi
   skip=$( { ls "$dir" | sed -n 's/.*-\([A-Za-z0-9_-]\{11\}\)\.[a-z0-9]*$/\1/p'
             awk -v t=$((now - 7 * 86400)) -v m="$MAX_FAILS" \

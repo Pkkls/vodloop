@@ -284,7 +284,23 @@ def refresh_catalog(apply):
     except OSError:
         chan.log("sources.txt absent")
         return
-    rows, failed, table = {}, 0, []
+    # kil, 2026-09-21: the pool went from 554 to 338 in one run. One listing
+    # came back empty, the catalogue was rewritten without it, and 177 videos
+    # left the draw until the next relisting a day later. A source that
+    # answers nothing now keeps what it answered before: a listing that fails
+    # says nothing about the channel it failed to read. The cost is that a
+    # source really gone stays in the catalogue, where the refusal ledger and
+    # the failure count take care of it one video at a time.
+    previous = {}
+    try:
+        for line in CATALOG.read_text().splitlines():
+            fields = line.split("\t")
+            if len(fields) >= 4:
+                previous[fields[0]] = (int(fields[1]), int(fields[2]), int(fields[3]),
+                                       fields[4] if len(fields) > 4 else "")
+    except (OSError, ValueError):
+        previous = {}
+    rows, failed, table, empty = {}, 0, [], []
     for rank, (url, words) in enumerate(sources):
         if url.startswith("kick:") and chan.NO_KICK:
             continue
@@ -313,7 +329,15 @@ def refresh_catalog(apply):
         # top instead of pulling something from three years ago.
         for place, (vid, secs, name) in enumerate(kept):
             rows.setdefault(vid, (secs, rank, place, name))
+        if not kept:
+            empty.append(rank)
         chan.log(f"catalogue {url}: {len(kept)} dans la bande")
+    for rank in empty:
+        kept_back = {vid: row for vid, row in previous.items() if row[1] == rank}
+        if kept_back:
+            chan.log(f"source {rank} muette, ses {len(kept_back)} entrees sont gardees")
+        for vid, row in kept_back.items():
+            rows.setdefault(vid, row)
     if failed == len(sources) or not rows:
         chan.log("aucune liste lue, catalogue precedent conserve")
         return
@@ -391,6 +415,16 @@ def main(argv):
     runway = queued + len(list(chan.CHUNKS.glob("*.ts"))) * chan.CHUNK_SECONDS
     runway += sum(len(cut.unaired(p, book, durations)) * cut.unit_seconds()
                   for p in chan.media(chan.AIRED)) if chan.PART_SECONDS else 0
+    # kil, 2026-09-21: "les viewers peuvent avoir le droit de skip sans que ca
+    # retrieve que 2 videos". A skip needs somewhere to land, and somewhere is
+    # another recording, not another hour of the one on air. Depth and breadth
+    # are not the same reserve: one nine hour file is nine hours of runway and
+    # exactly one destination, so the board is told how many recordings still
+    # hold unseen time, not only how many hours they add up to.
+    held = cut.reserved()
+    streams = sum(1 for folder in (chan.QUEUE, chan.CURRENT, chan.AIRED)
+                  for p in chan.media(folder)
+                  if cut.unaired(p, book, durations, held))
     other = sum(chan.tree_bytes(f) for f in (chan.CURRENT, chan.CHUNKS, chan.UPLOAD))
     free = shutil.disk_usage(chan.ROOT).free
     need, offer, evict = plan(sum(chan.size_of(p) for p in queue), queued, other, aired, free)
@@ -426,7 +460,8 @@ def main(argv):
     # can get wrong. Within each group the country rotation is kept.
     seen_before = {vid for _, vid in ledger_ids("aired.tsv")}
     candidates.sort(key=lambda row: row[0] in seen_before)
-    chan.log(f"file {len(queue)} ({queued / 3600:.1f} h), reserve {runway / 3600:.1f} h, "
+    chan.log(f"file {len(queue)} ({queued / 3600:.1f} h), {streams} inedites, "
+             f"reserve {runway / 3600:.1f} h, "
              f"diffuses {len(aired) - len(evict)}, "
              f"besoin {need / 3600:.1f} h, offre {offer / chan.GIB:.1f} Go, "
              f"libre {free / chan.GIB:.1f} Go, candidats {len(candidates)}/{len(catalog)} "
@@ -454,7 +489,7 @@ def main(argv):
                                "max_file_mb": int(chan.MAX_FILE_BYTES / (1024 ** 2)),
                                "queue_files": len(queue), "queue_hours": round(queued / 3600, 1),
                                "candidates": len(candidates), "max_seconds": fetch_seconds,
-                               "requested": len(wanted),
+                               "requested": len(wanted), "streams": streams,
                                "rate_bps": int(rate), "at": int(now)})
     return 0
 
