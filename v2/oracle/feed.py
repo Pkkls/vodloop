@@ -36,6 +36,10 @@ ONAIR = chan.STATE / "onair.json"
 # written by cut.py when the chat skips: the chunk in flight goes too, or the
 # skip is invisible for as long as it has left to run
 FLUSH = chan.STATE / "flush"
+# kil, 2026-09-21: "lorsque ca vote pour une video, tu mets un short viral".
+# The bot writes this when a vote sends the board shopping; one short goes out
+# at the next junction and the file is left where it is for the next time.
+SHORT = chan.STATE / "short"
 SESSION = chan.STATE / "session.json"
 REOPEN_GAP_SECONDS = 10 * 60
 
@@ -114,6 +118,22 @@ def reopen_if_above(chunk, may_reopen, now=time.time):
     return True
 
 
+def next_short():
+    """The short to play now, or None. Oldest first, so they take turns.
+
+    Nothing is deleted: a short is a few megabytes and the rotation is the
+    point. The one sent is touched, which puts it last in line, which is the
+    whole of the bookkeeping.
+    """
+    if not SHORT.exists():
+        return None
+    SHORT.unlink(missing_ok=True)
+    ready = sorted(chan.SHORTS.glob("*.ts"), key=lambda p: p.stat().st_mtime)
+    if not ready:
+        return None
+    return ready[0]
+
+
 def note_on_air(chunk):
     """Say which hour of which file is going out, and since when."""
     if chunk == chan.FILLER:
@@ -150,6 +170,12 @@ def main():
             chan.log(f"session ouverte sur le clip d'attente: {profile_of(chan.FILLER)}")
             chunks = []
         source = chunks[0] if chunks else chan.FILLER
+        short = next_short() if chunks else None
+        if short is not None:
+            # it goes out between two chunks, so nothing is cut short and the
+            # hour on air resumes exactly where it was
+            chan.log(f"short intercale: {short.name}")
+            source = short
         if reopen_if_above(source, may_reopen=bool(chunks)):
             chan.log(f"session rouverte pour {source.name}: {profile_of(source)}")
             time.sleep(30)
@@ -175,7 +201,9 @@ def main():
                     break
                 time.sleep(0.5)
             sending.wait()
-        if chunks:
+        if short is not None:
+            source.touch()  # last in line for the next turn, and still there
+        elif chunks:
             source.unlink(missing_ok=True)
         else:
             time.sleep(2)

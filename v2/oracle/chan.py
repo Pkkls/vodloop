@@ -64,6 +64,9 @@ UPLOAD = ROOT / "upload"
 STATE = ROOT / "state"
 FIFO = ROOT / "pipe"
 FILLER = ROOT / "filler.ts"
+# Ready to air shorts, each already at the channel's own profile so one can go
+# out between two chunks without touching the session. Filled by shorts.py.
+SHORTS = ROOT / "shorts"
 
 GIB = 1024 ** 3
 MAXH = int(conf_num("MAXH", 720))

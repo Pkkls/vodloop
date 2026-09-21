@@ -860,6 +860,41 @@ try:
 finally:
     bot.shelf, bot.fetch_eta, bot.catalog_seconds = real_shelf, real_eta, real_secs
 
+print("bot: a vote that sends the board shopping puts a short on the wire")
+real_conf = dict(chan.CONF)
+try:
+    chan.SHORTS.mkdir(parents=True, exist_ok=True)
+    for stale in chan.SHORTS.glob("*.ts"):
+        stale.unlink()
+    feed.SHORT.unlink(missing_ok=True)
+    check("with nothing prepared, no marker is written at all",
+          bot.play_short() is False and not feed.SHORT.exists())
+    check("control: and the feeder plays no short either", feed.next_short() is None)
+    first, second = chan.SHORTS / "un.ts", chan.SHORTS / "deux.ts"
+    first.write_bytes(b"x")
+    second.write_bytes(b"x")
+    os.utime(first, (1000, 1000))
+    os.utime(second, (2000, 2000))
+    check("with shorts ready, a vote asks the feeder for one",
+          bot.play_short() is True and feed.SHORT.exists())
+    taken = feed.next_short()
+    check("the feeder takes the oldest and spends the marker",
+          taken == first and not feed.SHORT.exists(), taken)
+    check("control: with the marker spent it plays no second one",
+          feed.next_short() is None)
+    os.utime(first, (3000, 3000))  # what the feeder does after sending it
+    bot.play_short()
+    check("the next one asked for is the other short, not the same again",
+          feed.next_short() == second)
+    check("control: nothing is deleted, both are kept for their next turn",
+          len(list(chan.SHORTS.glob("*.ts"))) == 2)
+    for stale in chan.SHORTS.glob("*.ts"):
+        stale.unlink()
+finally:
+    chan.CONF.clear()
+    chan.CONF.update(real_conf)
+    feed.SHORT.unlink(missing_ok=True)
+
 print("bot: telegram carries the chat out and one room's answers back")
 said_tg, real_say_tg = [], bot.say
 real_chat, real_token = bot.TG_CHAT, bot.TG_TOKEN

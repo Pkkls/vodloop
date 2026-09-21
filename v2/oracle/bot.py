@@ -706,6 +706,20 @@ def cmd_vote(data, now, sender, args):
     return four("vote_needs", need=need)
 
 
+def play_short():
+    """Ask the feeder for a short at the next junction, if any are ready.
+
+    kil, 2026-09-21: "lorsque ca vote pour une video, tu mets un short viral".
+    A fetch takes the best part of an hour, and the chat that just paid for it
+    has nothing to look at in the meantime. The marker is only written when
+    there is something to play, so an empty shorts directory changes nothing.
+    """
+    if any(chan.SHORTS.glob("*.ts")):
+        feed.SHORT.write_text(str(int(time.time())))
+        return True
+    return False
+
+
 def ask_for(data, now, sender, row):
     """Put a video the chat picked, and that is not here, in the board's way.
 
@@ -730,6 +744,7 @@ def ask_for(data, now, sender, row):
     data.setdefault("asked", {})[vid] = {"who": sender["name"], "title": title,
                                          "at": int(now), "state": "waiting",
                                          "redemption": None}
+    play_short()
     return f"{title[:40]} · " + four("downloading") + f" {waiting_for(seconds)}"
 
 
@@ -1107,6 +1122,7 @@ def reward_request(data, now, who, text):
     queued, refusal = queue_request(data, now, who, vid, titles[vid])
     if not queued:
         return False, refusal
+    play_short()
     return True, (f"@{who} {clean_title(titles[vid], SLUG)[:40]} · "
                   + four("downloading") + f" {waiting_for(catalog_seconds(vid))}")
 
@@ -1146,6 +1162,7 @@ def reward_place(data, now, who, text):
         queued, refusal = queue_request(data, now, who, vid, title)
         if not queued:
             return False, refusal
+        play_short()
         return True, (f"@{who} {clean_title(title, SLUG)[:38]} · "
                       + four("downloading") + f" {waiting_for(catalog_seconds(vid))}")
     if already:
