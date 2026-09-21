@@ -703,7 +703,7 @@ try:
     now = 2000000
     first = bot.cmd_vote(data, now, {"user_id": "u1", "privileged": False}, [])
     check("the first voice opens the vote and says what it needs",
-          "3 needed" in (first or ""), first)
+          "3 votes to skip" in (first or "") and "!skip" in (first or ""), first)
     again = bot.cmd_vote(data, now + 1, {"user_id": "u1", "privileged": False}, [])
     check("the same account cannot vote twice", again is None and len(data["vote"]["voters"]) == 1)
     bot.cmd_vote(data, now + 2, {"user_id": "u2", "privileged": False}, [])
@@ -754,7 +754,7 @@ try:
           supply.REQUESTS.read_text().strip() == "id000000005", answer)
     check("and the viewer is told it is coming, with a wait", "downloading" in answer, answer)
     check("control: the same viewer cannot hold two of the board's slots",
-          "on its way" in bot.cmd_pick(data, 1010, viewer, ["8"]) and
+          "already have one coming" in bot.cmd_pick(data, 1010, viewer, ["8"]) and
           supply.REQUESTS.read_text().count("\n") == 1)
     other = {"user_id": "u2", "name": "u2", "privileged": False}
     bot.cmd_pick(data, 1020, other, ["9"])
@@ -817,6 +817,27 @@ finally:
     for stale in chan.CHUNKS.glob("*.ts"):
         stale.unlink()
 
+print("bot: every answer is said in four languages and still fits a chat line")
+try:
+    check("every phrase carries exactly four languages",
+          all(len(v) == 4 for v in bot.SAID.values()),
+          [k for k, v in bot.SAID.items() if len(v) != 4])
+    filled = {k: bot.four(k, n=3, min=15, need=3, max=527, place="peru")
+              for k in bot.SAID}
+    longest = max(filled.items(), key=lambda row: len(row[1]))
+    check("and none of them is longer than 200 characters on its own",
+          len(longest[1]) <= 200, (longest[0], len(longest[1])))
+    # the two longest an answer can pair: a refusal plus the points coming back
+    worst = max(len(f"@somebodywithalongname {line} · {filled['points_back']}")
+                for key, line in filled.items())
+    check("a refusal and its refund together stay inside Kick's 500",
+          worst <= 500, worst)
+    check("control: a phrase with a slot left unfilled is caught, not sent",
+          "{" not in "".join(filled.values()),
+          [k for k, v in filled.items() if "{" in v])
+finally:
+    pass
+
 print("bot: !fetch shows the board's queue, whose it is and what is left")
 real_shelf, real_eta, real_secs = bot.shelf, bot.fetch_eta, bot.catalog_seconds
 try:
@@ -830,9 +851,9 @@ try:
     data["asked"]["id9"] = {"who": "u9", "title": "Deja la", "state": "here"}
     line = bot.cmd_fetch(data, 1000, {"user_id": "u", "name": "u"}, [])
     check("it counts what is coming and names who asked",
-          line.startswith("5 downloading:") and "for @u0 ~20 min" in line, line)
+          line.startswith("5 downloading · descargando") and "@u0 ~20 min" in line, line)
     check("it does not read out more than three of them",
-          "2 more asked" in line and line.count(" for @") == 3, line)
+          "2 more asked" in line and line.count(" @u") == 3, line)
     check("one already landed is said apart, not counted as coming",
           "1 landed, waiting its turn" in line, line)
     check("control: an answer stays inside a chat line", len(line) <= 500, len(line))
@@ -1226,7 +1247,7 @@ try:
           bot.fetch_eta(1) >= bot.BOARD_SLOT_MIN, bot.fetch_eta(1))
     line = bot.waiting_for(7200)
     check("a viewer is told both when it arrives and when it airs",
-          "ready in ~" in line and "on air in ~" in line, line)
+          line.startswith("~") and "on air ~" in line and "yay" in line, line)
     chan.PART_SECONDS = was_part
 
     print("  -- a stream asked for by link")

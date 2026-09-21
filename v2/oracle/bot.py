@@ -167,7 +167,9 @@ def playing():
     seconds = float(live.get("seconds") or 0)
     number = int(live.get("number") or 0)
     started = float(live.get("at") or 0)
-    return {"name": live["source"], "title": pretty(live["source"]),
+    # the title a viewer reads here is the one the channel carries, not the
+    # uploader's file name: !now said "260203 nanatty - Day 17 IRL Ushuaia"
+    return {"name": live["source"], "title": clean_title(live["source"], SLUG),
             "hour": number // cut.per_slice() + 1,
             "hours": cut.slices_in(seconds) if seconds else 1,
             "started": started,
@@ -388,35 +390,35 @@ def skip_blocked(data, now, live, who=None):
     reserve = unseen_hours() * 3600
     cost = skip_cost(live)
     if reserve < 3600:
-        return "nothing else ready, this one stays on"
+        return four("nothing_else")
     if other_stream_hours(live) < 0.5:
-        return "this is the only stream left, skipping lands on the same one"
+        return four("only_stream")
     if reserve - cost < SKIP_FLOOR:
-        return "not much left in the library, this one stays on"
+        return four("not_enough")
     allowed = waste_allowance(reserve)
     spent = wasted_recently(data, now)
     if spent + cost > allowed:
         if spent:
-            return "too much skipped this hour already, try again later"
+            return four("too_much_skipped")
         # nothing was skipped this hour, so what is expensive is this skip:
         # most of the hour is still unseen and it would all be thrown away
-        return "too early in this one to skip, try again later"
+        return four("too_early")
     recent = skips_since(data, now - 3600)
     if len(recent) >= SKIP_MAX_PER_HOUR:
-        return f"{len(recent)} skips this hour, that is the limit"
+        return four("skip_limit", n=len(recent))
     last = max((r["at"] for r in recent), default=0)
     if last and now - last < SKIP_COOLDOWN:
         left = int((SKIP_COOLDOWN - (now - last)) / 60) + 1
-        return f"just skipped one, try again in {left} min"
+        return four("just_skipped", min=left)
     if live and live["elapsed"] < SKIP_MIN_AIRED:
         left = int((SKIP_MIN_AIRED - live["elapsed"]) / 60) + 1
-        return f"this one just started, you can vote in {left} min"
+        return four("just_started", min=left)
     if who:
         mine = [r for r in skips_since(data, now - USER_SKIP_COOLDOWN)
                 if r.get("who") == who]
         if mine:
             left = int((USER_SKIP_COOLDOWN - (now - max(r["at"] for r in mine))) / 60) + 1
-            return f"you had the last skip, someone else's turn for {left} min"
+            return four("your_turn_over", min=left)
     return None
 
 
@@ -443,19 +445,154 @@ def do_skip(data, now, reason, live=None, who=""):
     data["vote"] = None
 
 
+# --- what a viewer reads, in the four languages the channel is watched in ---
+
+# kil, 2026-09-21: "les commandes on ne comprend pas, faut une reponse dans
+# chaque langue". A title, a number and a command name read the same in every
+# language, so the data in an answer is said once and the words around it four
+# times: English, Spanish, Japanese, Turkish, the order the rewards use. Kick
+# takes 500 characters in a chat line and a wall of text is its own kind of
+# unreadable, so each phrase is written short enough that four of them and the
+# data still fit inside one answer.
+SAID = {
+    "more_asked": ("{n} more asked", "{n} más pedidos",
+                   "他{n}件", "{n} tane daha"),
+    "landed_waiting": ("{n} landed, waiting its turn", "{n} llegó, esperando turno",
+                       "{n}件到着、順番待ち", "{n} geldi, sırada"),
+    "then_on_air": ("on air ~{min} min", "en directo ~{min} min",
+                    "放送は約{min}分後", "yayında ~{min} dk"),
+    "last_landed": ("last landed {min} min ago", "el último hace {min} min",
+                    "最終到着{min}分前", "son {min} dk önce"),
+    "help": ("what is on, the list, choose one, skip, downloads, source",
+             "qué suena, la lista, elegir, saltar, descargas, fuente",
+             "再生中 / 一覧 / 選ぶ / スキップ / 取得中 / 元動画",
+             "çalan, liste, seç, atla, indirilenler, kaynak"),
+    "nothing_on": ("nothing on air right now", "nada en directo ahora",
+                   "今は配信していません", "şu anda yayın yok"),
+    "nothing_ready": ("nothing ready yet, downloading more",
+                      "nada listo aún, descargando más",
+                      "まだ準備中です、取得しています", "henüz hazır yok, indiriliyor"),
+    "no_link": ("no link for this one", "sin enlace para este",
+                "この配信のリンクはありません", "bunun için bağlantı yok"),
+    "own_vod": ("no link, this is one of the channel's own VODs",
+                "sin enlace, es un VOD del propio canal",
+                "リンクなし、チャンネル自身のVODです",
+                "bağlantı yok, kanalın kendi VOD'u"),
+    "moving_on": ("ok, moving on", "ok, pasamos a otro", "了解、次へ", "tamam, geçiyoruz"),
+    "is_next": ("next", "siguiente", "次", "sırada"),
+    "vote_running": ("a vote is already running", "ya hay una votación",
+                     "すでに投票中です", "zaten bir oylama var"),
+    "vote_failed": ("last vote failed, try again in {min} min",
+                    "la votación falló, en {min} min",
+                    "投票は不成立、あと{min}分", "oylama başarısız, {min} dk sonra"),
+    "to_skip": ("to skip", "para saltar", "スキップに", "atlamak için"),
+    "vote_needs": ("{need} votes to skip, type !skip", "{need} votos, escribe !skip",
+                   "{need}票でスキップ、!skipと入力", "{need} oy gerek, !skip yaz"),
+    "vote_play": ("{need} votes to play it, type !pick {n}",
+                  "{need} votos, escribe !pick {n}",
+                  "{need}票で再生、!pick {n}と入力", "{need} oy gerek, !pick {n} yaz"),
+    "nothing_to_pick": ("nothing to pick from yet", "nada para elegir aún",
+                        "まだ選べるものがありません", "henüz seçecek bir şey yok"),
+    "pick_usage": ("!pick <number>, numbers come from !list",
+                   "!pick <número>, los números salen de !list",
+                   "!list の番号で !pick <番号>", "!list'teki numarayla !pick <numara>"),
+    "pick_range": ("pick 1 to {max}, see !list", "elige de 1 a {max}, mira !list",
+                   "1〜{max} から選択、!list参照", "1 ile {max} arası seç, !list"),
+    "only_stream": ("this is the only stream left, skipping lands on the same one",
+                    "es el único directo que queda, saltar cae en el mismo",
+                    "残りはこの配信だけです", "kalan tek yayın bu"),
+    "nothing_else": ("nothing else ready, this one stays on",
+                     "nada más listo, sigue este",
+                     "他に準備がないので継続します", "başka hazır yok, bu devam ediyor"),
+    "not_enough": ("not much left in the library, this one stays on",
+                   "queda poco en la biblioteca, sigue este",
+                   "ライブラリの残りが少ないので継続", "kitaplıkta az kaldı, bu devam"),
+    "too_much_skipped": ("too much skipped this hour, try again later",
+                         "demasiados saltos esta hora, prueba luego",
+                         "この1時間はスキップが多すぎます", "bu saatte çok atlandı, sonra dene"),
+    "too_early": ("too early in this one to skip, try again later",
+                  "demasiado pronto para saltar, prueba luego",
+                  "この配信は始まったばかりです", "atlamak için çok erken, sonra dene"),
+    "skip_limit": ("{n} skips this hour, that is the limit",
+                   "{n} saltos esta hora, es el límite",
+                   "この1時間で{n}回、上限です", "bu saatte {n} atlama, sınır bu"),
+    "just_skipped": ("just skipped one, try again in {min} min",
+                     "recién saltado, en {min} min",
+                     "さっきスキップしました、あと{min}分", "az önce atlandı, {min} dk sonra"),
+    "just_started": ("this one just started, you can vote in {min} min",
+                     "acaba de empezar, vota en {min} min",
+                     "始まったばかり、あと{min}分で投票可", "yeni başladı, {min} dk sonra oy"),
+    "your_turn_over": ("you had the last skip, someone else's turn for {min} min",
+                       "tuviste el último salto, {min} min para otro",
+                       "前回はあなたです、あと{min}分", "son atlama sendeydi, {min} dk"),
+    "downloading": ("downloading", "descargando", "取得中", "indiriliyor"),
+    "already_coming": ("already coming", "ya viene", "すでに取得中", "zaten geliyor"),
+    "one_each": ("you already have one coming, wait for it to land",
+                 "ya tienes uno en camino, espera",
+                 "すでに1件取得中です、お待ちを", "zaten bir tane geliyor, bekle"),
+    "queue_full": ("{n} already downloading, ask again when one lands",
+                   "{n} descargando ya, pide cuando llegue uno",
+                   "すでに{n}件取得中、届いたらどうぞ", "{n} tane iniyor, biri gelince iste"),
+    "nothing_asked": ("nothing asked for right now", "nada pedido ahora mismo",
+                      "今リクエストはありません", "şu anda istek yok"),
+    "points_back": ("points back", "puntos devueltos", "ポイント返却", "puan iade"),
+    "not_a_number": ("that is not a number from !list", "no es un número de !list",
+                     "!list の番号ではありません", "!list'ten bir numara değil"),
+    "no_video_there": ("no video at that number", "no hay vídeo en ese número",
+                       "その番号の配信はありません", "o numarada yayın yok"),
+    "not_a_link": ("that is not a YouTube link", "no es un enlace de YouTube",
+                   "YouTubeのリンクではありません", "YouTube bağlantısı değil"),
+    "not_in_sources": ("that one is not in this channel's sources",
+                       "no está en las fuentes del canal",
+                       "このチャンネルのソースにありません", "kanalın kaynaklarında yok"),
+    "already_shown": ("already been on, or refused", "ya emitido, o rechazado",
+                      "放送済みか対象外です", "yayınlandı ya da reddedildi"),
+    "name_a_place": ("name a place, like Thailand", "di un lugar, como Tailandia",
+                     "場所を入力（例: タイ）", "bir yer yaz, örnek Tayland"),
+    "nothing_there": ("nothing filmed there in the library",
+                      "nada filmado allí en la biblioteca",
+                      "そこで撮影された配信はありません", "orada çekilmiş bir şey yok"),
+    "place_coming": ("{place} is already on its way", "{place} ya viene en camino",
+                     "{place}はすでに取得中です", "{place} zaten geliyor"),
+    "one_more_hour": ("one more hour of it", "una hora más",
+                      "もう1時間続けます", "bir saat daha"),
+    "no_hours_left": ("no hours left on this one", "no quedan horas de este",
+                      "この配信に残りはありません", "bunda kalan saat yok"),
+    "forward": ("{min} min forward", "{min} min adelante",
+                "{min}分進みました", "{min} dk ileri"),
+    "not_cut_ahead": ("less than {min} min is ready ahead, try again in a few minutes",
+                      "menos de {min} min listos, prueba en unos minutos",
+                      "先の準備が{min}分未満です、少し後で",
+                      "{min} dk'dan az hazır, birazdan dene"),
+    "ask_with": ("!list then !pick <n> to ask for one",
+                 "!list y luego !pick <n> para pedir",
+                 "!list のあと !pick <n> でリクエスト",
+                 "!list sonra !pick <n> ile iste"),
+    "ready_here": ("ready", "listos", "準備済み", "hazır"),
+    "never_shown": ("never shown", "nunca emitido", "未放送", "hiç yayınlanmadı"),
+    "aired": ("aired", "emitido", "放送済み", "yayınlandı"),
+}
+
+
+def four(key, **data):
+    """One answer, said in the four languages the channel is watched in."""
+    return " · ".join(part.format(**data) for part in SAID[key])
+
+
 # --- commands --------------------------------------------------------------
 
 def cmd_aide(*_):
-    return "commands: !now, !list, !pick <n>, !skip, !fetch, !link"
+    return "!now !list !pick <n> !skip !fetch !link · " + four("help")
 
 
 def cmd_vod(*_):
     live = playing()
     if not live:
-        return "nothing on air right now"
+        return four("nothing_on")
     left = max(0, chan.PART_SECONDS - live["elapsed"]) if chan.PART_SECONDS else 0
-    piece = f", hour {live['hour']} of {live['hours']}" if live["hours"] > 1 else ""
-    tail = f", {int(left / 60)} min left" if left else ""
+    # hours and minutes as numbers: a viewer reads 3/9 in any language
+    piece = f" · {live['hour']}/{live['hours']}" if live["hours"] > 1 else ""
+    tail = f" · {int(left / 60)} min" if left else ""
     return f"{live['title']}{piece}{tail}"
 
 
@@ -488,7 +625,7 @@ def cmd_liste(data, now, sender, args):
     ready, pool = pickable()
     rows = ready + pool
     if not rows:
-        return "nothing ready yet, more is downloading"
+        return four("nothing_ready")
     pages = (len(rows) - 1) // LIST_PAGE + 1
     try:
         page = min(max(1, int(args[0])), pages)
@@ -504,11 +641,11 @@ def cmd_liste(data, now, sender, args):
 def cmd_source(*_):
     live = playing()
     if not live:
-        return "nothing on air right now"
+        return four("nothing_on")
     if not live["vid"]:
-        return "no link for this one"
+        return four("no_link")
     if re.match(r"^k[0-9a-f]{8}\d{2}$", live["vid"]):
-        return "no link, this one is from the channel's own Kick VODs"
+        return four("own_vod")
     return f"https://youtu.be/{live['vid']}"
 
 
@@ -516,8 +653,8 @@ def cmd_stats(*_):
     book = cut.ledger()
     hours = sum(len(v) for v in book.values())
     rows = shelf()
-    return (f"{len(rows)} video{'s' if len(rows) != 1 else ''} ready, "
-            f"{unseen_hours():.1f}h never shown, {hours}h aired so far")
+    return (f"{len(rows)} · " + four("ready_here") + f" | {unseen_hours():.1f}h · "
+            + four("never_shown") + f" | {hours}h · " + four("aired"))
 
 
 def last_arrival_minutes(now):
@@ -546,18 +683,18 @@ def cmd_fetch(data, now, sender, args):
     # rows written before the chat picked from the catalogue hold the uploader's
     # own file name, so the cleaning happens here and covers those too
     shown = " · ".join(f"{clean_title(str(row.get('title') or vid), SLUG)[:26]} "
-                       f"for @{row.get('who', '?')} "
-                       f"~{fetch_eta(catalog_seconds(vid))} min"
+                       f"@{row.get('who', '?')} ~{fetch_eta(catalog_seconds(vid))} min"
                        for vid, row in coming[:3])
-    more = f" · {len(coming) - 3} more asked" if len(coming) > 3 else ""
+    more = " · " + four("more_asked", n=len(coming) - 3) if len(coming) > 3 else ""
     if landed:
-        more += f" · {len(landed)} landed, waiting its turn"
+        more += " · " + four("landed_waiting", n=len(landed))
     since = last_arrival_minutes(now)
-    tail = (f"{unseen_hours():.1f}h ready" +
-            (f", last one landed {since} min ago" if since else ""))
+    tail = f"{unseen_hours():.1f}h · " + four("ready_here")
+    if since:
+        tail += " · " + four("last_landed", min=since)
     if not coming:
-        return f"nothing asked for right now · {tail} · !list then !pick <n> to ask"
-    return f"{len(coming)} downloading: {shown}{more} · {tail}"
+        return four("nothing_asked") + f" · {tail} · " + four("ask_with")
+    return f"{len(coming)} " + four("downloading") + f" · {shown}{more} · {tail}"
 
 
 def cmd_vote(data, now, sender, args):
@@ -572,16 +709,16 @@ def cmd_vote(data, now, sender, args):
             if vote["kind"] == "pick":
                 PICK.write_text(json.dumps({"name": vote["target"], "at": int(now)}))
                 data["vote"] = None
-                return f"{pretty(vote['target'])} is next"
+                return f"{pretty(vote['target'])} · " + four("is_next")
             do_skip(data, now, "vote", playing(), vote["voters"][0])
-            return "ok, moving on"
-        return f"skip vote {len(vote['voters'])}/{need}"
+            return four("moving_on")
+        return f"{len(vote['voters'])}/{need} · " + four("to_skip")
     if vote and now - vote.get("failed_at", 0) < 0:
         return None
     last_fail = data.get("vote_failed_at", 0)
     if now - last_fail < VOTE_FAIL_COOLDOWN:
         left = int((VOTE_FAIL_COOLDOWN - (now - last_fail)) / 60) + 1
-        return f"last vote failed, try again in {left} min"
+        return four("vote_failed", min=left)
     blocked = skip_blocked(data, now, live, sender["user_id"])
     if blocked:
         return blocked
@@ -590,8 +727,8 @@ def cmd_vote(data, now, sender, args):
                     "need": need, "closes": now + VOTE_WINDOW}
     if need <= 1:
         do_skip(data, now, "vote", live, sender["user_id"])
-        return "ok, moving on"
-    return f"skip vote: {need} needed, type !skip"
+        return four("moving_on")
+    return four("vote_needs", need=need)
 
 
 def ask_for(data, now, sender, row):
@@ -608,30 +745,30 @@ def ask_for(data, now, sender, row):
     held = waiting_requests(data)
     asked = data.get("asked") or {}
     if vid in held:
-        return f"{title[:40]} is already coming, {waiting_for(seconds)}"
+        return f"{title[:40]} · " + four("already_coming") + f" {waiting_for(seconds)}"
     if any(asked.get(v, {}).get("who") == sender["name"] for v in held):
-        return "you already have one on its way, wait for it to land"
+        return four("one_each")
     if len(held) >= REQUEST_MAX_PENDING:
-        return f"{len(held)} already downloading, ask again when one lands"
+        return four("queue_full", n=len(held))
     with supply.REQUESTS.open("a") as fh:
         fh.write(vid + "\n")
     data.setdefault("asked", {})[vid] = {"who": sender["name"], "title": title,
                                          "at": int(now), "state": "waiting",
                                          "redemption": None}
-    return f"downloading {title[:40]}, {waiting_for(seconds)}"
+    return f"{title[:40]} · " + four("downloading") + f" {waiting_for(seconds)}"
 
 
 def cmd_pick(data, now, sender, args):
     ready, pool = pickable()
     rows = ready + pool
     if not rows:
-        return "nothing to pick from yet"
+        return four("nothing_to_pick")
     try:
         index = int(args[0]) - 1
     except (IndexError, ValueError):
-        return "!pick <number>, numbers come from !list"
+        return four("pick_usage")
     if not 0 <= index < len(rows):
-        return f"pick 1 to {len(rows)}, see !list"
+        return four("pick_range", max=len(rows))
     if index >= len(ready):
         return ask_for(data, now, sender, rows[index])
     target, said = ready[index][1], ready[index][2]
@@ -639,16 +776,15 @@ def cmd_pick(data, now, sender, args):
     if vote and vote["closes"] > now and vote["kind"] == "pick" and vote["target"] == target:
         return cmd_vote(data, now, sender, args)
     if vote and vote["closes"] > now:
-        return "a vote is already running"
+        return four("vote_running")
     need = threshold()
     data["vote"] = {"kind": "pick", "target": target, "voters": [sender["user_id"]],
                     "need": need, "closes": now + VOTE_WINDOW}
     if need <= 1:
         PICK.write_text(json.dumps({"name": target, "at": int(now)}))
         data["vote"] = None
-        return f"{said} is next"
-    return (f"vote to play {said[:40]}: {need} needed, "
-            f"type !pick {index + 1}")
+        return f"{said} · " + four("is_next")
+    return f"{said[:40]} · " + four("vote_play", need=need, n=index + 1)
 
 
 def cmd_force(data, now, sender, args):
@@ -657,11 +793,11 @@ def cmd_force(data, now, sender, args):
     live = playing()
     reserve = unseen_hours() * 3600
     if other_stream_hours(live) < 0.5:
-        return "this is the only stream left, skipping lands on the same one"
+        return four("only_stream")
     if reserve - skip_cost(live) < SKIP_FLOOR:
-        return "not enough left in the library to skip"
+        return four("not_enough")
     do_skip(data, now, f"forced by {sender['name']}", live, "")
-    return "ok, moving on"
+    return four("moving_on")
 
 
 COMMANDS = {
@@ -776,10 +912,17 @@ def air_eta():
 
 
 def waiting_for(seconds):
-    """The sentence a viewer gets when something has to be fetched first."""
+    """The wait a viewer is quoted: minutes to the disk, minutes to the wire.
+
+    The minutes are the answer and they read in every language, so they are
+    said once. The words around them are not, so the hour on air carries its
+    four, and the word for the first number, downloading, is said where this
+    is used.
+    """
     soon, then = fetch_eta(seconds), air_eta()
-    return (f"ready in ~{soon} min, on air in ~{soon + then} min" if then
-            else f"ready in ~{soon} min")
+    if not then:
+        return f"~{soon} min"
+    return f"~{soon} min · " + four("then_on_air", min=soon + then)
 
 
 # --- channel points --------------------------------------------------------
@@ -843,9 +986,9 @@ def reward_skip(data, now, who, text):
     live = playing()
     blocked = skip_blocked(data, now, live, data.get("redeemer_id") or who)
     if blocked:
-        return False, f"@{who} {blocked}, points back"
+        return False, f"@{who} {blocked} · " + four("points_back")
     do_skip(data, now, f"points from {who}", live, data.get("redeemer_id") or who)
-    return True, f"@{who} ok, moving on"
+    return True, f"@{who} " + four("moving_on")
 
 
 def reward_jump(data, now, who, text):
@@ -856,12 +999,12 @@ def reward_jump(data, now, who, text):
     cooldowns this one is not allowed to walk past for the same hundred points.
     """
     if not playing():
-        return False, f"@{who} nothing is playing right now, points back"
+        return False, f"@{who} " + four("nothing_on") + " · " + four("points_back")
     if cut.ahead_seconds() < JUMP_SECONDS:
-        return False, (f"@{who} less than {JUMP_SECONDS // 60} min is cut ahead, "
-                       f"try again in a few minutes, points back")
+        return False, (f"@{who} " + four("not_cut_ahead", min=JUMP_SECONDS // 60)
+                       + " · " + four("points_back"))
     cut.JUMP.write_text(str(JUMP_SECONDS))
-    return True, f"@{who} ok, {JUMP_SECONDS // 60} min forward"
+    return True, f"@{who} " + four("forward", min=JUMP_SECONDS // 60)
 
 
 def reward_pick(data, now, who, text):
@@ -870,9 +1013,9 @@ def reward_pick(data, now, who, text):
     try:
         index = int(re.sub(r"\D", "", text or "")) - 1
     except ValueError:
-        return False, f"@{who} that is not a number from !list, points back"
+        return False, f"@{who} " + four("not_a_number") + " · " + four("points_back")
     if not rows or not 0 <= index < len(rows):
-        return False, f"@{who} no video at that number, points back"
+        return False, f"@{who} " + four("no_video_there") + " · " + four("points_back")
     if index >= len(ready):
         # the numbers in !list run on into the catalogue, so a paid pick can
         # land on something that has to be fetched first. That is the request
@@ -881,9 +1024,10 @@ def reward_pick(data, now, who, text):
         ok, refusal = queue_request(data, now, who, vid, title)
         if not ok:
             return False, refusal
-        return True, f"@{who} ok, {title[:44]} is downloading, {waiting_for(seconds)}"
+        return True, (f"@{who} {title[:44]} · " + four("downloading")
+                      + f" {waiting_for(seconds)}")
     PICK.write_text(json.dumps({"name": ready[index][1], "at": int(now)}))
-    return True, f"@{who} ok, {ready[index][2][:48]} is next"
+    return True, f"@{who} {ready[index][2][:48]} · " + four("is_next")
 
 
 def reward_stay(data, now, who, text):
@@ -895,14 +1039,14 @@ def reward_stay(data, now, who, text):
     """
     live = playing()
     if not live:
-        return False, f"@{who} nothing is playing right now, points back"
+        return False, f"@{who} " + four("nothing_on") + " · " + four("points_back")
     book, durations = cut.ledger(), chan.read_json(chan.STATE / "durations.json", {})
     for folder in (chan.QUEUE, chan.AIRED):
         path = folder / live["name"]
         if path.exists() and cut.unaired(path, book, durations, cut.reserved()):
             PICK.write_text(json.dumps({"name": live["name"], "at": int(now)}))
-            return True, f"@{who} ok, one more hour of {live['title'][:44]}"
-    return False, f"@{who} no hours left on this one, points back"
+            return True, f"@{who} {live['title'][:44]} · " + four("one_more_hour")
+    return False, f"@{who} " + four("no_hours_left") + " · " + four("points_back")
 
 
 # Titles name cities, not countries: "japan" matched six videos while Osaka
@@ -949,11 +1093,11 @@ def queue_request(data, now, who, vid, title):
     if vid in held:
         # overwriting the row would strand the first viewer's redemption in
         # Kick's queue for good, with their points gone and nobody to settle it
-        return False, (f"@{who} somebody already asked for that one, it is "
-                       f"coming, points back")
+        return False, (f"@{who} " + four("already_coming") + " · "
+                       + four("points_back"))
     if len(held) >= REQUEST_MAX_PENDING:
-        return False, (f"@{who} {len(held)} requests already waiting, try again "
-                       f"when one lands, points back")
+        return False, (f"@{who} " + four("queue_full", n=len(held)) + " · "
+                       + four("points_back"))
     with supply.REQUESTS.open("a") as fh:
         fh.write(vid + "\n")
     data.setdefault("asked", {})[vid] = {"who": who, "title": title, "at": int(now),
@@ -976,22 +1120,23 @@ def reward_request(data, now, who, text):
     """
     vid = video_asked(text)
     if not vid:
-        return False, f"@{who} that is not a YouTube link, points back"
+        return False, f"@{who} " + four("not_a_link") + " · " + four("points_back")
     titles = supply.catalog_titles()
     if vid not in titles:
-        return False, (f"@{who} that one is not in this channel's sources, "
-                       f"so it cannot be checked before fetching, points back")
+        return False, (f"@{who} " + four("not_in_sources") + " · "
+                       + four("points_back"))
     if vid in supply.excluded(now):
-        return False, f"@{who} {titles[vid][:40]} has already been on, or was refused"
+        return False, (f"@{who} {clean_title(titles[vid], SLUG)[:40]} · "
+                       + four("already_shown") + " · " + four("points_back"))
     for path, _ in shelf():
         if chan.video_id(path) == vid:
             PICK.write_text(json.dumps({"name": path.name, "at": int(now)}))
-            return True, f"@{who} ok, {clean_title(titles[vid], SLUG)[:44]} is next"
+            return True, f"@{who} {clean_title(titles[vid], SLUG)[:44]} · " + four("is_next")
     queued, refusal = queue_request(data, now, who, vid, titles[vid])
     if not queued:
         return False, refusal
-    return True, (f"@{who} ok, {clean_title(titles[vid], SLUG)[:40]} is downloading, "
-                  f"{waiting_for(catalog_seconds(vid))}")
+    return True, (f"@{who} {clean_title(titles[vid], SLUG)[:40]} · "
+                  + four("downloading") + f" {waiting_for(catalog_seconds(vid))}")
 
 
 def reward_place(data, now, who, text):
@@ -1005,13 +1150,13 @@ def reward_place(data, now, who, text):
     """
     wanted = re.sub(r"[^\w ]", "", text or "").strip().lower()
     if len(wanted) < 3:
-        return False, f"@{who} name a place like Thailand, points back"
+        return False, f"@{who} " + four("name_a_place") + " · " + four("points_back")
     terms = place_terms(wanted)
     for path, _ in shelf():
         low = clean_title(path.name, SLUG).lower()
         if any(t in low for t in terms):
             PICK.write_text(json.dumps({"name": path.name, "at": int(now)}))
-            return True, f"@{who} ok, {clean_title(path.name, SLUG)[:52]} is next"
+            return True, f"@{who} {clean_title(path.name, SLUG)[:52]} · " + four("is_next")
     # kil, 2026-09-21: two "peru" and a "vietnam" came back refunded while the
     # catalogue held plenty of both. The first match was one somebody had
     # already asked for, and that refusal was the whole answer. A place is not
@@ -1029,11 +1174,12 @@ def reward_place(data, now, who, text):
         queued, refusal = queue_request(data, now, who, vid, title)
         if not queued:
             return False, refusal
-        return True, (f"@{who} ok, {clean_title(title, SLUG)[:38]} is downloading, "
-                      f"{waiting_for(catalog_seconds(vid))}")
+        return True, (f"@{who} {clean_title(title, SLUG)[:38]} · "
+                      + four("downloading") + f" {waiting_for(catalog_seconds(vid))}")
     if already:
-        return False, f"@{who} {wanted} is already on its way, points back"
-    return False, f"@{who} nothing from there in the library, points back"
+        return False, (f"@{who} " + four("place_coming", place=wanted) + " · "
+                       + four("points_back"))
+    return False, f"@{who} " + four("nothing_there") + " · " + four("points_back")
 
 
 ACTIONS = {"skip": reward_skip, "stay": reward_stay, "pick": reward_pick,
