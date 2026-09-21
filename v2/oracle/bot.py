@@ -514,10 +514,8 @@ def cmd_stats(*_):
     book = cut.ledger()
     hours = sum(len(v) for v in book.values())
     rows = shelf()
-    unseen = unseen_hours()
-    left = max(0.0, waste_allowance(unseen * 3600) - wasted_recently(load(), time.time()))
-    return (f"{len(rows)} videos ready, {unseen}h never shown, "
-            f"{hours}h aired so far")
+    return (f"{len(rows)} video{'s' if len(rows) != 1 else ''} ready, "
+            f"{unseen_hours():.1f}h never shown, {hours}h aired so far")
 
 
 def cmd_vote(data, now, sender, args):
