@@ -382,6 +382,57 @@ share_of() {
   echo "$s"
 }
 
+# --- shorts ----------------------------------------------------------------
+# kil, 2026-09-21: the channel plays a short while a fetch runs, and the far
+# side is walled for downloading, so this side fetches those too. A short is
+# about fifteen megabytes against an hourly ceiling of 2500, so what it costs
+# is the request and not the bytes: one per run at most, and only on a run that
+# did not fetch a video, so the video lane never waits behind a short. It lands
+# in shorts-in/ and never in queue/, so it cannot be mistaken for a rotation.
+shorts() {
+  chan=$1
+  list=$($OSSH "$ORACLE" "cat $V2/$chan/state/shorts.tsv" 2>/dev/null) || return 0
+  vid=$(printf '%s\n' "$list" | awk 'length($1) == 11 { print $1; exit }')
+  [ -n "$vid" ] || return 0
+  tried=$(num "$(cat "$BASE/$chan.short.tried" 2>/dev/null)")
+  now=$(date +%s)
+  [ $((now - tried)) -ge $((${SHORT_GAP_MIN:-20} * 60)) ] || return 0
+  log "$chan: short $vid"
+  [ -z "$DRY" ] || return 0
+  date +%s > "$BASE/$chan.short.tried"
+  tmp=$BASE/shorts.part
+  rm -rf "$tmp"; mkdir -p "$tmp"
+  cookies=""
+  [ -s "$BASE/cookies.txt" ] && cookies="$BASE/cookies.txt"
+  if ! yt-dlp --force-ipv4 ${cookies:+--cookies "$cookies"} --no-playlist \
+       --restrict-filenames --no-progress --max-filesize 200M \
+       -f "bv*[vcodec^=avc1][height<=1080]+ba[acodec^=mp4a]/b[ext=mp4]" \
+       --merge-output-format mp4 -P "$tmp" -o '%(id)s.%(ext)s' \
+       "https://www.youtube.com/shorts/$vid" > "$tmp/run.log" 2>&1; then
+    log "$chan: short $vid echoue"
+    grep -qi "sign in to confirm" "$tmp/run.log" && note_throttle
+    rm -rf "$tmp"
+    return 1
+  fi
+  got=$(ls "$tmp"/"$vid".* 2>/dev/null | grep -v run.log | head -1)
+  [ -n "$got" ] || { log "$chan: short $vid sans fichier"; rm -rf "$tmp"; return 1; }
+  name=$(basename "$got")
+  size=$(bytes "$got")
+  scp -i "$KEY" -o BatchMode=yes -o StrictHostKeyChecking=accept-new "$got" \
+      "$ORACLE:$V2/$chan/upload/" >> "$LOG" 2>&1 || { log "$chan: short scp echoue"; rm -rf "$tmp"; return 1; }
+  remote=$($OSSH "$ORACLE" "stat -c %s '$V2/$chan/upload/$name'" 2>/dev/null)
+  if [ "$remote" != "$size" ]; then
+    $OSSH "$ORACLE" "rm -f '$V2/$chan/upload/$name'" 2>/dev/null
+    log "$chan: short taille $remote contre $size, annule"
+    rm -rf "$tmp"
+    return 1
+  fi
+  $OSSH "$ORACLE" "mkdir -p $V2/$chan/shorts-in && mv '$V2/$chan/upload/$name' '$V2/$chan/shorts-in/$name'" \
+    || { log "$chan: short non livre"; rm -rf "$tmp"; return 1; }
+  rm -rf "$tmp"
+  log "$chan: short livre $name ($((size / 1048576)) Mo)"
+}
+
 turn() {
   for c in $CHANNELS; do
     w=$($OSSH "$ORACLE" "cat $V2/$c/state/want.json" 2>/dev/null)
@@ -399,6 +450,9 @@ turn() {
 }
 
 for chan in $CHANNELS; do ship "$chan"; done
-for chan in $(turn); do fill "$chan" && break; done
+took=""
+for chan in $(turn); do fill "$chan" && { took=$chan; break; }; done
+# only on a tick that fetched nothing: the rotation comes first, always
+[ -n "$took" ] || for chan in $CHANNELS; do shorts "$chan" && break; done
 report
 exit 0

@@ -67,6 +67,10 @@ FILLER = ROOT / "filler.ts"
 # Ready to air shorts, each already at the channel's own profile so one can go
 # out between two chunks without touching the session. Filled by shorts.py.
 SHORTS = ROOT / "shorts"
+# Where the board drops a short it has just fetched, before shorts.py builds it
+# into the channel's frame. Separate from upload/ so a short can never be
+# mistaken for a video and put in the rotation.
+SHORTS_IN = ROOT / "shorts-in"
 
 GIB = 1024 ** 3
 MAXH = int(conf_num("MAXH", 720))

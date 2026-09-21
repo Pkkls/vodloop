@@ -30,6 +30,7 @@ sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 import chan  # noqa: E402
 import cut  # noqa: E402
 import kick  # noqa: E402
+import shorts  # noqa: E402
 
 CATALOG = chan.STATE / "catalog.tsv"
 CANDIDATES = chan.STATE / "candidates.tsv"
@@ -342,6 +343,7 @@ def refresh_catalog(apply):
         chan.log("aucune liste lue, catalogue precedent conserve")
         return
     if apply:
+        shorts.wanted()
         tmp = CATALOG.with_suffix(".tmp")
         tmp.write_text("".join(f"{vid}\t{secs}\t{rank}\t{place}\t{name}\n"
                                for vid, (secs, rank, place, name) in rows.items()))
@@ -476,6 +478,10 @@ def main(argv):
     if apply and len(wanted) != len(asked):
         # one that has landed, aired or been refused is no longer a request
         REQUESTS.write_text("".join(f"{v}\n" for v in asked if v in wanted))
+    # anything the board dropped is built now: it costs about a second per
+    # second of short, niced, and this run already holds the channel's lock
+    if apply:
+        shorts.collect()
     names = catalog_titles()
     if apply:
         tmp = CANDIDATES.with_suffix(".tmp")
