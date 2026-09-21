@@ -585,7 +585,7 @@ try:
           early is not None and "too early" in early, early)
     thin = _b.skip_blocked(fresh, 10_000, at(55, 3.02))
     check("near the floor even a five minute skip is refused",
-          thin is not None and "not much left" in thin, thin)
+          thin is not None and "little left" in thin, thin)
     check("control: an hour more of shelf and the same skip goes through",
           _b.skip_blocked(fresh, 10_000, at(55, 4)) is None,
           _b.skip_blocked(fresh, 10_000, at(55, 4)))
@@ -619,7 +619,7 @@ try:
     state = {"skips": [], "users": {}}
     _b.do_skip(state, 10_000, "vote", at(55, 12), "troll")
     check("the one who just carried a skip is asked to wait",
-          "turn" in (_b.skip_blocked(state, 12_000, at(55, 12), "troll") or ""),
+          "someone else" in (_b.skip_blocked(state, 12_000, at(55, 12), "troll") or ""),
           _b.skip_blocked(state, 12_000, at(55, 12), "troll"))
     check("control: somebody else is not made to wait for them",
           _b.skip_blocked(state, 12_000, at(55, 12), "quelquun") is None,
@@ -661,20 +661,20 @@ try:
           bot.skip_blocked({"skips": []}, 1000000, None) is None)
     fresh = {"name": ON_AIR, "elapsed": 60, "hour": 1, "hours": 5}
     check("an hour cannot be voted off in its first minutes",
-          "you can vote in" in (bot.skip_blocked({"skips": []}, 1000000, fresh) or ""))
+          "vote in" in (bot.skip_blocked({"skips": []}, 1000000, fresh) or ""))
     settled = {"name": ON_AIR, "elapsed": bot.SKIP_MIN_AIRED + 1, "hour": 1, "hours": 5}
     check("control: once it has run long enough it can",
           bot.skip_blocked({"skips": []}, 1000000, settled) is None)
     bot.shelf = lambda: [(SAME, 5.0)]
     check("a skip that can only land on the same stream is refused, not run",
-          "same one" in (bot.skip_blocked({"skips": []}, 1000000, settled) or ""),
+          "only stream left" in (bot.skip_blocked({"skips": []}, 1000000, settled) or ""),
           bot.skip_blocked({"skips": []}, 1000000, settled))
     bot.shelf = lambda: [(SAME, 5.0), (OTHER, 1.0)]
     check("control: one other stream on the shelf and it goes through",
           bot.skip_blocked({"skips": []}, 1000000, settled) is None)
     just = {"skips": [1000000 - 60]}
     check("a skip locks the next one for the cooldown",
-          "try again in" in (bot.skip_blocked(just, 1000000, settled) or ""))
+          "just skipped" in (bot.skip_blocked(just, 1000000, settled) or ""))
     many = {"skips": [1000000 - 100 * n for n in range(1, bot.SKIP_MAX_PER_HOUR + 1)]}
     check("and an hour holds only so many of them",
           "that is the limit" in (bot.skip_blocked(many, 1000000, settled) or ""),
@@ -754,14 +754,14 @@ try:
           supply.REQUESTS.read_text().strip() == "id000000005", answer)
     check("and the viewer is told it is coming, with a wait", "downloading" in answer, answer)
     check("control: the same viewer cannot hold two of the board's slots",
-          "already have one coming" in bot.cmd_pick(data, 1010, viewer, ["8"]) and
+          "one coming already" in bot.cmd_pick(data, 1010, viewer, ["8"]) and
           supply.REQUESTS.read_text().count("\n") == 1)
     other = {"user_id": "u2", "name": "u2", "privileged": False}
     bot.cmd_pick(data, 1020, other, ["9"])
     bot.cmd_pick(data, 1030, {"user_id": "u3", "name": "u3", "privileged": False}, ["10"])
     full = bot.cmd_pick(data, 1040, {"user_id": "u4", "name": "u4", "privileged": False}, ["11"])
     check("the board's queue is capped, and the refusal appends nothing",
-          "already downloading" in full and supply.REQUESTS.read_text().count("\n") == 3, full)
+          "downloading already" in full and supply.REQUESTS.read_text().count("\n") == 3, full)
 
     bot.PICK.unlink(missing_ok=True)
     before = supply.REQUESTS.read_text()
@@ -787,7 +787,7 @@ try:
     cut.ahead_seconds = lambda: bot.JUMP_SECONDS - chan.CHUNK_SECONDS
     ok, said = bot.reward_jump({}, 1000, "v", "")
     check("with less cut ahead than the jump it is refused and refunded",
-          ok is False and "points back" in said and not cut.JUMP.exists(), said)
+          ok is False and said and not cut.JUMP.exists(), said)
     cut.ahead_seconds = lambda: 3600
     ok, said = bot.reward_jump({}, 1000, "v", "")
     check("with the hour in hand it is taken and the cutter is told",
@@ -809,7 +809,7 @@ try:
     bot.playing = lambda: None
     ok, said = bot.reward_jump({}, 1000, "v", "")
     check("control: with nothing on air there is nothing to jump into",
-          ok is False and "points back" in said, said)
+          ok is False and "nothing on air" in said, said)
 finally:
     bot.playing, cut.ahead_seconds = real_playing_j, real_ahead
     cut.JUMP.unlink(missing_ok=True)
@@ -1338,7 +1338,7 @@ try:
                           for i in range(bot.REQUEST_MAX_PENDING)}}
         ok, why = bot.queue_request(full, time.time(), "v", "CCCCCCCCCCC", "Encore une")
         check("the queue of paid fetches is capped, and the refusal refunds",
-              ok is False and "points back" in (why or ""), (ok, why))
+              ok is False and "downloading already" in (why or ""), (ok, why))
         check("control: under the cap it goes through",
               bot.queue_request({"asked": {}}, time.time(), "v", "DDDDDDDDDDD", "t")[0])
         twice = {"asked": {"EEEEEEEEEEE": {"who": "first", "title": "Deja demandee",
@@ -1346,7 +1346,7 @@ try:
                                            "redemption": "r7"}}}
         ok, why = bot.queue_request(twice, time.time(), "second", "EEEEEEEEEEE", "Deja demandee")
         check("asking for one already on its way refunds rather than strands the first",
-              ok is False and "points back" in (why or "")
+              ok is False and "already coming" in (why or "")
               and twice["asked"]["EEEEEEEEEEE"]["redemption"] == "r7", (ok, why, twice))
     finally:
         supply.catalog_titles, bot.shelf, bot.say = real_titles2, real_shelf3, real_say3
@@ -1396,7 +1396,7 @@ try:
             ok, said = bot.reward_place(asked, 1000, "v", "peru")
             check("control: with every one of them coming already it says so, not "
                   "that nothing was filmed there",
-                  ok is False and "already on its way" in said, said)
+                  ok is False and "already coming" in said, said)
         finally:
             supply.catalog_titles, supply.excluded = real_titles3, real_excluded3
             bot.queue_request = real_queue

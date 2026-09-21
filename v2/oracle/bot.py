@@ -459,12 +459,10 @@ SAID = {
                     "放送は約{min}分後", "yayında ~{min} dk"),
     "last_landed": ("last landed {min} min ago", "el último hace {min} min",
                     "最終到着{min}分前", "son {min} dk önce"),
-    "help": ("what is on, the list, choose one, skip, downloads, source",
-             "qué suena, la lista, elegir, saltar, descargas, fuente",
-             "再生中 / 一覧 / 選ぶ / スキップ / 取得中 / 元動画",
-             "çalan, liste, seç, atla, indirilenler, kaynak"),
+    "help": ("playing, list, choose, skip, downloads, source", "sonando, lista, elegir, saltar, descargas, fuente",
+            "再生中 / 一覧 / 選ぶ / スキップ / 取得中 / 元動画", "çalan, liste, seç, atla, indirilenler, kaynak"),
     "nothing_on": ("nothing on air right now", "nada en directo ahora",
-                   "今は配信していません", "şu anda yayın yok"),
+                  "今は配信なし", "şu anda yayın yok"),
     "nothing_ready": ("nothing ready yet, downloading more",
                       "nada listo aún, descargando más",
                       "まだ準備中です、取得しています", "henüz hazır yok, indiriliyor"),
@@ -478,9 +476,8 @@ SAID = {
     "is_next": ("next", "siguiente", "次", "sırada"),
     "vote_running": ("a vote is already running", "ya hay una votación",
                      "すでに投票中です", "zaten bir oylama var"),
-    "vote_failed": ("last vote failed, try again in {min} min",
-                    "la votación falló, en {min} min",
-                    "投票は不成立、あと{min}分", "oylama başarısız, {min} dk sonra"),
+    "vote_failed": ("last vote failed, {min} min", "la votación falló, {min} min",
+                   "不成立、{min}分", "oylama düştü, {min} dk"),
     "to_skip": ("to skip", "para saltar", "スキップに", "atlamak için"),
     "vote_needs": ("{need} votes to skip, type !skip", "{need} votos, escribe !skip",
                    "{need}票でスキップ、!skipと入力", "{need} oy gerek, !skip yaz"),
@@ -489,77 +486,59 @@ SAID = {
                   "{need}票で再生、!pick {n}と入力", "{need} oy gerek, !pick {n} yaz"),
     "nothing_to_pick": ("nothing to pick from yet", "nada para elegir aún",
                         "まだ選べるものがありません", "henüz seçecek bir şey yok"),
-    "pick_usage": ("!pick <number>, numbers come from !list",
-                   "!pick <número>, los números salen de !list",
-                   "!list の番号で !pick <番号>", "!list'teki numarayla !pick <numara>"),
+    "pick_usage": ("!pick <number> from !list", "!pick <número> de !list",
+                  "!list の番号で !pick", "!list numarasıyla !pick"),
     "pick_range": ("pick 1 to {max}, see !list", "elige de 1 a {max}, mira !list",
                    "1〜{max} から選択、!list参照", "1 ile {max} arası seç, !list"),
-    "only_stream": ("this is the only stream left, skipping lands on the same one",
-                    "es el único directo que queda, saltar cae en el mismo",
-                    "残りはこの配信だけです", "kalan tek yayın bu"),
-    "nothing_else": ("nothing else ready, this one stays on",
-                     "nada más listo, sigue este",
-                     "他に準備がないので継続します", "başka hazır yok, bu devam ediyor"),
-    "not_enough": ("not much left in the library, this one stays on",
-                   "queda poco en la biblioteca, sigue este",
-                   "ライブラリの残りが少ないので継続", "kitaplıkta az kaldı, bu devam"),
-    "too_much_skipped": ("too much skipped this hour, try again later",
-                         "demasiados saltos esta hora, prueba luego",
-                         "この1時間はスキップが多すぎます", "bu saatte çok atlandı, sonra dene"),
-    "too_early": ("too early in this one to skip, try again later",
-                  "demasiado pronto para saltar, prueba luego",
-                  "この配信は始まったばかりです", "atlamak için çok erken, sonra dene"),
+    "only_stream": ("the only stream left, a skip lands on it", "es el único que queda",
+                   "残りはこれだけ", "kalan tek yayın bu"),
+    "nothing_else": ("nothing else ready", "nada más listo", "他に準備なし", "başka hazır yok"),
+    "not_enough": ("little left in the library", "queda poco", "残りが少ない", "az kaldı"),
+    "too_much_skipped": ("too many skips this hour", "demasiados saltos esta hora",
+                        "この1時間は多すぎ", "bu saatte çok atlandı"),
+    "too_early": ("too early to skip this one", "muy pronto para saltar",
+                 "始まったばかり", "atlamak için erken"),
     "skip_limit": ("{n} skips this hour, that is the limit",
                    "{n} saltos esta hora, es el límite",
                    "この1時間で{n}回、上限です", "bu saatte {n} atlama, sınır bu"),
-    "just_skipped": ("just skipped one, try again in {min} min",
-                     "recién saltado, en {min} min",
-                     "さっきスキップしました、あと{min}分", "az önce atlandı, {min} dk sonra"),
-    "just_started": ("this one just started, you can vote in {min} min",
-                     "acaba de empezar, vota en {min} min",
-                     "始まったばかり、あと{min}分で投票可", "yeni başladı, {min} dk sonra oy"),
-    "your_turn_over": ("you had the last skip, someone else's turn for {min} min",
-                       "tuviste el último salto, {min} min para otro",
-                       "前回はあなたです、あと{min}分", "son atlama sendeydi, {min} dk"),
+    "just_skipped": ("just skipped, {min} min", "recién saltado, {min} min",
+                    "さっきスキップ、{min}分", "az önce atlandı, {min} dk"),
+    "just_started": ("just started, vote in {min} min", "acaba de empezar, {min} min",
+                    "始まったばかり、{min}分", "yeni başladı, {min} dk"),
+    "your_turn_over": ("your last skip, {min} min for someone else", "tu último salto, {min} min",
+                      "前回はあなた、{min}分", "son atlama sendeydi, {min} dk"),
     "downloading": ("downloading", "descargando", "取得中", "indiriliyor"),
-    "already_coming": ("already coming", "ya viene", "すでに取得中", "zaten geliyor"),
-    "one_each": ("you already have one coming, wait for it to land",
-                 "ya tienes uno en camino, espera",
-                 "すでに1件取得中です、お待ちを", "zaten bir tane geliyor, bekle"),
-    "queue_full": ("{n} already downloading, ask again when one lands",
-                   "{n} descargando ya, pide cuando llegue uno",
-                   "すでに{n}件取得中、届いたらどうぞ", "{n} tane iniyor, biri gelince iste"),
+    "already_coming": ("already coming", "ya viene", "取得中", "zaten geliyor"),
+    "one_each": ("you have one coming already", "ya tienes uno en camino",
+                "すでに1件取得中", "zaten bir tane geliyor"),
+    "queue_full": ("{n} downloading already, wait for one", "{n} descargando, espera",
+                  "{n}件取得中、お待ちを", "{n} iniyor, bekle"),
     "nothing_asked": ("nothing asked for right now", "nada pedido ahora mismo",
                       "今リクエストはありません", "şu anda istek yok"),
     "points_back": ("points back", "puntos devueltos", "ポイント返却", "puan iade"),
-    "not_a_number": ("that is not a number from !list", "no es un número de !list",
-                     "!list の番号ではありません", "!list'ten bir numara değil"),
-    "no_video_there": ("no video at that number", "no hay vídeo en ese número",
-                       "その番号の配信はありません", "o numarada yayın yok"),
-    "not_a_link": ("that is not a YouTube link", "no es un enlace de YouTube",
-                   "YouTubeのリンクではありません", "YouTube bağlantısı değil"),
-    "not_in_sources": ("that one is not in this channel's sources",
-                       "no está en las fuentes del canal",
-                       "このチャンネルのソースにありません", "kanalın kaynaklarında yok"),
-    "already_shown": ("already been on, or refused", "ya emitido, o rechazado",
-                      "放送済みか対象外です", "yayınlandı ya da reddedildi"),
+    "not_a_number": ("not a number from !list", "no es un número de !list",
+                    "!list の番号では", "!list numarası değil"),
+    "no_video_there": ("no video at that number", "no hay vídeo ahí",
+                      "その番号はなし", "o numarada yok"),
+    "not_a_link": ("not a YouTube link", "no es un enlace de YouTube",
+                  "リンクが違います", "YouTube bağlantısı değil"),
+    "not_in_sources": ("not one of this channel's streams", "no es de este canal",
+                      "このチャンネル外", "bu kanaldan değil"),
+    "already_shown": ("already been on", "ya emitido", "放送済み", "yayınlandı"),
     "name_a_place": ("name a place, like Thailand", "di un lugar, como Tailandia",
-                     "場所を入力（例: タイ）", "bir yer yaz, örnek Tayland"),
-    "nothing_there": ("nothing filmed there in the library",
-                      "nada filmado allí en la biblioteca",
-                      "そこで撮影された配信はありません", "orada çekilmiş bir şey yok"),
-    "place_coming": ("{place} is already on its way", "{place} ya viene en camino",
-                     "{place}はすでに取得中です", "{place} zaten geliyor"),
+                    "場所を（例: タイ）", "bir yer yaz, Tayland gibi"),
+    "nothing_there": ("nothing filmed there", "nada filmado allí",
+                     "そこの配信はなし", "orada çekilmiş yok"),
+    "place_coming": ("{place} is already coming", "{place} ya viene",
+                    "{place}は取得中", "{place} zaten geliyor"),
     "one_more_hour": ("one more hour of it", "una hora más",
                       "もう1時間続けます", "bir saat daha"),
-    "no_hours_left": ("no hours left on this one", "no quedan horas de este",
-                      "この配信に残りはありません", "bunda kalan saat yok"),
+    "no_hours_left": ("no hours left on this one", "no quedan horas",
+                     "残りはありません", "kalan saat yok"),
     "forward": ("{min} min forward", "{min} min adelante",
                 "{min}分進みました", "{min} dk ileri"),
-    "not_cut_ahead": ("less than {min} min is ready ahead, try again in a few minutes",
-                      "menos de {min} min listos, prueba en unos minutos",
-                      "先の準備が{min}分未満です、少し後で",
-                      "{min} dk'dan az hazır, birazdan dene"),
+    "not_cut_ahead": ("less than {min} min ready ahead, try later", "menos de {min} min listos, prueba luego",
+                     "先が{min}分未満、後で", "{min} dk'dan az hazır"),
     "ask_with": ("!list then !pick <n> to ask for one",
                  "!list y luego !pick <n> para pedir",
                  "!list のあと !pick <n> でリクエスト",
@@ -982,7 +961,7 @@ def reward_skip(data, now, who, text):
     live = playing()
     blocked = skip_blocked(data, now, live, data.get("redeemer_id") or who)
     if blocked:
-        return False, f"@{who} {blocked} · " + four("points_back")
+        return False, f"@{who} {blocked}" + four("points_back")
     do_skip(data, now, f"points from {who}", live, data.get("redeemer_id") or who)
     return True, f"@{who} " + four("moving_on")
 
@@ -995,10 +974,10 @@ def reward_jump(data, now, who, text):
     cooldowns this one is not allowed to walk past for the same hundred points.
     """
     if not playing():
-        return False, f"@{who} " + four("nothing_on") + " · " + four("points_back")
+        return False, f"@{who} " + four("nothing_on")
     if cut.ahead_seconds() < JUMP_SECONDS:
         return False, (f"@{who} " + four("not_cut_ahead", min=JUMP_SECONDS // 60)
-                       + " · " + four("points_back"))
+                      )
     cut.JUMP.write_text(str(JUMP_SECONDS))
     return True, f"@{who} " + four("forward", min=JUMP_SECONDS // 60)
 
@@ -1009,9 +988,9 @@ def reward_pick(data, now, who, text):
     try:
         index = int(re.sub(r"\D", "", text or "")) - 1
     except ValueError:
-        return False, f"@{who} " + four("not_a_number") + " · " + four("points_back")
+        return False, f"@{who} " + four("not_a_number")
     if not rows or not 0 <= index < len(rows):
-        return False, f"@{who} " + four("no_video_there") + " · " + four("points_back")
+        return False, f"@{who} " + four("no_video_there")
     if index >= len(ready):
         # the numbers in !list run on into the catalogue, so a paid pick can
         # land on something that has to be fetched first. That is the request
@@ -1035,14 +1014,14 @@ def reward_stay(data, now, who, text):
     """
     live = playing()
     if not live:
-        return False, f"@{who} " + four("nothing_on") + " · " + four("points_back")
+        return False, f"@{who} " + four("nothing_on")
     book, durations = cut.ledger(), chan.read_json(chan.STATE / "durations.json", {})
     for folder in (chan.QUEUE, chan.AIRED):
         path = folder / live["name"]
         if path.exists() and cut.unaired(path, book, durations, cut.reserved()):
             PICK.write_text(json.dumps({"name": live["name"], "at": int(now)}))
             return True, f"@{who} {live['title'][:44]} · " + four("one_more_hour")
-    return False, f"@{who} " + four("no_hours_left") + " · " + four("points_back")
+    return False, f"@{who} " + four("no_hours_left")
 
 
 # Titles name cities, not countries: "japan" matched six videos while Osaka
@@ -1089,11 +1068,9 @@ def queue_request(data, now, who, vid, title):
     if vid in held:
         # overwriting the row would strand the first viewer's redemption in
         # Kick's queue for good, with their points gone and nobody to settle it
-        return False, (f"@{who} " + four("already_coming") + " · "
-                       + four("points_back"))
+        return False, (f"@{who} " + four("already_coming"))
     if len(held) >= REQUEST_MAX_PENDING:
-        return False, (f"@{who} " + four("queue_full", n=len(held)) + " · "
-                       + four("points_back"))
+        return False, (f"@{who} " + four("queue_full", n=len(held)))
     with supply.REQUESTS.open("a") as fh:
         fh.write(vid + "\n")
     data.setdefault("asked", {})[vid] = {"who": who, "title": title, "at": int(now),
@@ -1116,14 +1093,13 @@ def reward_request(data, now, who, text):
     """
     vid = video_asked(text)
     if not vid:
-        return False, f"@{who} " + four("not_a_link") + " · " + four("points_back")
+        return False, f"@{who} " + four("not_a_link")
     titles = supply.catalog_titles()
     if vid not in titles:
-        return False, (f"@{who} " + four("not_in_sources") + " · "
-                       + four("points_back"))
+        return False, (f"@{who} " + four("not_in_sources"))
     if vid in supply.excluded(now):
         return False, (f"@{who} {clean_title(titles[vid], SLUG)[:40]} · "
-                       + four("already_shown") + " · " + four("points_back"))
+                       + four("already_shown"))
     for path, _ in shelf():
         if chan.video_id(path) == vid:
             PICK.write_text(json.dumps({"name": path.name, "at": int(now)}))
@@ -1146,7 +1122,7 @@ def reward_place(data, now, who, text):
     """
     wanted = re.sub(r"[^\w ]", "", text or "").strip().lower()
     if len(wanted) < 3:
-        return False, f"@{who} " + four("name_a_place") + " · " + four("points_back")
+        return False, f"@{who} " + four("name_a_place")
     terms = place_terms(wanted)
     for path, _ in shelf():
         low = clean_title(path.name, SLUG).lower()
@@ -1173,9 +1149,8 @@ def reward_place(data, now, who, text):
         return True, (f"@{who} {clean_title(title, SLUG)[:38]} · "
                       + four("downloading") + f" {waiting_for(catalog_seconds(vid))}")
     if already:
-        return False, (f"@{who} " + four("place_coming", place=wanted) + " · "
-                       + four("points_back"))
-    return False, f"@{who} " + four("nothing_there") + " · " + four("points_back")
+        return False, (f"@{who} " + four("place_coming", place=wanted))
+    return False, f"@{who} " + four("nothing_there")
 
 
 ACTIONS = {"skip": reward_skip, "stay": reward_stay, "pick": reward_pick,
