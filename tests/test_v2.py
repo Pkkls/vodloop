@@ -931,6 +931,35 @@ finally:
     feed.profile_of = real_profile_of
     feed.SHORT.unlink(missing_ok=True)
 
+print("ceiling: the wire only drops to a new height when nothing above it is left")
+import ceiling  # noqa: E402
+real_state, real_build, real_run = ceiling.state, ceiling.build_clip, ceiling.subprocess.run
+try:
+    calls, built = [], []
+    ceiling.build_clip = lambda size: built.append(size) or True
+    ceiling.subprocess.run = lambda *a, **k: calls.append(a[0]) or type("r", (), {"returncode": 0})
+    ceiling.state = lambda: (1080, ["un.mkv"], 23)
+    check("with hours above the ceiling still to show, it refuses and says how many",
+          ceiling.main(["--apply"]) == 0 and not built and not calls)
+    ceiling.state = lambda: (1080, [], 0)
+    check("control: a report never touches anything, whatever the state",
+          ceiling.main([]) == 0 and not built and not calls)
+    chan.write_json(feed.SESSION, {"pid": 1, "profile": [1920, 1080, 60.0]})
+    check("with nothing above it left, the clip is rebuilt at the ceiling",
+          ceiling.main(["--apply"]) == 0 and built == ["1280x720"], built)
+    check("and the one restart it costs is the pusher, named by its unit",
+          any("restart" in c and chan.unit("push") in c for c in calls), calls)
+    check("control: the session file is dropped so nothing reads the old profile",
+          not feed.SESSION.exists())
+    ceiling.state = lambda: (720, [], 0)
+    built.clear()
+    check("control: already at the ceiling, it builds nothing and restarts nothing",
+          ceiling.main(["--apply"]) == 0 and not built)
+finally:
+    ceiling.state, ceiling.build_clip = real_state, real_build
+    ceiling.subprocess.run = real_run
+    feed.SESSION.unlink(missing_ok=True)
+
 print("bot: telegram carries the chat out and one room's answers back")
 said_tg, real_say_tg = [], bot.say
 real_chat, real_token = bot.TG_CHAT, bot.TG_TOKEN

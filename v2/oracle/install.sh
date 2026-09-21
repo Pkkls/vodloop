@@ -42,6 +42,7 @@ block="# v2:$NAME debut
 */10 * * * * CHAN_ROOT=$ROOT /usr/bin/flock -n $ROOT/state/supply.lock /usr/bin/python3 $BIN/supply.py --apply >> $ROOT/log/supply.log 2>&1
 */5 * * * * CHAN_ROOT=$ROOT /usr/bin/flock -n $ROOT/state/watch.lock /usr/bin/python3 $BIN/watch.py --apply >> $ROOT/log/watch.log 2>&1
 3,18,33,48 * * * * CHAN_ROOT=$ROOT /usr/bin/flock -n $ROOT/state/kick.lock /usr/bin/nice -n 10 /usr/bin/python3 $BIN/kickfetch.py --apply >> $ROOT/log/kick.log 2>&1
+*/20 * * * * CHAN_ROOT=$ROOT /usr/bin/flock -n $ROOT/state/ceiling.lock /usr/bin/python3 $BIN/ceiling.py --apply >> $ROOT/log/ceiling.log 2>&1
 # v2:$NAME fin"
 { crontab -l 2>/dev/null | sed "/^# v2:$NAME debut\$/,/^# v2:$NAME fin\$/d"; echo "$block"; } | crontab -
 echo "installe: $ROOT (demarrer: sudo systemctl enable --now vodloop-v2-cut@$NAME vodloop-v2-push@$NAME)"
