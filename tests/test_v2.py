@@ -556,12 +556,17 @@ if shutil.which("ffmpeg"):
 BOTGUARD = True
 print("bot: nobody can vote the reserve down to nothing")
 import bot as _b  # noqa: E402
-_was_unseen, _was_playing, _was_part = _b.unseen_hours, _b.playing, chan.PART_SECONDS
+# the shelf is what every guard reads: the hours in reserve and the recordings
+# they belong to both come out of it, so it is the one thing a test moves
+ON_AIR = "1789-Un_Titre-dQw4w9WgXcQ.mkv"
+OTHER = pathlib.Path("1790-Autre_Titre-aB3dEfGhIjK.mkv")
+SAME = pathlib.Path("1789-Un_Titre-dQw4w9WgXcQ.mkv")
+_was_shelf, _was_playing, _was_part = _b.shelf, _b.playing, chan.PART_SECONDS
 try:
     chan.PART_SECONDS = 3600
 
     def at(minute, reserve):
-        _b.unseen_hours = lambda r=reserve: r
+        _b.shelf = lambda r=reserve: [(OTHER, r)]
         _b.playing = lambda m=minute: {"title": "t", "name": "t.mkv", "hour": 1,
                                        "hours": 4, "vid": "x", "started": 0,
                                        "elapsed": m * 60}
@@ -577,10 +582,10 @@ try:
           _b.skip_blocked(fresh, 10_000, at(55, 12)))
     early = _b.skip_blocked(fresh, 10_000, at(10, 5))
     check("a thin shelf refuses an early one, which would waste fifty minutes",
-          early is not None and "throws away" in early, early)
+          early is not None and "too early" in early, early)
     thin = _b.skip_blocked(fresh, 10_000, at(55, 3.02))
     check("near the floor even a five minute skip is refused",
-          thin is not None and "reserve" in thin, thin)
+          thin is not None and "not much left" in thin, thin)
     check("control: an hour more of shelf and the same skip goes through",
           _b.skip_blocked(fresh, 10_000, at(55, 4)) is None,
           _b.skip_blocked(fresh, 10_000, at(55, 4)))
@@ -622,7 +627,7 @@ try:
     check("control: a state written before costs were recorded still counts",
           len(_b.skips_since({"skips": [9_000.0, 1.0]}, 5_000)) == 1)
 finally:
-    _b.unseen_hours, _b.playing, chan.PART_SECONDS = _was_unseen, _was_playing, _was_part
+    _b.shelf, _b.playing, chan.PART_SECONDS = _was_shelf, _was_playing, _was_part
 
 
 print("bot: reading the pipeline")
@@ -646,23 +651,30 @@ check("what is on the wire is read from the cutter's own job",
 check("and its source is named", live["vid"] == "dQw4w9WgXcQ")
 
 print("bot: the guards on skipping")
-real_unseen = bot.unseen_hours
+real_shelf = bot.shelf
 try:
-    bot.unseen_hours = lambda: 0
+    bot.shelf = lambda: []
     check("no vote opens when there is nothing unseen to move on to",
           bot.skip_blocked({"skips": []}, 1000000, None) is not None)
-    bot.unseen_hours = lambda: 5
+    bot.shelf = lambda: [(OTHER, 5.0)]
     check("control: with material in hand the hour itself is the only gate",
           bot.skip_blocked({"skips": []}, 1000000, None) is None)
-    fresh = {"elapsed": 60, "hour": 1, "hours": 5}
+    fresh = {"name": ON_AIR, "elapsed": 60, "hour": 1, "hours": 5}
     check("an hour cannot be voted off in its first minutes",
-          "votable in" in (bot.skip_blocked({"skips": []}, 1000000, fresh) or ""))
-    settled = {"elapsed": bot.SKIP_MIN_AIRED + 1, "hour": 1, "hours": 5}
+          "you can vote in" in (bot.skip_blocked({"skips": []}, 1000000, fresh) or ""))
+    settled = {"name": ON_AIR, "elapsed": bot.SKIP_MIN_AIRED + 1, "hour": 1, "hours": 5}
     check("control: once it has run long enough it can",
+          bot.skip_blocked({"skips": []}, 1000000, settled) is None)
+    bot.shelf = lambda: [(SAME, 5.0)]
+    check("a skip that can only land on the same stream is refused, not run",
+          "same one" in (bot.skip_blocked({"skips": []}, 1000000, settled) or ""),
+          bot.skip_blocked({"skips": []}, 1000000, settled))
+    bot.shelf = lambda: [(SAME, 5.0), (OTHER, 1.0)]
+    check("control: one other stream on the shelf and it goes through",
           bot.skip_blocked({"skips": []}, 1000000, settled) is None)
     just = {"skips": [1000000 - 60]}
     check("a skip locks the next one for the cooldown",
-          "next vote possible" in (bot.skip_blocked(just, 1000000, settled) or ""))
+          "try again in" in (bot.skip_blocked(just, 1000000, settled) or ""))
     many = {"skips": [1000000 - 100 * n for n in range(1, bot.SKIP_MAX_PER_HOUR + 1)]}
     check("and an hour holds only so many of them",
           "that is the limit" in (bot.skip_blocked(many, 1000000, settled) or ""),
@@ -670,23 +682,27 @@ try:
     old = {"skips": [1000000 - 7000]}
     check("control: skips older than the hour do not count",
           bot.skip_blocked(old, 1000000, settled) is None)
+    check("nothing a viewer is told names a file, an hour count or a floor",
+          all(not any(word in (message or "") for word in ("reserve", "shelf", "h back"))
+              for message in (bot.skip_blocked({"skips": []}, 1000000, settled),
+                              bot.cmd_aide(), bot.cmd_liste())))
 finally:
-    bot.unseen_hours = real_unseen
+    bot.shelf = real_shelf
 
 print("bot: one voice per account, and the skip only at the threshold")
-real_threshold, real_viewers = bot.threshold, bot.unseen_hours
+real_threshold, real_shelf = bot.threshold, bot.shelf
 try:
     bot.threshold = lambda: 3
-    bot.unseen_hours = lambda: 5
+    bot.shelf = lambda: [(OTHER, 5.0)]
     bot.SKIP.unlink(missing_ok=True)
     data = {"skips": [], "vote": None, "users": {}, "seen": []}
-    settled = {"elapsed": bot.SKIP_MIN_AIRED + 1, "hour": 1, "hours": 5}
+    settled = {"name": ON_AIR, "elapsed": bot.SKIP_MIN_AIRED + 1, "hour": 1, "hours": 5}
     real_playing = bot.playing
     bot.playing = lambda: settled
     now = 2000000
     first = bot.cmd_vote(data, now, {"user_id": "u1", "privileged": False}, [])
     check("the first voice opens the vote and says what it needs",
-          "3 votes needed" in (first or ""), first)
+          "3 needed" in (first or ""), first)
     again = bot.cmd_vote(data, now + 1, {"user_id": "u1", "privileged": False}, [])
     check("the same account cannot vote twice", again is None and len(data["vote"]["voters"]) == 1)
     bot.cmd_vote(data, now + 2, {"user_id": "u2", "privileged": False}, [])
@@ -702,9 +718,35 @@ try:
     check("a viewer cannot force", plain is None and not bot.SKIP.exists())
     bot.playing = real_playing
 finally:
-    bot.threshold, bot.unseen_hours = real_threshold, real_viewers
+    bot.threshold, bot.shelf = real_threshold, real_shelf
     bot.SKIP.unlink(missing_ok=True)
     bot.feed.ONAIR.unlink(missing_ok=True)
+
+print("bot: telegram carries the chat out and one room's answers back")
+said_tg, real_say_tg = [], bot.say
+real_chat, real_token = bot.TG_CHAT, bot.TG_TOKEN
+try:
+    bot.say = lambda text, reply_to=None: said_tg.append(text) or True
+    bot.TG_CHAT, bot.TG_TOKEN = "42", "jeton"
+    bot.tg_reply({"chat": {"id": 42}, "text": "bonsoir"})
+    check("a line typed on telegram goes out on the kick chat",
+          said_tg == ["bonsoir"], said_tg)
+    bot.tg_reply({"chat": {"id": 99}, "text": "je passais par la"})
+    check("control: another telegram room cannot speak through the channel",
+          said_tg == ["bonsoir"], said_tg)
+    bot.tg_reply({"chat": {"id": 42}, "text": "   "})
+    check("control: an empty line says nothing", said_tg == ["bonsoir"], said_tg)
+    bot._relay.clear()
+    bot.relay("viewer: salut")
+    check("the chat waits in one batch instead of a message per line",
+          bot._relay == ["viewer: salut"], bot._relay)
+    bot.TG_TOKEN = ""
+    bot.relay("viewer: personne n'ecoute")
+    check("control: with no telegram configured nothing is queued at all",
+          bot._relay == ["viewer: salut"], bot._relay)
+finally:
+    bot.say, bot.TG_CHAT, bot.TG_TOKEN = real_say_tg, real_chat, real_token
+    bot._relay.clear()
 
 print("bot: a webhook is read only once it is proven to be Kick's")
 check("a POST with no signature at all is refused",
@@ -990,10 +1032,10 @@ check("the ones that need typing are the ones that ask a question",
       == [r["key"] in ("pick", "place", "request") for r in bot.REWARDS],
       [(r["key"], r["input"]) for r in bot.REWARDS])
 settled = []
-real_settle, real_unseen, real_playing = bot.kickapi.settle_redemption, bot.unseen_hours, bot.playing
+real_settle, real_unseen, real_playing = bot.kickapi.settle_redemption, bot.shelf, bot.playing
 try:
     bot.kickapi.settle_redemption = lambda rid, ok: settled.append((rid, ok)) or True
-    bot.unseen_hours = lambda: 6
+    bot.shelf = lambda: [(OTHER, 6)]
     bot.playing = lambda: {"title": "t", "name": "t.mkv", "hour": 1, "hours": 4,
                            "vid": "x", "started": 0, "elapsed": bot.SKIP_MIN_AIRED + 60}
     bot.SKIP.unlink(missing_ok=True)
@@ -1031,7 +1073,7 @@ try:
         bot.playing = lambda: None
         bot.announce(state)
         check("an empty shelf is said out loud too",
-              len(said) == 2 and "nothing unseen" in said[1], said)
+              len(said) == 2 and "nothing new to play" in said[1], said)
     finally:
         bot.say = real_say
         bot.playing = lambda: {"title": "t", "name": "t.mkv", "hour": 1, "hours": 4,
@@ -1052,7 +1094,7 @@ try:
           bot.fetch_eta(1) >= bot.BOARD_SLOT_MIN, bot.fetch_eta(1))
     line = bot.waiting_for(7200)
     check("a viewer is told both when it arrives and when it airs",
-          "here in ~" in line and "on air ~" in line, line)
+          "ready in ~" in line and "on air in ~" in line, line)
     chan.PART_SECONDS = was_part
 
     print("  -- a stream asked for by link")
@@ -1127,7 +1169,7 @@ try:
         settled.clear(); said2.clear()
         bot.announce_arrivals(late)
         check("one the board never brought back gives the points back",
-              settled == [("r9", False)] and any("refunded" in t for t in said2)
+              settled == [("r9", False)] and any("points back" in t for t in said2)
               and not late["asked"], (settled, said2))
         supply.excluded = lambda now: {"BBBBBBBBBBB"}
         barred = {"asked": {"BBBBBBBBBBB": {"who": "v", "title": "Refusee",
@@ -1136,14 +1178,14 @@ try:
         settled.clear(); said2.clear()
         bot.announce_arrivals(barred)
         check("one the supply refuses refunds at once, not six hours later",
-              settled == [("r8", False)] and any("refunded" in t for t in said2)
+              settled == [("r8", False)] and any("points back" in t for t in said2)
               and not barred["asked"], (settled, said2))
         full = {"asked": {"V%09d" % i: {"who": "v", "title": "t", "at": time.time(),
                                         "state": "waiting", "redemption": None}
                           for i in range(bot.REQUEST_MAX_PENDING)}}
         ok, why = bot.queue_request(full, time.time(), "v", "CCCCCCCCCCC", "Encore une")
         check("the queue of paid fetches is capped, and the refusal refunds",
-              ok is False and "refunded" in (why or ""), (ok, why))
+              ok is False and "points back" in (why or ""), (ok, why))
         check("control: under the cap it goes through",
               bot.queue_request({"asked": {}}, time.time(), "v", "DDDDDDDDDDD", "t")[0])
         twice = {"asked": {"EEEEEEEEEEE": {"who": "first", "title": "Deja demandee",
@@ -1151,7 +1193,7 @@ try:
                                            "redemption": "r7"}}}
         ok, why = bot.queue_request(twice, time.time(), "second", "EEEEEEEEEEE", "Deja demandee")
         check("asking for one already on its way refunds rather than strands the first",
-              ok is False and "refunded" in (why or "")
+              ok is False and "points back" in (why or "")
               and twice["asked"]["EEEEEEEEEEE"]["redemption"] == "r7", (ok, why, twice))
     finally:
         supply.catalog_titles, bot.shelf, bot.say = real_titles2, real_shelf3, real_say3
@@ -1210,7 +1252,7 @@ try:
         bot.PICK.unlink(missing_ok=True)
 finally:
     bot.kickapi.settle_redemption = real_settle
-    bot.unseen_hours, bot.playing = real_unseen, real_playing
+    bot.shelf, bot.playing = real_unseen, real_playing
     bot.SKIP.unlink(missing_ok=True)
 
 print()

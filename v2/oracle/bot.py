@@ -12,11 +12,11 @@ a form on a public website and a forged chat message would drive the channel.
 
 What a viewer can do:
     !help            the commands
-    !vod             what is on, which hour of it, how long is left
+    !now             what is on, which hour of it, how long is left
     !list            what is on the shelf, numbered
     !pick <n>        vote for what plays next
-    !vote            vote to move on now
-    !source          where this video comes from
+    !skip            vote to move on now
+    !link            where this video comes from
     !stats           the library, the hours aired, the uptime
 
 What stops a vote from becoming a remote control, all of it settable per channel:
@@ -40,6 +40,7 @@ import sys
 import threading
 import time
 import urllib.parse
+import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
@@ -229,7 +230,82 @@ def say(text, reply_to=None):
         if wait > 0:
             time.sleep(wait)
         _last_said[0] = time.time()
+    relay(f"[bot] {text}")
     return kickapi.say(BROADCASTER, text, reply_to)
+
+
+# --- the chat, mirrored on Telegram ----------------------------------------
+
+# kil, 2026-09-21: "met les logs du chat dans le bot telegramme, et tu me mets
+# la possibilite de repondre via telegram au chat". Every channel shares one
+# Telegram bot, and Telegram hands its long poll to a single reader, so only
+# the channel carrying TG_POLL=1 listens; the others only write.
+TG_TOKEN = chan.CONF.get("TG_TOKEN", "")
+TG_CHAT = str(chan.CONF.get("TG_CHAT", ""))
+TG_POLL = chan.CONF.get("TG_POLL", "0") == "1"
+TG_FLUSH = int(chan.conf_num("TG_RELAY_SECONDS", 15))
+OFFSET = chan.STATE / "tg.offset"
+
+_relay, _relay_lock = [], threading.Lock()
+
+
+def relay(line):
+    """Hold one chat line for Telegram, which is written to in batches.
+
+    Telegram takes about twenty messages a minute into one chat and drops the
+    rest; a busy minute of Kick chat is more than that, so the lines wait and
+    leave together. Old lines fall off the end rather than pile up if Telegram
+    is unreachable.
+    """
+    if not TG_TOKEN or not TG_CHAT:
+        return
+    with _relay_lock:
+        _relay.append(re.sub(r"\s+", " ", line)[:300])
+        del _relay[:-60]
+
+
+def relay_loop():
+    while True:
+        time.sleep(TG_FLUSH)
+        with _relay_lock:
+            lines, _relay[:] = list(_relay), []
+        if lines:
+            chan.telegram("\n".join(lines))
+
+
+def tg_updates(offset):
+    query = urllib.parse.urlencode({"offset": offset, "timeout": 50,
+                                    "allowed_updates": '["message"]'})
+    url = f"https://api.telegram.org/bot{TG_TOKEN}/getUpdates?{query}"
+    with urllib.request.urlopen(url, timeout=70) as response:
+        return json.load(response).get("result") or []
+
+
+def tg_reply(message):
+    """One Telegram message out on Kick, under the channel's own name."""
+    if str((message.get("chat") or {}).get("id")) != TG_CHAT:
+        return  # somebody else found the bot; it answers to one room only
+    text = (message.get("text") or "").strip()
+    if text:
+        say(text[:400])
+
+
+def tg_loop():
+    while True:
+        try:
+            offset = int(OFFSET.read_text().strip() or 0)
+        except (OSError, ValueError):
+            offset = 0
+        try:
+            for update in tg_updates(offset):
+                offset = int(update.get("update_id", 0)) + 1
+                # the offset is stored before the message is acted on: a crash
+                # on one message must not replay it on every restart
+                OFFSET.write_text(str(offset))
+                tg_reply(update.get("message") or {})
+        except Exception as problem:
+            chan.log(f"telegram: {problem}")
+            time.sleep(20)
 
 
 # --- the guards ------------------------------------------------------------
@@ -281,6 +357,21 @@ def wasted_recently(data, now):
     return sum(float(r.get("cost", 0)) for r in skips_since(data, now - 3600))
 
 
+def other_stream_hours(live):
+    """Unseen hours that belong to a stream other than the one on air.
+
+    kil, 2026-09-21: "on stuck en boucle si y'a du !force". Sliced by the hour,
+    a skip with nothing else unseen lands on the next hour of the same
+    recording, so the channel looks like it ignored the skip and the chat asks
+    again. A skip that cannot change the stream is refused and said so.
+    """
+    if not live:
+        return unseen_hours()
+    mine = cut.recording_of(live["name"])
+    return sum(hours for path, hours in shelf()
+               if cut.recording_of(path) != mine)
+
+
 def skip_blocked(data, now, live, who=None):
     """Why a skip cannot happen now, or None. Checked for votes and for !force.
 
@@ -295,33 +386,35 @@ def skip_blocked(data, now, live, who=None):
     reserve = unseen_hours() * 3600
     cost = skip_cost(live)
     if reserve < 3600:
-        return "nothing unseen left to move on to right now"
+        return "nothing else ready, this one stays on"
+    if other_stream_hours(live) < 0.5:
+        return "this is the only stream left, skipping lands on the same one"
     if reserve - cost < SKIP_FLOOR:
-        return (f"that would leave {(reserve - cost) / 3600:.1f} h in reserve and "
-                f"the channel holds {SKIP_FLOOR // 3600} h back, so this one stays on")
+        return "not much left in the library, this one stays on"
     allowed = waste_allowance(reserve)
     spent = wasted_recently(data, now)
     if spent + cost > allowed:
-        return (f"skipping now throws away {cost / 60:.0f} min nobody has seen and "
-                f"the shelf allows {(allowed - spent) / 60:.0f} more this hour, "
-                f"so wait a bit or vote nearer the end of the hour")
+        if spent:
+            return "too much skipped this hour already, try again later"
+        # nothing was skipped this hour, so what is expensive is this skip:
+        # most of the hour is still unseen and it would all be thrown away
+        return "too early in this one to skip, try again later"
     recent = skips_since(data, now - 3600)
     if len(recent) >= SKIP_MAX_PER_HOUR:
-        return f"{len(recent)} skips this hour already, that is the limit"
+        return f"{len(recent)} skips this hour, that is the limit"
     last = max((r["at"] for r in recent), default=0)
     if last and now - last < SKIP_COOLDOWN:
         left = int((SKIP_COOLDOWN - (now - last)) / 60) + 1
-        return f"we just skipped one, next vote possible in {left} min"
+        return f"just skipped one, try again in {left} min"
     if live and live["elapsed"] < SKIP_MIN_AIRED:
         left = int((SKIP_MIN_AIRED - live["elapsed"]) / 60) + 1
-        return f"this hour just started, votable in {left} min"
+        return f"this one just started, you can vote in {left} min"
     if who:
         mine = [r for r in skips_since(data, now - USER_SKIP_COOLDOWN)
                 if r.get("who") == who]
         if mine:
             left = int((USER_SKIP_COOLDOWN - (now - max(r["at"] for r in mine))) / 60) + 1
-            return (f"you carried the last skip, somebody else's turn for "
-                    f"{left} min")
+            return f"you had the last skip, someone else's turn for {left} min"
     return None
 
 
@@ -351,38 +444,37 @@ def do_skip(data, now, reason, live=None, who=""):
 # --- commands --------------------------------------------------------------
 
 def cmd_aide(*_):
-    return ("commands: !vod what is playing · !list the library · !pick <n> vote for "
-            "what plays next · !vote skip to something else · !source · !stats")
+    return "commands: !now, !list, !pick <n>, !skip, !link"
 
 
 def cmd_vod(*_):
     live = playing()
     if not live:
-        return "nothing being cut right now"
+        return "nothing on air right now"
     left = max(0, chan.PART_SECONDS - live["elapsed"]) if chan.PART_SECONDS else 0
-    piece = f" (hour {live['hour']}/{live['hours']})" if live["hours"] > 1 else ""
+    piece = f", hour {live['hour']} of {live['hours']}" if live["hours"] > 1 else ""
     tail = f", {int(left / 60)} min left" if left else ""
-    return f"on air: {live['title']}{piece}{tail}"
+    return f"{live['title']}{piece}{tail}"
 
 
 def cmd_liste(*_):
     rows = shelf()[:5]
     if not rows:
-        return "the library is dry, the board is fetching more right now"
-    listing = " · ".join(f"{n + 1}. {pretty(p.name)[:38]} ({h}h)"
+        return "nothing ready yet, more is downloading"
+    listing = " · ".join(f"{n + 1} {pretty(p.name)[:38]}"
                          for n, (p, h) in enumerate(rows))
-    return f"up next: {listing} — !pick <n> to vote"
+    return f"next: {listing} · !pick 1 to vote for one"
 
 
 def cmd_source(*_):
     live = playing()
     if not live:
-        return "nothing playing"
+        return "nothing on air right now"
     if not live["vid"]:
-        return "unknown source for this file"
+        return "no link for this one"
     if re.match(r"^k[0-9a-f]{8}\d{2}$", live["vid"]):
-        return "this one comes from a Kick VOD of the channel"
-    return f"source: https://youtu.be/{live['vid']}"
+        return "no link, this one is from the channel's own Kick VODs"
+    return f"https://youtu.be/{live['vid']}"
 
 
 def cmd_stats(*_):
@@ -391,9 +483,8 @@ def cmd_stats(*_):
     rows = shelf()
     unseen = unseen_hours()
     left = max(0.0, waste_allowance(unseen * 3600) - wasted_recently(load(), time.time()))
-    return (f"{len(rows)} videos on the shelf, {unseen}h never aired, "
-            f"{hours}h put on the wire so far · skipping may throw away "
-            f"{left / 60:.0f} more min this hour, {SKIP_FLOOR // 3600}h held back")
+    return (f"{len(rows)} videos ready, {unseen}h never shown, "
+            f"{hours}h aired so far")
 
 
 def cmd_vote(data, now, sender, args):
@@ -408,16 +499,16 @@ def cmd_vote(data, now, sender, args):
             if vote["kind"] == "pick":
                 PICK.write_text(json.dumps({"name": vote["target"], "at": int(now)}))
                 data["vote"] = None
-                return f"voted: {pretty(vote['target'])} plays next"
+                return f"{pretty(vote['target'])} is next"
             do_skip(data, now, "vote", playing(), vote["voters"][0])
-            return "voted, moving on"
-        return f"skip vote: {len(vote['voters'])}/{need}"
+            return "ok, moving on"
+        return f"skip vote {len(vote['voters'])}/{need}"
     if vote and now - vote.get("failed_at", 0) < 0:
         return None
     last_fail = data.get("vote_failed_at", 0)
     if now - last_fail < VOTE_FAIL_COOLDOWN:
         left = int((VOTE_FAIL_COOLDOWN - (now - last_fail)) / 60) + 1
-        return f"a vote just failed, next one possible in {left} min"
+        return f"last vote failed, try again in {left} min"
     blocked = skip_blocked(data, now, live, sender["user_id"])
     if blocked:
         return blocked
@@ -426,20 +517,20 @@ def cmd_vote(data, now, sender, args):
                     "need": need, "closes": now + VOTE_WINDOW}
     if need <= 1:
         do_skip(data, now, "vote", live, sender["user_id"])
-        return "moving on"
-    return f"vote to skip started: {need} votes needed in {VOTE_WINDOW}s, type !vote"
+        return "ok, moving on"
+    return f"skip vote: {need} needed, type !skip"
 
 
 def cmd_pick(data, now, sender, args):
     rows = shelf()
     if not rows:
-        return "nothing to choose from, the library is empty"
+        return "nothing to pick from yet"
     try:
         index = int(args[0]) - 1
     except (IndexError, ValueError):
-        return "usage: !pick <number>, see !list"
+        return "!pick <number>, numbers come from !list"
     if not 0 <= index < min(5, len(rows)):
-        return f"pick between 1 and {min(5, len(rows))}, see !list"
+        return f"pick 1 to {min(5, len(rows))}, see !list"
     target = rows[index][0].name
     vote = data.get("vote")
     if vote and vote["closes"] > now and vote["kind"] == "pick" and vote["target"] == target:
@@ -452,9 +543,9 @@ def cmd_pick(data, now, sender, args):
     if need <= 1:
         PICK.write_text(json.dumps({"name": target, "at": int(now)}))
         data["vote"] = None
-        return f"{pretty(target)} plays next"
-    return (f"vote to play {pretty(target)[:40]} next: {need} votes in "
-            f"{VOTE_WINDOW}s, type !pick {index + 1}")
+        return f"{pretty(target)} is next"
+    return (f"vote to play {pretty(target)[:40]}: {need} needed, "
+            f"type !pick {index + 1}")
 
 
 def cmd_force(data, now, sender, args):
@@ -462,18 +553,19 @@ def cmd_force(data, now, sender, args):
         return None
     live = playing()
     reserve = unseen_hours() * 3600
+    if other_stream_hours(live) < 0.5:
+        return "this is the only stream left, skipping lands on the same one"
     if reserve - skip_cost(live) < SKIP_FLOOR:
-        return (f"that would leave {(reserve - skip_cost(live)) / 3600:.1f} h in "
-                f"reserve, under the {SKIP_FLOOR // 3600} h floor")
+        return "not enough left in the library to skip"
     do_skip(data, now, f"forced by {sender['name']}", live, "")
-    return "moving on"
+    return "ok, moving on"
 
 
 COMMANDS = {
     "aide": cmd_aide, "help": cmd_aide, "commands": cmd_aide, "commandes": cmd_aide,
     "vod": cmd_vod, "now": cmd_vod, "np": cmd_vod,
     "liste": cmd_liste, "list": cmd_liste, "videos": cmd_liste,
-    "source": cmd_source, "stats": cmd_stats,
+    "link": cmd_source, "source": cmd_source, "stats": cmd_stats,
     "vote": cmd_vote, "skip": cmd_vote, "next": cmd_vote,
     "pick": cmd_pick, "choix": cmd_pick,
     "force": cmd_force,
@@ -582,7 +674,8 @@ def air_eta():
 def waiting_for(seconds):
     """The sentence a viewer gets when something has to be fetched first."""
     soon, then = fetch_eta(seconds), air_eta()
-    return f"here in ~{soon} min, on air ~{soon + then} min" if then else f"here in ~{soon} min"
+    return (f"ready in ~{soon} min, on air in ~{soon + then} min" if then
+            else f"ready in ~{soon} min")
 
 
 # --- channel points --------------------------------------------------------
@@ -594,24 +687,22 @@ def waiting_for(seconds):
 # something nobody expected.
 REWARDS = [
     {"key": "skip", "title": "Skip this hour", "cost": 150, "input": False,
-     "description": "Ends the hour playing now and draws another one. "
-                    "Refunded if the channel just skipped or has nothing else unseen."},
+     "description": "Moves on to another stream. Points back if there is "
+                    "nothing else to move to."},
     {"key": "stay", "title": "Keep this one going", "cost": 150, "input": False,
-     "description": "Another hour of the stream playing now, instead of moving on. "
-                    "Refunded if this one has no hours left."},
+     "description": "One more hour of the stream playing now. Points back if "
+                    "it has no hours left."},
     {"key": "pick", "title": "Pick what plays next", "cost": 250, "input": True,
-     "description": "Type the number of a video from !list. "
-                    "Refunded if the number is not on the shelf."},
+     "description": "Type a number from !list and that video plays next. "
+                    "Points back if the number is not in the list."},
     {"key": "request", "title": "Request a stream", "cost": 400, "input": True,
-     "description": "Paste a YouTube link to a nanatty stream and it gets "
-                    "fetched and played. It has to come from a channel this "
-                    "rerun follows, so it can be checked first. "
-                    "Points back otherwise."},
+     "description": "Paste a YouTube link to a stream this channel follows "
+                    "and it gets downloaded, then played. Points back if the "
+                    "link is from anywhere else."},
     {"key": "place", "title": "Take me somewhere", "cost": 300, "input": True,
      "description": "Type a country or a city: Japan, Turkey, Peru, India, "
-                    "Korea, Chile, Argentina, Osaka, Cappadocia, Lima. The "
-                    "next hour is filmed there, fetched if it is not here yet. "
-                    "Points back if nothing matches."},
+                    "Korea, Chile, Argentina, Osaka, Lima. The next hour is "
+                    "one filmed there. Points back if there is none."},
 ]
 BY_TITLE = {r["title"].lower(): r for r in REWARDS}
 
@@ -621,9 +712,9 @@ def reward_skip(data, now, who, text):
     live = playing()
     blocked = skip_blocked(data, now, live, data.get("redeemer_id") or who)
     if blocked:
-        return False, f"@{who} {blocked} — points refunded"
+        return False, f"@{who} {blocked}, points back"
     do_skip(data, now, f"points from {who}", live, data.get("redeemer_id") or who)
-    return True, f"@{who} spent points to move on"
+    return True, f"@{who} skipped it"
 
 
 def reward_pick(data, now, who, text):
@@ -631,11 +722,11 @@ def reward_pick(data, now, who, text):
     try:
         index = int(re.sub(r"\D", "", text or "")) - 1
     except ValueError:
-        return False, f"@{who} that is not a number from !list — points refunded"
+        return False, f"@{who} that is not a number from !list, points back"
     if not rows or not 0 <= index < min(5, len(rows)):
-        return False, f"@{who} nothing on the shelf at that number — points refunded"
+        return False, f"@{who} no video at that number, points back"
     PICK.write_text(json.dumps({"name": rows[index][0].name, "at": int(now)}))
-    return True, f"@{who} picked {pretty(rows[index][0].name)[:48]} for next"
+    return True, f"@{who} picked {pretty(rows[index][0].name)[:48]}, it is next"
 
 
 def reward_stay(data, now, who, text):
@@ -647,14 +738,14 @@ def reward_stay(data, now, who, text):
     """
     live = playing()
     if not live:
-        return False, f"@{who} nothing is playing right now — points refunded"
+        return False, f"@{who} nothing is playing right now, points back"
     book, durations = cut.ledger(), chan.read_json(chan.STATE / "durations.json", {})
     for folder in (chan.QUEUE, chan.AIRED):
         path = folder / live["name"]
         if path.exists() and cut.unaired(path, book, durations, cut.reserved()):
             PICK.write_text(json.dumps({"name": live["name"], "at": int(now)}))
-            return True, f"@{who} bought another hour of {live['title'][:44]}"
-    return False, f"@{who} this one has no hours left — points refunded"
+            return True, f"@{who} added another hour of {live['title'][:44]}"
+    return False, f"@{who} no hours left on this one, points back"
 
 
 # Titles name cities, not countries: "japan" matched six videos while Osaka
@@ -701,12 +792,11 @@ def queue_request(data, now, who, vid, title):
     if vid in held:
         # overwriting the row would strand the first viewer's redemption in
         # Kick's queue for good, with their points gone and nobody to settle it
-        return False, (f"@{who} {title[:40]} is already on its way for somebody "
-                       f"else - points refunded")
+        return False, (f"@{who} somebody already asked for that one, it is "
+                       f"coming, points back")
     if len(held) >= REQUEST_MAX_PENDING:
-        return False, (f"@{who} {len(held)} requests are already waiting on the "
-                       f"board and it fetches one at a time - points refunded, "
-                       f"try again when one lands")
+        return False, (f"@{who} {len(held)} requests already waiting, try again "
+                       f"when one lands, points back")
     with supply.REQUESTS.open("a") as fh:
         fh.write(vid + "\n")
     data.setdefault("asked", {})[vid] = {"who": who, "title": title, "at": int(now),
@@ -729,11 +819,11 @@ def reward_request(data, now, who, text):
     """
     vid = video_asked(text)
     if not vid:
-        return False, f"@{who} that is not a YouTube link — points refunded"
+        return False, f"@{who} that is not a YouTube link, points back"
     titles = supply.catalog_titles()
     if vid not in titles:
         return False, (f"@{who} that one is not in this channel's sources, "
-                       f"so it cannot be checked before fetching — points refunded")
+                       f"so it cannot be checked before fetching, points back")
     if vid in supply.excluded(now):
         return False, f"@{who} {titles[vid][:40]} has already been on, or was refused"
     for path, _ in shelf():
@@ -758,7 +848,7 @@ def reward_place(data, now, who, text):
     """
     wanted = re.sub(r"[^\w ]", "", text or "").strip().lower()
     if len(wanted) < 3:
-        return False, f"@{who} name a place, like Thailand — points refunded"
+        return False, f"@{who} name a place like Thailand, points back"
     terms = place_terms(wanted)
     for path, _ in shelf():
         low = clean_title(path.name, SLUG).lower()
@@ -773,7 +863,7 @@ def reward_place(data, now, who, text):
                 return False, refusal
             return True, (f"@{who} {wanted}: fetching {title[:38]}, "
                           f"{waiting_for(catalog_seconds(vid))}")
-    return False, f"@{who} nothing from there in the library — points refunded"
+    return False, f"@{who} nothing from there in the library, points back"
 
 
 ACTIONS = {"skip": reward_skip, "stay": reward_stay, "pick": reward_pick,
@@ -864,7 +954,7 @@ def wanted_title():
     part = re.match(r"^k[0-9a-f]{8}(\d{2})$", live["vid"] or "")
     piece = f" · part {int(part.group(1))}" if part else ""
     piece += f" · hour {live['hour']}/{live['hours']}" if live["hours"] > 1 else ""
-    tail = f"{piece} · !vote to skip"
+    tail = f"{piece} · !skip to move on"
     suffix = chan.CONF.get("TITLE_SUFFIX", "").strip()
     if suffix:
         tail = f"{tail} · {suffix}"
@@ -924,10 +1014,10 @@ def announce(data):
         return
     data["said_playing"] = mark
     if not live:
-        say("nothing unseen left on the shelf, the next stream is on its way")
+        say("nothing new to play, the next stream is on its way")
         return
     piece = f" (hour {live['hour']}/{live['hours']})" if live["hours"] > 1 else ""
-    say(f"now playing: {clean_title(live['name'], SLUG)}{piece} · !vod !list !vote")
+    say(f"now playing: {clean_title(live['name'], SLUG)}{piece} · !now !list !skip")
 
 
 def settle_request(row, honoured):
@@ -973,7 +1063,7 @@ def announce_arrivals(data):
                     break
             settle_request(row, True)
             say(f"@{who} the stream you asked for landed: {title} "
-                f"- on next, in ~{air_eta()} min")
+                f", on next in ~{air_eta()} min")
             row["state"], row["at"] = "here", int(now)
             continue
         if vid in landing:
@@ -981,13 +1071,13 @@ def announce_arrivals(data):
         barred = supply.excluded(now) if barred is None else barred
         if vid in barred:
             settle_request(row, False)
-            say(f"@{who} {title} cannot be fetched after all - points refunded")
+            say(f"@{who} {title} cannot be fetched after all, points back")
             asked.pop(vid)
         elif now - row.get("at", 0) > REQUEST_DEADLINE:
             settle_request(row, False)
             say(f"@{who} {title} did not arrive within "
                 f"{REQUEST_DEADLINE // 3600} h, the board is at its daily "
-                f"ceiling - points refunded")
+                f"ceiling, points back")
             asked.pop(vid)
     data["asked"] = asked
 
@@ -998,7 +1088,7 @@ def close_stale_vote(data, now):
         data["vote"] = None
         data["vote_failed_at"] = now
         save(data)
-        say(f"vote closed without a majority ({len(vote['voters'])}/{vote['need']})")
+        say(f"not enough votes ({len(vote['voters'])}/{vote['need']}), it stays on")
 
 
 def ensure_subscription():
@@ -1087,6 +1177,8 @@ class Handler(BaseHTTPRequestHandler):
         data["seen"].append(message_id)
         save(data)
         if kind == "chat.message.sent":
+            who = str(((payload.get("sender") or {}).get("username")) or "?")[:25]
+            relay(f"{who}: {payload.get('content') or ''}")
             handle(payload)
         else:
             redeemed(payload)
@@ -1116,6 +1208,12 @@ def main(argv):
         chan.log("KICK_USER_ID absent de channel.env")
         return 1
     threading.Thread(target=keep_title, daemon=True).start()
+    if TG_TOKEN and TG_CHAT:
+        threading.Thread(target=relay_loop, daemon=True).start()
+        if TG_POLL:
+            threading.Thread(target=tg_loop, daemon=True).start()
+        chan.log(f"telegram: chat relaye, reponse depuis telegram "
+                 f"{'active' if TG_POLL else 'inactive (TG_POLL=0)'}")
     if kickapi.token():
         ensure_subscription()
         sync_rewards()
