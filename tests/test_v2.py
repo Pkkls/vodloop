@@ -862,7 +862,11 @@ finally:
 
 print("bot: a vote that sends the board shopping puts a short on the wire")
 real_conf = dict(chan.CONF)
+real_profile_of = feed.profile_of
 try:
+    # the files here are a byte long, so the only thing ffprobe could say about
+    # them is nothing: the picture check gets its own witnesses further down
+    feed.profile_of = lambda path: (1280, 720, 60.0)
     chan.SHORTS.mkdir(parents=True, exist_ok=True)
     for stale in chan.SHORTS.glob("*.ts"):
         stale.unlink()
@@ -902,11 +906,29 @@ try:
         stale.unlink()
     check("control: with none prepared the clip is what is left",
           feed.oldest_short() is None)
+    # a short reaches the wire without passing the cutter, so the one check on
+    # its picture is here: too big and Kick ends the session
+    real_profile, real_session = feed.profile_of, feed.SESSION
+    try:
+        feed.SESSION = chan.STATE / "session-test.json"
+        chan.write_json(feed.SESSION, {"profile": [1280, 720, 60.0]})
+        (chan.SHORTS / "gros.ts").write_bytes(b"x")
+        feed.profile_of = lambda path: (1920, 1080, 60.0)
+        check("a short bigger than the session is skipped, not sent",
+              feed.oldest_short() is None)
+        feed.profile_of = lambda path: (1280, 720, 30.0)
+        check("control: one that fits goes out, whatever its frame rate below",
+              feed.oldest_short() is not None)
+    finally:
+        feed.profile_of, feed.SESSION = real_profile, real_session
+        (chan.SHORTS / "gros.ts").unlink(missing_ok=True)
+        (chan.STATE / "session-test.json").unlink(missing_ok=True)
     for stale in chan.SHORTS.glob("*.ts"):
         stale.unlink()
 finally:
     chan.CONF.clear()
     chan.CONF.update(real_conf)
+    feed.profile_of = real_profile_of
     feed.SHORT.unlink(missing_ok=True)
 
 print("bot: telegram carries the chat out and one room's answers back")

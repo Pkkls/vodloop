@@ -124,9 +124,23 @@ def oldest_short():
     Nothing is deleted: a short is a few megabytes and the rotation is the
     point. The one sent is touched, which puts it last in line, which is the
     whole of the bookkeeping.
+
+    One above the session is skipped rather than sent. shorts.py builds them at
+    the channel's ceiling so it should never happen, but a short is the one
+    picture that reaches the wire without passing the cutter, and the net under
+    a chunk does not cover it: reopen_if_above is armed only when there is a
+    chunk to send, which is exactly not the case when the disk is dry.
     """
-    ready = sorted(chan.SHORTS.glob("*.ts"), key=lambda p: p.stat().st_mtime)
-    return ready[0] if ready else None
+    session = chan.read_json(SESSION, {}).get("profile")
+    for path in sorted(chan.SHORTS.glob("*.ts"), key=lambda p: p.stat().st_mtime):
+        profile = profile_of(path)
+        if profile is None:
+            continue
+        if session and exceeds(profile, tuple(session)):
+            chan.log(f"short ecarte, plus grand que la session: {path.name} {profile}")
+            continue
+        return path
+    return None
 
 
 def next_short():
