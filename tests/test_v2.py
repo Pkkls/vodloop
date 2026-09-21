@@ -723,6 +723,10 @@ finally:
     bot.SKIP.unlink(missing_ok=True)
     bot.feed.ONAIR.unlink(missing_ok=True)
 
+def too_long_check(bot, row):
+    return bot.too_long_for_now(row[3])
+
+
 print("bot: the list is the catalogue, and picking what is not here fetches it")
 real_shelf, real_cand = bot.shelf, supply.candidates
 real_threshold, real_waiting = bot.threshold, bot.waiting_for
@@ -756,6 +760,21 @@ try:
     check("control: the same viewer cannot hold two of the board's slots",
           "one coming already" in bot.cmd_pick(data, 1010, viewer, ["8"]) and
           supply.REQUESTS.read_text().count("\n") == 1)
+    # kil, 2026-09-22: one request for a twelve hour video held the board for
+    # three hours while the channel drained
+    chan.write_json(chan.STATE / "want.json", {"runway_seconds": 6 * 3600})
+    long_row = ("idlonglong", None, "Douze heures", 12 * 3600)
+    check("a long one is refused while the channel is short, and says how long",
+          "too long" in bot.ask_for(data, 1015, viewer, long_row) and
+          "12 h" in bot.ask_for(data, 1015, viewer, long_row))
+    chan.write_json(chan.STATE / "want.json", {"runway_seconds": 20 * 3600})
+    check("control: with a deep reserve the same request goes through",
+          not too_long_check(bot, long_row))
+    chan.write_json(chan.STATE / "want.json", {"runway_seconds": 6 * 3600})
+    short_row = ("idshortshor", None, "Deux heures", 2 * 3600)
+    check("control: a short one is never refused for its length",
+          not bot.too_long_for_now(short_row[3]))
+    (chan.STATE / "want.json").unlink(missing_ok=True)
     other = {"user_id": "u2", "name": "u2", "privileged": False}
     bot.cmd_pick(data, 1020, other, ["9"])
     bot.cmd_pick(data, 1030, {"user_id": "u3", "name": "u3", "privileged": False}, ["10"])
@@ -822,7 +841,7 @@ try:
     check("every phrase carries exactly four languages",
           all(len(v) == 4 for v in bot.SAID.values()),
           [k for k, v in bot.SAID.items() if len(v) != 4])
-    filled = {k: bot.four(k, n=3, min=15, need=3, max=527, place="peru")
+    filled = {k: bot.four(k, n=3, min=15, need=3, max=527, place="peru", hours=12)
               for k in bot.SAID}
     longest = max(filled.items(), key=lambda row: len(row[1]))
     check("and none of them is longer than 200 characters on its own",

@@ -86,6 +86,15 @@ SKIP_SPREAD_HOURS = int(chan.conf_num("SKIP_SPREAD_HOURS", 6))
 USER_SKIP_COOLDOWN = int(chan.conf_num("USER_SKIP_COOLDOWN_SECONDS", 3600))
 REQUEST_MAX_PENDING = int(chan.conf_num("REQUEST_MAX_PENDING", 3))
 JUMP_SECONDS = int(chan.conf_num("JUMP_MINUTES", 10)) * 60
+# kil, 2026-09-22, from the night it happened: one request for a twelve hour
+# video held the board for three hours, starved its own beacon, raised the
+# alarm that says the card is dead, and left the channel draining with three
+# more requests queued behind it. The board fetches one video at a time and
+# that is the whole supply line, so the length of what the chat may ask for is
+# not a matter of taste. It is only affordable when the reserve is deep enough
+# to spend hours on one delivery.
+REQUEST_MAX_SECONDS = int(chan.conf_num("REQUEST_MAX_HOURS", 6)) * 3600
+REQUEST_RICH_SECONDS = int(chan.conf_num("REQUEST_RICH_HOURS", 12)) * 3600
 REQUEST_DEADLINE = int(chan.conf_num("REQUEST_DEADLINE_HOURS", 6)) * 3600
 TITLE_MIN_INTERVAL = int(chan.conf_num("TITLE_MIN_INTERVAL_SECONDS", 90))
 TITLE_CHECK_INTERVAL = int(chan.conf_num("TITLE_CHECK_INTERVAL_SECONDS", 300))
@@ -516,6 +525,10 @@ SAID = {
                 "すでに1件取得中", "zaten bir tane geliyor"),
     "queue_full": ("{n} downloading already, wait for one", "{n} descargando, espera",
                   "{n}件取得中、お待ちを", "{n} iniyor, bekle"),
+    "too_long": ("{hours} h is too long while the channel is short, pick a shorter one",
+                 "{hours} h es mucho ahora, elige uno más corto",
+                 "{hours}時間は今は長すぎます、短いものを",
+                 "{hours} saat şimdilik çok uzun, kısa birini seç"),
     "nothing_asked": ("nothing asked for right now", "nada pedido ahora mismo",
                       "今リクエストはありません", "şu anda istek yok"),
     "points_back": ("points back", "puntos devueltos", "ポイント返却", "puan iade"),
@@ -738,6 +751,8 @@ def ask_for(data, now, sender, row):
     single person holding all three.
     """
     vid, _, title, seconds = row
+    if too_long_for_now(seconds):
+        return four("too_long", hours=seconds // 3600)
     held = waiting_requests(data)
     asked = data.get("asked") or {}
     if vid in held:
@@ -1071,6 +1086,20 @@ def video_asked(text):
     return found.group(1) if found else None
 
 
+def too_long_for_now(seconds):
+    """Whether this length is more than the supply line can spare right now.
+
+    Both halves matter. A long video is not refused on principle: with a deep
+    reserve the board can spend an afternoon on one and nothing suffers. It is
+    refused when the channel is already short, which is exactly when the hours
+    it costs are the hours the channel does not have.
+    """
+    if not seconds or seconds <= REQUEST_MAX_SECONDS:
+        return False
+    runway = chan.read_json(chan.STATE / "want.json", {}).get("runway_seconds") or 0
+    return runway < REQUEST_RICH_SECONDS
+
+
 def waiting_requests(data):
     """The paid fetches the board still owes."""
     return [v for v, row in (data.get("asked") or {}).items()
@@ -1087,6 +1116,8 @@ def queue_request(data, now, who, vid, title):
     already spends most of.
     """
     held = waiting_requests(data)
+    if too_long_for_now(catalog_seconds(vid)):
+        return False, (f"@{who} " + four("too_long", hours=catalog_seconds(vid) // 3600))
     if vid in held:
         # overwriting the row would strand the first viewer's redemption in
         # Kick's queue for good, with their points gone and nobody to settle it
