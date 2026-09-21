@@ -482,6 +482,7 @@ def main(argv):
     # second of short, niced, and this run already holds the channel's lock
     if apply:
         shorts.collect()
+        shorts.prune()
     names = catalog_titles()
     if apply:
         tmp = CANDIDATES.with_suffix(".tmp")

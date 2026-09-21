@@ -107,6 +107,29 @@ def collect():
     return made
 
 
+def prune():
+    """Take out of the list what we now have, without asking YouTube anything.
+
+    The full listing costs a network call per page and belongs with the daily
+    catalogue. This runs every ten minutes with supply, and it is what stops
+    the board fetching a short that landed twenty minutes ago: on 2026-09-21 it
+    fetched v82J-Tpk9Dw twice for exactly that reason.
+    """
+    have = {p.stem for p in chan.SHORTS.glob("*.ts")}
+    have |= {chan.video_id(p.name) or p.stem for p in chan.SHORTS_IN.glob("*")
+             if p.is_file()}
+    try:
+        lines = WANTED.read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return 0
+    kept = [line for line in lines if line.split("	")[0] not in have]
+    if len(kept) != len(lines):
+        tmp = WANTED.with_suffix(".tmp")
+        tmp.write_text("".join(f"{line}\n" for line in kept), encoding="utf-8")
+        tmp.replace(WANTED)
+    return len(kept)
+
+
 def wanted(now=None):
     """Write the ids the board should still fetch, most recent first.
 
@@ -172,6 +195,8 @@ def main(argv):
         collect()
     if "--list" in argv:
         wanted()
+    if "--prune" in argv:
+        prune()
     files = ready()
     total = sum(p.stat().st_size for p in files) / 2 ** 20
     print(f"{len(files)} shorts prets, {total:.1f} Mo, plafond {KEEP}")
