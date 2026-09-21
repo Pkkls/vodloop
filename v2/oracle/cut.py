@@ -47,6 +47,9 @@ PICK = chan.STATE / "pick"
 # cutter has the next hour ready in about thirty seconds, well inside the one
 # already in flight, so the wire does not go quiet.
 SKIP_KEEP_CHUNKS = 0
+# seconds the chat has paid to move forward inside the hour on air, written by
+# bot.py and spent here, because this process owns what is in chunks/
+JUMP = chan.STATE / "jump"
 # An hour cut ahead of time and held aside, so a skip has something to put on
 # the wire in the same second. Without it the chat votes, everything waiting is
 # dropped, and the channel shows its standby clip for as long as ffmpeg needs
@@ -692,6 +695,34 @@ def do_skip(reason, name=""):
     chan.log(f"passage saute ({reason}): {name[:60]}")
 
 
+def do_jump():
+    """Drop the next chunks so the wire moves on inside the same hour.
+
+    kil, 2026-09-21: a hundred points to move on thirty minutes. A skip takes
+    the whole hour off the wire; this takes a stretch out of it, which is what
+    a viewer who likes the stream but not this part of it is actually asking
+    for. The chunks dropped never reached the wire, so their units stay unaired
+    in the ledger and can come round in a later draw, like everything a skip
+    leaves behind. The flush is what makes it visible now rather than at the
+    end of the five minutes already going out.
+    """
+    try:
+        wanted = float(JUMP.read_text().strip())
+    except (OSError, ValueError):
+        wanted = 0.0
+    JUMP.unlink(missing_ok=True)
+    dropped = 0.0
+    for chunk in sorted(chan.CHUNKS.glob("*.ts")):
+        if dropped >= wanted:
+            break
+        chunk.unlink(missing_ok=True)
+        dropped += chan.CHUNK_SECONDS
+    if dropped:
+        FLUSH.write_text(str(int(time.time())))
+        chan.log(f"saut de {dropped / 60:.0f} min dans l heure en cours")
+    return dropped
+
+
 def run_job(source, origin, skip, number=None, since=0):
     """Cut one hour of a file into chunks. number is set only on a resume.
 
@@ -782,6 +813,8 @@ def run_job(source, origin, skip, number=None, since=0):
 
     while job.poll() is None:
         collect()
+        if JUMP.exists():
+            do_jump()
         if SKIP.exists():
             # the chat has voted this hour off. Cutting more of it is wasted work
             # and the chunks already waiting are the hour itself, so both go; two
@@ -856,6 +889,9 @@ def main():
             resumed[0].replace(chan.QUEUE / resumed[0].name)
     while True:
         if ahead_seconds() >= chan.AHEAD_SECONDS:
+            if JUMP.exists():
+                do_jump()
+                continue
             if SKIP.exists():
                 reason = chan.read_json(SKIP, {}).get("reason", "demande")
                 SKIP.unlink(missing_ok=True)

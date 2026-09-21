@@ -85,6 +85,7 @@ SKIP_WASTE_CAP = int(chan.conf_num("SKIP_WASTE_MINUTES_PER_HOUR", 60)) * 60
 SKIP_SPREAD_HOURS = int(chan.conf_num("SKIP_SPREAD_HOURS", 6))
 USER_SKIP_COOLDOWN = int(chan.conf_num("USER_SKIP_COOLDOWN_SECONDS", 3600))
 REQUEST_MAX_PENDING = int(chan.conf_num("REQUEST_MAX_PENDING", 3))
+JUMP_SECONDS = int(chan.conf_num("JUMP_MINUTES", 30)) * 60
 REQUEST_DEADLINE = int(chan.conf_num("REQUEST_DEADLINE_HOURS", 6)) * 3600
 TITLE_MIN_INTERVAL = int(chan.conf_num("TITLE_MIN_INTERVAL_SECONDS", 90))
 TITLE_CHECK_INTERVAL = int(chan.conf_num("TITLE_CHECK_INTERVAL_SECONDS", 300))
@@ -821,6 +822,11 @@ REWARDS = [
                     "downloaded · Pega un enlace de YouTube del canal · "
                     "このチャンネルのYouTubeリンクを貼る · "
                     "Kanalın YouTube linkini yapıştır"},
+    {"key": "jump", "title": "+30 min · Avanzar · 30分進む · İleri sar", "cost": 100,
+     "input": False,
+     "description": "Moves 30 minutes forward in this stream · Avanza 30 "
+                    "minutos en este directo · この配信を30分進める · "
+                    "Bu yayında 30 dakika ileri sarar"},
     {"key": "place", "title": "Travel · Viajar · 旅先 · Gezi", "cost": 100, "input": True,
      "was": ["Take me somewhere"],
      "description": "A country or a city: Japan, Turkey, Peru, Chile, Korea · "
@@ -840,6 +846,22 @@ def reward_skip(data, now, who, text):
         return False, f"@{who} {blocked}, points back"
     do_skip(data, now, f"points from {who}", live, data.get("redeemer_id") or who)
     return True, f"@{who} ok, moving on"
+
+
+def reward_jump(data, now, who, text):
+    """Thirty minutes forward inside the stream on air, not off it.
+
+    The guard is the buffer itself: with less than the jump waiting, dropping
+    it all would end the hour, which is a skip, and a skip has floors and
+    cooldowns this one is not allowed to walk past for the same hundred points.
+    """
+    if not playing():
+        return False, f"@{who} nothing is playing right now, points back"
+    if cut.ahead_seconds() < JUMP_SECONDS:
+        return False, (f"@{who} less than {JUMP_SECONDS // 60} min is cut ahead, "
+                       f"try again in a few minutes, points back")
+    cut.JUMP.write_text(str(JUMP_SECONDS))
+    return True, f"@{who} ok, {JUMP_SECONDS // 60} min forward"
 
 
 def reward_pick(data, now, who, text):
@@ -1002,7 +1024,7 @@ def reward_place(data, now, who, text):
 
 
 ACTIONS = {"skip": reward_skip, "stay": reward_stay, "pick": reward_pick,
-           "place": reward_place, "request": reward_request}
+           "place": reward_place, "request": reward_request, "jump": reward_jump}
 
 
 def redeemed(payload):

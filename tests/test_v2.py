@@ -774,6 +774,48 @@ finally:
     supply.REQUESTS.unlink(missing_ok=True)
     bot.PICK.unlink(missing_ok=True)
 
+print("bot: thirty minutes forward takes a slice out of the hour, not the hour")
+real_playing_j, real_ahead = bot.playing, cut.ahead_seconds
+try:
+    chan.CHUNKS.mkdir(parents=True, exist_ok=True)
+    for stale in chan.CHUNKS.glob("*.ts"):
+        stale.unlink()
+    cut.JUMP.unlink(missing_ok=True)
+    cut.FLUSH.unlink(missing_ok=True)
+    bot.playing = lambda: {"title": "t", "name": "t.mkv", "hour": 1, "hours": 2,
+                           "vid": "x", "started": 0, "elapsed": 900}
+    cut.ahead_seconds = lambda: 600
+    ok, said = bot.reward_jump({}, 1000, "v", "")
+    check("with less cut ahead than the jump it is refused and refunded",
+          ok is False and "points back" in said and not cut.JUMP.exists(), said)
+    cut.ahead_seconds = lambda: 3600
+    ok, said = bot.reward_jump({}, 1000, "v", "")
+    check("with the hour in hand it is taken and the cutter is told",
+          ok is True and cut.JUMP.read_text() == str(bot.JUMP_SECONDS), said)
+    for n in range(12):
+        (chan.CHUNKS / f"{n:05d}.ts").write_bytes(b"x")
+    dropped = cut.do_jump()
+    left = sorted(p.name for p in chan.CHUNKS.glob("*.ts"))
+    check("the cutter drops exactly the minutes paid for, oldest first",
+          dropped == bot.JUMP_SECONDS and len(left) == 6 and left[0] == "00006.ts",
+          (dropped, left))
+    check("and flushes what is going out, so the jump is seen now and not in five minutes",
+          cut.FLUSH.exists())
+    cut.FLUSH.unlink(missing_ok=True)
+    check("control: nothing asked drops nothing and flushes nothing",
+          cut.do_jump() == 0 and not cut.FLUSH.exists()
+          and len(list(chan.CHUNKS.glob("*.ts"))) == 6)
+    bot.playing = lambda: None
+    ok, said = bot.reward_jump({}, 1000, "v", "")
+    check("control: with nothing on air there is nothing to jump into",
+          ok is False and "points back" in said, said)
+finally:
+    bot.playing, cut.ahead_seconds = real_playing_j, real_ahead
+    cut.JUMP.unlink(missing_ok=True)
+    cut.FLUSH.unlink(missing_ok=True)
+    for stale in chan.CHUNKS.glob("*.ts"):
+        stale.unlink()
+
 print("bot: !fetch shows the board's queue, whose it is and what is left")
 real_shelf, real_eta, real_secs = bot.shelf, bot.fetch_eta, bot.catalog_seconds
 try:
