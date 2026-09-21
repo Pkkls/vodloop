@@ -16,6 +16,7 @@ What a viewer can do:
     !list            what is on the shelf, numbered
     !pick <n>        vote for what plays next
     !skip            vote to move on now
+    !fetch           what is downloading, for whom, and how long it has left
     !link            where this video comes from
     !stats           the library, the hours aired, the uptime
 
@@ -444,7 +445,7 @@ def do_skip(data, now, reason, live=None, who=""):
 # --- commands --------------------------------------------------------------
 
 def cmd_aide(*_):
-    return "commands: !now, !list, !pick <n>, !skip, !link"
+    return "commands: !now, !list, !pick <n>, !skip, !fetch, !link"
 
 
 def cmd_vod(*_):
@@ -516,6 +517,46 @@ def cmd_stats(*_):
     rows = shelf()
     return (f"{len(rows)} video{'s' if len(rows) != 1 else ''} ready, "
             f"{unseen_hours():.1f}h never shown, {hours}h aired so far")
+
+
+def last_arrival_minutes(now):
+    """Minutes since the board last put a file on this disk, 0 if none has."""
+    newest = 0
+    for folder in (chan.QUEUE, chan.CURRENT, chan.AIRED):
+        for path in chan.media(folder):
+            head = path.name.split("-", 1)[0]
+            if head.isdigit():
+                newest = max(newest, int(head))
+    return int((now - newest) / 60) if newest else 0
+
+
+def cmd_fetch(data, now, sender, args):
+    """What the board is bringing, whose it is, and how long it has to run.
+
+    kil, 2026-09-21: "une commande !fetch qui montre la queue". The board is
+    behind NAT and says nothing about what it is downloading this second, so
+    what can honestly be shown is what was asked of it, what it has already
+    landed, and how long ago the last delivery was. A wait quoted here is the
+    same estimate the reward gives, from the board's own measured rate.
+    """
+    asked = data.get("asked") or {}
+    coming = [(vid, row) for vid, row in asked.items() if row.get("state") != "here"]
+    landed = [row for row in asked.values() if row.get("state") == "here"]
+    # rows written before the chat picked from the catalogue hold the uploader's
+    # own file name, so the cleaning happens here and covers those too
+    shown = " · ".join(f"{clean_title(str(row.get('title') or vid), SLUG)[:26]} "
+                       f"for @{row.get('who', '?')} "
+                       f"~{fetch_eta(catalog_seconds(vid))} min"
+                       for vid, row in coming[:3])
+    more = f" · {len(coming) - 3} more asked" if len(coming) > 3 else ""
+    if landed:
+        more += f" · {len(landed)} landed, waiting its turn"
+    since = last_arrival_minutes(now)
+    tail = (f"{unseen_hours():.1f}h ready" +
+            (f", last one landed {since} min ago" if since else ""))
+    if not coming:
+        return f"nothing asked for right now · {tail} · !list then !pick <n> to ask"
+    return f"{len(coming)} downloading: {shown}{more} · {tail}"
 
 
 def cmd_vote(data, now, sender, args):
@@ -629,6 +670,7 @@ COMMANDS = {
     "link": cmd_source, "source": cmd_source, "stats": cmd_stats,
     "vote": cmd_vote, "skip": cmd_vote, "next": cmd_vote,
     "pick": cmd_pick, "choix": cmd_pick,
+    "fetch": cmd_fetch, "queue": cmd_fetch, "dl": cmd_fetch,
     "force": cmd_force,
 }
 

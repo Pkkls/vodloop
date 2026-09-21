@@ -774,6 +774,28 @@ finally:
     supply.REQUESTS.unlink(missing_ok=True)
     bot.PICK.unlink(missing_ok=True)
 
+print("bot: !fetch shows the board's queue, whose it is and what is left")
+real_shelf, real_eta, real_secs = bot.shelf, bot.fetch_eta, bot.catalog_seconds
+try:
+    bot.shelf = lambda: []
+    bot.fetch_eta, bot.catalog_seconds = lambda seconds: 20, lambda vid: 3600
+    empty = bot.cmd_fetch({}, 1000, {"user_id": "u", "name": "u"}, [])
+    check("with nothing asked it says so and points at how to ask",
+          empty.startswith("nothing asked for right now") and "!pick" in empty, empty)
+    data = {"asked": {f"id{n}": {"who": f"u{n}", "title": f"Stream {n}", "state": "waiting"}
+                      for n in range(5)}}
+    data["asked"]["id9"] = {"who": "u9", "title": "Deja la", "state": "here"}
+    line = bot.cmd_fetch(data, 1000, {"user_id": "u", "name": "u"}, [])
+    check("it counts what is coming and names who asked",
+          line.startswith("5 downloading:") and "for @u0 ~20 min" in line, line)
+    check("it does not read out more than three of them",
+          "2 more asked" in line and line.count(" for @") == 3, line)
+    check("one already landed is said apart, not counted as coming",
+          "1 landed, waiting its turn" in line, line)
+    check("control: an answer stays inside a chat line", len(line) <= 500, len(line))
+finally:
+    bot.shelf, bot.fetch_eta, bot.catalog_seconds = real_shelf, real_eta, real_secs
+
 print("bot: telegram carries the chat out and one room's answers back")
 said_tg, real_say_tg = [], bot.say
 real_chat, real_token = bot.TG_CHAT, bot.TG_TOKEN
