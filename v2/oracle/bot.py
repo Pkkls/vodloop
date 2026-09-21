@@ -200,10 +200,6 @@ def unseen_hours():
     return sum(hours for _, hours in shelf())
 
 
-def unseen_seconds():
-    return unseen_hours() * 3600.0
-
-
 # --- state -----------------------------------------------------------------
 
 def load():
