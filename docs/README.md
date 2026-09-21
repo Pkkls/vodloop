@@ -15,6 +15,8 @@ not paid for twice.
 | Pusher restarting in a loop | [diagnosis.md](diagnosis.md#the-pusher-restarts-forever) |
 | Buffer empty, prep looks stuck | [diagnosis.md](diagnosis.md#the-buffer-is-empty) |
 | Nothing new arrives in the library | [diagnosis.md](diagnosis.md#nothing-new-arrives) |
+| A short is playing and nobody asked | [diagnosis.md](diagnosis.md#a-short-is-playing-and-i-did-not-ask-for-one) |
+| The wire is not at the height MAXH says | [diagnosis.md](diagnosis.md#the-wire-is-not-at-the-height-the-settings-say) |
 | A file plays nowhere but probes clean | [failures.md](failures.md#2026-09-05-and-2026-09-14-packets-with-no-timestamp) |
 | Disk full, everything wedged | [capacity.md](capacity.md) |
 | You are about to restart something | [operating.md](operating.md#what-a-restart-costs) |

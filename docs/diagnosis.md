@@ -188,6 +188,54 @@ wrong. Replay the real chain, chunk included.
 
 ---
 
+## A short is playing and I did not ask for one
+
+Two things put a short on the wire, and they look identical from the outside.
+
+    R=/home/ubuntu/v2/nanatty247
+    ls $R/chunks/*.ts | wc -l           # nothing waiting: it is filling a gap
+    journalctl -u vodloop-v2-feed@nanatty247 --since "20 min ago" | grep short
+
+`short intercale` means the chat voted for a video the board has to fetch, and
+the short covers the wait. It goes out between two chunks and the hour on air
+resumes straight after it.
+
+`rien a envoyer, short` means the buffer is empty. The short is not the problem,
+it is what the channel shows instead of the loading card while the problem lasts.
+Go to [the buffer is empty](#the-buffer-is-empty). The watchdog still counts an
+empty buffer as an empty buffer, so an alarm has already been raised.
+
+`short ecarte` means one was refused before it reached the wire: bigger than the
+session, or a file ffprobe could not read. Both are worth a look, since
+`shorts.py` builds them all at the channel's own ceiling and neither should
+happen.
+
+What it never means is that the channel is repeating itself. A short is written
+into `state/onair.json` as a wait, so nothing is spent in the hour ledger and
+`!now` says a short is playing rather than naming a video that is not on.
+
+## The wire is not at the height the settings say
+
+`MAXH` decides what is fetched. It does not decide what goes out, and there is no
+setting that does: Kick fixes a session's ladder on the first picture it sees and
+holds it until the session closes. So the two can disagree for days, both of them
+correct.
+
+    cd /home/ubuntu/v2/bin && CHAN_ROOT=$R python3 ceiling.py
+
+That prints one of three answers: already at the ceiling, blocked by N units
+above it, or that the flip can happen. It runs itself every twenty minutes with
+`--apply` and does the flip the moment nothing above the new ceiling is left to
+show, which costs one pusher restart, about six seconds off air, and is
+announced on Telegram.
+
+Do not do the flip by hand while a file taller than the new ceiling still holds
+unaired time. That chunk exceeds the session, the session reopens on a clip it
+exceeds again, and the loop repeats every ten minutes for ever. The waiting is
+the whole point of the tool.
+
+---
+
 ## Before you report a cause
 
 Two questions, every time.
