@@ -27,6 +27,7 @@ import os
 import pathlib
 import re
 import shutil
+import base64
 import subprocess
 import sys
 import time
@@ -366,6 +367,43 @@ def run(args, conf):
     return 0
 
 
+def deliver(conf, path):
+    """Finir la livraison: verifier la taille la-bas, puis mettre en file.
+
+    Seule la carte deplacait un fichier hors de upload/, et seulement celui
+    qu elle venait d envoyer elle-meme, donc tout ce que ce relais livrait
+    restait dans un cul-de-sac. Le 2026-09-22 c etait un stream de sept heures
+    complet et jouable, pose sur cinq gigaoctets, pendant que la chaine avait
+    quatre heures de matiere et en reclamait vingt-deux.
+
+    La taille est verifiee avant que la copie locale ne soit effacee, ce que la
+    carte fait depuis toujours et ce que ce relais ne faisait pas: un scp qui
+    rend 0 sur un fichier tronque effacait ici le seul exemplaire.
+
+    Rend le nom mis en file, ou None.
+    """
+    name = path.name
+    if "'" in name:
+        print("  nom impossible a passer au shell: %s" % name[:50])
+        return None
+    queued = "%d-%s" % (int(time.time()), name)
+    script = (
+        "cd '%s' || exit 1\n"
+        "t=$(wc -c < 'upload/%s' 2>/dev/null || echo 0)\n"
+        "if [ \"$t\" = '%d' ]; then mv 'upload/%s' 'queue/%s' && echo ok; "
+        "else echo \"taille $t\"; fi\n"
+        % (FAR, name, path.stat().st_size, name, queued))
+    payload = "echo %s | base64 -d | sh" % base64.b64encode(
+        script.encode("utf-8")).decode("ascii")
+    done = subprocess.run(ssh_argv("oracle", conf, payload), capture_output=True,
+                          timeout=300, env=dict(os.environ, MSYS_NO_PATHCONV="1"))
+    out = done.stdout.decode(errors="replace").strip()
+    if done.returncode or out != "ok":
+        print("  mise en file refusee (%s): %s" % (out[:40] or "injoignable", name[:40]))
+        return None
+    return queued
+
+
 def ship(conf, libre_mb):
     """Ce qui tient au-dessus du plancher d Oracle part, le reste attend ici."""
     garde_mb = 5 * 1024 + 1024   # FLOOR_GB de la chaine, plus une marge
@@ -381,10 +419,13 @@ def ship(conf, libre_mb):
         if subprocess.run(argv, capture_output=True, timeout=3600).returncode:
             print("  envoi echoue: %s" % p.name[:50])
             continue
+        queued = deliver(conf, p)
+        if queued is None:
+            continue   # la copie locale reste ici: rien n est perdu
         p.unlink()
         libre_mb -= taille_mb
         envoyes += 1
-        print("  livre a Oracle: %s (%d Mo)" % (p.name[:46], taille_mb))
+        print("  en file: %s (%d Mo)" % (queued[:52], taille_mb))
     print("  %d fichier(s) livre(s)" % envoyes)
 
 

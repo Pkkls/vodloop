@@ -7,6 +7,7 @@ The rule being checked is the one that cost 8 Go on 2026-09-22: yt-dlp returned
 zero, the merge had died at the last frame, and what was left looked enough like
 a file to be counted as one. Exit codes are not delivery.
 """
+import base64
 import os
 import pathlib
 import subprocess
@@ -95,6 +96,56 @@ done = subprocess.run([sys.executable, "-c", titre], capture_output=True,
 souci = done.stderr.decode("utf-8", "replace").strip().rsplit("\n", 1)[-1]
 check("TEMOIN: un titre CJK sur une console cp1252 ne leve rien",
       done.returncode, 0, souci[:60])
+
+print()
+print("relay: une livraison n est finie qu une fois le fichier en file")
+# seule la carte sortait un fichier de upload/, et seulement celui qu elle
+# venait d envoyer, donc tout ce que ce relais livrait restait dans un
+# cul-de-sac: sept heures jouables y dormaient le 2026-09-22 pendant que la
+# chaine manquait de matiere et en reclamait vingt-deux
+faux_conf = {"ORACLE": "ubuntu@exemple", "ORACLE_KEY": "cle"}
+vu = {"rend": b"ok", "code": 0, "appels": 0}
+
+
+class Repondu:
+    def __init__(self, sortie, code):
+        self.stdout, self.stderr, self.returncode = sortie, b"", code
+
+
+def faux_run(argv, **kw):
+    vu["appels"] += 1
+    vu["payload"] = argv[-1]
+    return Repondu(vu["rend"], vu["code"])
+
+
+vrai_run = relay.subprocess.run
+try:
+    relay.subprocess.run = faux_run
+    livre = pathlib.Path(tempfile.gettempdir()) / "Un_Titre-aB3dEfGhIjK.mkv"
+    livre.write_bytes(b"x" * 4096)
+    mis = relay.deliver(faux_conf, livre)
+    check("le nom mis en file porte le prefixe d epoque, comme ceux de la carte",
+          bool(mis) and mis.endswith("-" + livre.name)
+          and mis.split("-")[0].isdigit(), True, mis)
+    envoye = base64.b64decode(vu["payload"].split()[1]).decode()
+    check("la taille locale voyage avec, pour etre comparee la-bas",
+          str(livre.stat().st_size) in envoye, True)
+    check("et la destination est bien la file", "queue/" in envoye, True)
+    # le temoin qui compte: un refus doit rendre None, parce que c est ce qui
+    # garde la copie locale dans ship()
+    vu["rend"] = b"taille 10"
+    check("TEMOIN: une taille qui ne correspond pas ne rend rien",
+          relay.deliver(faux_conf, livre), None)
+    vu["rend"], vu["code"] = b"", 255
+    check("TEMOIN: une machine injoignable non plus",
+          relay.deliver(faux_conf, livre), None)
+    avant = vu["appels"]
+    check("TEMOIN: un nom que le shell ne peut pas porter est refuse sans reseau",
+          relay.deliver(faux_conf, livre.with_name("l'apostrophe.mkv")), None)
+    check("TEMOIN: et rien n a ete tente", vu["appels"], avant)
+finally:
+    relay.subprocess.run = vrai_run
+    livre.unlink(missing_ok=True)
 
 print()
 print("%d echec(s)" % fail)
