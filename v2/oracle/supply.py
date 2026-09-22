@@ -465,6 +465,14 @@ def main(argv):
     runway = queued + len(list(chan.CHUNKS.glob("*.ts"))) * chan.CHUNK_SECONDS
     runway += sum(len(cut.unaired(p, book, durations)) * cut.unit_seconds()
                   for p in chan.media(chan.AIRED)) if chan.PART_SECONDS else 0
+    # and the file being cut, which sits in current/ for as long as it takes to
+    # air and whose unseen hours were counted nowhere. On 2026-09-22 06:30 that
+    # read 1.8 h against a real 5.2 h, which raised the thin reserve alarm and,
+    # worse, told the board to hurry: under four hours it waits fifteen minutes
+    # instead of ninety, and hurrying is what turned one refusal into four
+    # overnight. Units already cut are excluded, they are in the chunks above.
+    runway += sum(len(cut.unaired(p, book, durations, cut.reserved())) * cut.unit_seconds()
+                  for p in chan.media(chan.CURRENT)) if chan.PART_SECONDS else 0
     # kil, 2026-09-21: "les viewers peuvent avoir le droit de skip sans que ca
     # retrieve que 2 videos". A skip needs somewhere to land, and somewhere is
     # another recording, not another hour of the one on air. Depth and breadth
