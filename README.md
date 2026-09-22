@@ -168,6 +168,20 @@ unchanged and the channel online throughout.
 
 ## Monitoring
 
+`check.py` answers, on demand and in one pass, what is true of the chain that is
+running: thirteen lines from the socket the pusher writes to down to the units
+that must be up. It is worth reading for its shape rather than its verdict.
+Every line asks its question of the live system, then asks the same question,
+through the same function, of a case built to fail, and a line whose witness
+does not fail is printed `AVEUGLE` rather than `OK`. It earned that on its first
+run by reporting the wire dead while the channel was streaming, because the
+counter it read was the one for writes to storage and a pusher writes to a
+socket.
+
+```sh
+CHAN_ROOT=/home/ubuntu/v2/nanatty247 python3 bin/check.py
+```
+
 `quality.py` writes one JSON line every five minutes and answers two questions
 the rest of the system cannot.
 
