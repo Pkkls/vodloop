@@ -21,3 +21,6 @@ __pycache__/
 # not part of this project
 json2netscape.py
 tg.env
+
+# des copies d etat vivant: perimees des le lendemain, jamais dans le depot
+backups/
