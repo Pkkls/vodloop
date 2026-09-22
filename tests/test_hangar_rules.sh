@@ -73,9 +73,11 @@ watermark 9999
 ligne=$(tail -1 "$BASE/hautes-eaux.tsv")
 # cinq colonnes, une par question qu on se pose devant une fusion morte:
 # quand, quel pic, chez qui, ce qui restait, la place sur la carte
-complet() { [ "$(printf '%s' "$1" | awk -F'	' '{print NF}')" -eq 5 ] && echo complet || echo tronque; }
-is "la ligne ecrite porte les cinq colonnes"        "$(complet "$ligne")" complet
-is "temoin: une ligne amputee est vue comme telle"  "$(complet "$(printf 'a	b	c	d')")" tronque
+complet() { [ "$(printf '%s' "$1" | awk -F'	' '{print NF}')" -eq 6 ] && echo complet || echo tronque; }
+is "la ligne ecrite porte les six colonnes"         "$(complet "$ligne")" complet
+is "temoin: une ligne amputee est vue comme telle"  "$(complet "$(printf 'a	b	c	d	e')")" tronque
+# sans rien en cours il n y a pas de travail a nommer, et un tiret le dit
+is "hors telechargement, la colonne du travail porte un tiret"    "$(printf '%s' "$ligne" | cut -f6)" -
 is "le Mo libre passe en argument est celui qu on relit"  "$(printf '%s' "$ligne" | cut -f5)" 9999
 # un pic a zero veut dire que /proc n a rien rendu, donc que la sonde est morte
 # sans le dire. La question ne se pose que la ou VmHWM existe: ailleurs on le

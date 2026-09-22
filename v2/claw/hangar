@@ -469,7 +469,7 @@ fill() {
     # The last failure's log is kept now: it costs a few kilobytes and it is
     # the difference between a cause and a guess.
     { echo "=== $(ts) $chan $vid"
-      echo "--- hautes eaux (date, pic Ko, qui, dispo Ko, libre Mo) ---"
+      echo "--- hautes eaux (date, pic Ko, qui, dispo Ko, libre Mo, travail) ---"
       tail -n 24 "$BASE/hautes-eaux.tsv" 2>/dev/null
       echo "--- maintenant ---"
       free -m 2>/dev/null | head -3
@@ -595,8 +595,16 @@ watermark() {
     who=$(cat "$p/comm" 2>/dev/null)
   done
   avail=$(awk '/^MemAvailable:/ { print $2 }' /proc/meminfo 2>/dev/null)
-  printf '%s	%s	%s	%s	%s
-' "$(date +%s)" "$(num "$hw")" "${who:-aucun}"          "$(num "$avail")" "$(num "$1")" >> "$BASE/hautes-eaux.tsv"
+  # which video the peak belongs to, or a trace is only a trace: the question
+  # is whether the peak follows the length of what is being merged, and that
+  # cannot be answered by a column of numbers with nothing to join them on.
+  # The id is in the name of the part being written, which is the one place
+  # a tick outside the lock can read it.
+  job=$(ls "$BASE"/hangar/*/.part/*.f*.* 2>/dev/null | head -1)
+  job=${job##*-}
+  job=${job%%.*}
+  printf '%s	%s	%s	%s	%s	%s
+' "$(date +%s)" "$(num "$hw")" "${who:-aucun}"          "$(num "$avail")" "$(num "$1")" "${job:--}" >> "$BASE/hautes-eaux.tsv"
   # one line every five minutes is twelve kilobytes a day on a card that also
   # holds the hangar, so it is cut back at a week's worth
   lines=$(wc -l < "$BASE/hautes-eaux.tsv" 2>/dev/null)
