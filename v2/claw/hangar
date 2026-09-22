@@ -256,7 +256,15 @@ fill() {
   # so a paid request goes past it. The hourly cap and the daily budget below
   # are the ones that matter and they still apply, which is what stops three
   # pending requests turning into three downloads back to back.
-  if [ "$wait_s" -gt 0 ] && [ "$(num "$(field requested "$want")")" -gt 0 ]; then
+  #
+  # A wall is the exception to the exception. On 2026-09-22 a requested video
+  # was refused by YouTube at 02:00, and because a pending request skips the
+  # wait it was tried again at 02:05, 02:10 and 02:15: four refusals in a
+  # quarter of an hour, each one halving the budget, which left the board at
+  # an eighth and still at half six hours later. The wall is about the
+  # address, not about the video, so nothing jumps it.
+  if [ "$wait_s" -gt 0 ] && [ "$last_res" != wall ] \
+     && [ "$(num "$(field requested "$want")")" -gt 0 ]; then
     log "$chan: une demande du chat attend, on ne patiente pas les $((wait_s / 60 + 1)) min"
     wait_s=0
   fi
@@ -308,7 +316,11 @@ fill() {
           } | tr '\n' ' ')
   # A line the far side marked with "!" is one the chat paid for. It is taken
   # rather than drawn, and it is the only thing that jumps the random pick.
-  vid=$(printf '%s\n' "$cands" | sed -n 's/^!\([A-Za-z0-9_-]\{11\}\).*/\1/p' | head -1)
+  # It jumps the draw, not the failure record: a paid request for something
+  # that cannot be fetched used to come back every five minutes forever.
+  vid=$(printf '%s\n' "$cands" | sed -n 's/^!\([A-Za-z0-9_-]\{11\}\).*/\1/p' |
+        awk -v skip="$skip" 'BEGIN { n = split(skip, s, " "); for (i = 1; i <= n; i++) x[s[i]] = 1 }
+                             !($1 in x) { print; exit }')
   [ -n "$vid" ] && log "$chan: demande du chat, $vid passe devant le tirage"
   [ -n "$vid" ] || vid=$(printf '%s\n' "$cands" | awk -v skip="$skip" -v maxs="$affordable" '
     BEGIN { n = split(skip, s, " "); for (i = 1; i <= n; i++) x[s[i]] = 1; srand() }
@@ -383,6 +395,17 @@ fill() {
     log "$chan: range $vid ($((kb / 1024)) Mo)"
   else
     echo "$(date +%s) $vid $chan" >> "$BASE/failed.tsv"
+    # The draw has skipped a video with MAX_FAILS failures for a long time, but
+    # only here: the far side went on offering it, and a viewer who paid for it
+    # waited the full six hour deadline to hear no. Telling Oracle to refuse it
+    # for good is what ends both, and it is one line at the only moment the
+    # count is known.
+    seen=$(awk -v t=$(( $(date +%s) - 7 * 86400 )) -v v="$vid" \
+             '$1 >= t && $2 == v { n++ } END { print n + 0 }' "$BASE/failed.tsv")
+    if [ "$seen" -ge "$MAX_FAILS" ]; then
+      $OSSH "$ORACLE" "printf '%s\t%s\t%s echecs de telechargement\n' $(date +%s) '$vid' '$seen' >> $V2/$chan/state/rejected.tsv" 2>/dev/null
+      log "$chan: $vid ecarte pour de bon apres $seen echecs"
+    fi
     if throttled_by "$run"; then
       note_throttle
       echo "$(date +%s) wall" > "$BASE/last"
