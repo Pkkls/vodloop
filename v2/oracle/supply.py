@@ -39,6 +39,9 @@ CANDIDATES = chan.STATE / "candidates.tsv"
 # one rather than draw, and they leave the list once they have been fetched.
 REQUESTS = chan.STATE / "requests.tsv"
 WANT = chan.STATE / "want.json"
+# what was in the queue last time this ran, so an arrival can be told apart
+# from the queue simply being non-empty
+SEEN = chan.STATE / "delivered.json"
 SOURCES = chan.ROOT / "sources.txt"
 MARGIN_BYTES = chan.GIB
 CATALOG_TTL = 24 * 3600
@@ -85,6 +88,36 @@ def measured_rate(paths, durations, fallback=250_000):
             size += chan.size_of(path)
             secs += length
     return size / secs if secs >= 3600 else fallback
+
+
+def announce(queue, durations, apply):
+    """One line on Telegram per delivery, and nothing when nothing landed.
+
+    kil, 2026-09-21: "dis moi lorsqu'une video est republish sur oracle". Said
+    here because this is the process that sees the queue change, and because a
+    watcher running somewhere else stops the day that somewhere else does. It
+    reads the names it knew last time from the disk, so a restart does not
+    announce the whole library.
+    """
+    now = {p.name for p in queue}
+    before = set(chan.read_json(SEEN, {}).get("queue") or [])
+    fresh = sorted(now - before)
+    if apply:
+        chan.write_json(SEEN, {"queue": sorted(now)})
+    if not before or not fresh:
+        # the first run has nothing to compare against, and announcing the
+        # library once would be the wrong kind of first impression
+        return []
+    for name in fresh:
+        hours = chan.duration(chan.QUEUE / name, durations) / 3600
+        # the same reading bot.py gives a viewer: no epoch prefix, no video id,
+        # no extension, because this line is read by a person on a phone
+        title = re.sub(r"^\d{9,}-", "", pathlib.Path(name).stem)
+        title = re.sub(r"-[A-Za-z0-9_-]{11}$", "", title).replace("_", " ")[:52]
+        chan.log(f"arrivee: {title} ({hours:.1f} h)")
+        if apply:
+            chan.telegram(f"arrivee: {title} ({hours:.1f} h)")
+    return fresh
 
 
 def candidates():
@@ -490,6 +523,7 @@ def main(argv):
     if apply and len(wanted) != len(asked):
         # one that has landed, aired or been refused is no longer a request
         REQUESTS.write_text("".join(f"{v}\n" for v in asked if v in wanted))
+    announce(queue, durations, apply)
     # anything the board dropped is built now: it costs about a second per
     # second of short, niced, and this run already holds the channel's lock
     if apply:

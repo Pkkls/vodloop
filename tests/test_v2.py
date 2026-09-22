@@ -879,6 +879,34 @@ try:
 finally:
     bot.shelf, bot.fetch_eta, bot.catalog_seconds = real_shelf, real_eta, real_secs
 
+print("supply: a delivery says so once, and an empty run says nothing")
+real_tg = chan.telegram
+said_tg = []
+try:
+    chan.telegram = lambda text: said_tg.append(text) or True
+    supply.SEEN.unlink(missing_ok=True)
+    un = chan.QUEUE / "1789000000-Un_Film-aaaaaaaaaaa.mkv"
+    deux = chan.QUEUE / "1789000001-Deux_Films-bbbbbbbbbbb.mkv"
+    chan.QUEUE.mkdir(parents=True, exist_ok=True)
+    un.write_bytes(b"x")
+    supply.announce([un], {un.name: 7200}, True)
+    check("the first run announces nothing, it has nothing to compare against",
+          said_tg == [], said_tg)
+    deux.write_bytes(b"x")
+    supply.announce([un, deux], {f"{deux.name}:{deux.stat().st_size}": 5400}, True)
+    check("the next delivery is announced once, with its length",
+          len(said_tg) == 1 and "Deux Films" in said_tg[0] and "1.5 h" in said_tg[0],
+          said_tg)
+    supply.announce([un, deux], {}, True)
+    check("control: a run with nothing new says nothing", len(said_tg) == 1, said_tg)
+    supply.announce([un], {}, True)
+    check("control: a file leaving is not an arrival either", len(said_tg) == 1, said_tg)
+finally:
+    chan.telegram = real_tg
+    supply.SEEN.unlink(missing_ok=True)
+    for stale in (un, deux):
+        stale.unlink(missing_ok=True)
+
 print("bot: a vote that sends the board shopping puts a short on the wire")
 real_conf = dict(chan.CONF)
 real_probe = chan.probe
