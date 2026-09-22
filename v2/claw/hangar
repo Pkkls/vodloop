@@ -468,7 +468,15 @@ fill() {
     # the only way to learn anything was to spend three hours reproducing it.
     # The last failure's log is kept now: it costs a few kilobytes and it is
     # the difference between a cause and a guess.
-    { echo "=== $(ts) $chan $vid"; tail -c 200000 "$run"; } > "$BASE/derniere-panne.log" 2>/dev/null
+    { echo "=== $(ts) $chan $vid"
+      echo "--- hautes eaux (date, pic Ko, qui, dispo Ko, libre Mo) ---"
+      tail -n 24 "$BASE/hautes-eaux.tsv" 2>/dev/null
+      echo "--- maintenant ---"
+      free -m 2>/dev/null | head -3
+      df -Pm "$BASE" | tail -1
+      dmesg 2>/dev/null | tail -n 12
+      echo "--- yt-dlp ---"
+      tail -c 200000 "$run"; } > "$BASE/derniere-panne.log" 2>/dev/null
   fi
   rm -f "$dir/.part"/*
   return 0
@@ -565,6 +573,39 @@ turn() {
   done | sort -n -k1,1 -k2,2 | awk '{print $3}'
 }
 
+# --- hautes eaux ------------------------------------------------------------
+# 2026-09-22: two merges of long videos died at the very last frame, and all
+# that survived was yt-dlp quoting ffmpeg's progress line. The run log said
+# what ffmpeg was doing; nothing said what the board had left while it did it,
+# which is the one thing that separates "out of memory" from "the card dropped
+# off the bus". A merge runs for hours and a tick fires every five minutes, so
+# the ticks that find a run alive are free samples of it.
+#
+# VmHWM is a high-water mark and never comes back down, so the largest one any
+# tick reads is the peak up to that tick. The last five minutes before a death
+# are lost and that is the whole error term.
+watermark() {
+  hw=0
+  who=aucun
+  for p in /proc/[0-9]*; do
+    v=$(awk '/^VmHWM:/ { print $2 }' "$p/status" 2>/dev/null)
+    [ -n "$v" ] || continue
+    [ "$v" -gt "$hw" ] || continue
+    hw=$v
+    who=$(cat "$p/comm" 2>/dev/null)
+  done
+  avail=$(awk '/^MemAvailable:/ { print $2 }' /proc/meminfo 2>/dev/null)
+  printf '%s	%s	%s	%s	%s
+' "$(date +%s)" "$(num "$hw")" "${who:-aucun}"          "$(num "$avail")" "$(num "$1")" >> "$BASE/hautes-eaux.tsv"
+  # one line every five minutes is twelve kilobytes a day on a card that also
+  # holds the hangar, so it is cut back at a week's worth
+  lines=$(wc -l < "$BASE/hautes-eaux.tsv" 2>/dev/null)
+  if [ "$(num "$lines")" -gt 3000 ]; then
+    tail -n 2000 "$BASE/hautes-eaux.tsv" > "$BASE/hautes-eaux.tmp" &&
+      mv "$BASE/hautes-eaux.tmp" "$BASE/hautes-eaux.tsv"
+  fi
+}
+
 # A test sources this file for its functions. Everything above is definitions;
 # everything below does the work, so that is where sourcing stops.
 [ -z "${HANGAR_SOURCED:-}" ] || return 0
@@ -581,6 +622,7 @@ fi
 report() {
   [ -z "$DRY" ] || return 0
   free=$(df -Pm "$BASE" | tail -1 | awk '{print $4}')
+  watermark "$free"
   parts=""
   for chan in $CHANNELS; do
     n=$(ls "$BASE/hangar/$chan" 2>/dev/null | grep -c '\.m[kp][v4]$')

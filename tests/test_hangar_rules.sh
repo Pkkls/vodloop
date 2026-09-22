@@ -66,5 +66,29 @@ is "une offre de plus d une demi-heure est perimee"    "$(may_ship 3600 $((now -
 is "controle: fraiche, posterieure, et un besoin: on expedie"    "$(may_ship 3600 $((now - 60)) $((now - 600)) $now)" ""
 is "controle: pile a la limite de la demi-heure, ca passe encore"    "$(may_ship 3600 $((now - 1799)) 0 $now)" ""
 
+echo "la ligne de hautes eaux dit ce qu il faut pour expliquer une fusion morte"
+# watermark ecrit dans $BASE, pas ailleurs: on lui en donne un a jeter
+BASE=$(mktemp -d) || exit 1
+watermark 9999
+ligne=$(tail -1 "$BASE/hautes-eaux.tsv")
+# cinq colonnes, une par question qu on se pose devant une fusion morte:
+# quand, quel pic, chez qui, ce qui restait, la place sur la carte
+complet() { [ "$(printf '%s' "$1" | awk -F'	' '{print NF}')" -eq 5 ] && echo complet || echo tronque; }
+is "la ligne ecrite porte les cinq colonnes"        "$(complet "$ligne")" complet
+is "temoin: une ligne amputee est vue comme telle"  "$(complet "$(printf 'a	b	c	d')")" tronque
+is "le Mo libre passe en argument est celui qu on relit"  "$(printf '%s' "$ligne" | cut -f5)" 9999
+# un pic a zero veut dire que /proc n a rien rendu, donc que la sonde est morte
+# sans le dire. La question ne se pose que la ou VmHWM existe: ailleurs on le
+# dit, plutot que de rendre un vert qui ne veut rien dire.
+if grep -qs VmHWM /proc/self/status; then
+  vrai() { [ "$(num "$1")" -gt 0 ] && echo vu || echo aveugle; }
+  is "le pic releve est un vrai chiffre"            "$(vrai "$(printf '%s' "$ligne" | cut -f2)")" vu
+  is "temoin: un /proc muet rendrait aveugle"       "$(vrai '')" aveugle
+  is "le proprietaire du pic est nomme"             "$([ -n "$(printf '%s' "$ligne" | cut -f3)" ] && echo nomme || echo vide)" nomme
+else
+  echo "  HORS  le pic: pas de VmHWM ici, question posee seulement sur la carte"
+fi
+rm -rf "$BASE"
+
 echo
 [ "$fail" -eq 0 ] && echo "tout passe" || { echo "$fail echec(s)"; exit 1; }
