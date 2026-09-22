@@ -18,6 +18,7 @@ made-up numbers and a unit name that was never installed.
 """
 import pathlib
 import shutil
+import subprocess
 import sys
 import tempfile
 import time
@@ -124,6 +125,22 @@ def skips_that_landed_nowhere(skips, rows):
     return out
 
 
+def crontab_lines():
+    """The channel's own cron block, as the daemon would read it."""
+    try:
+        out = subprocess.run(["crontab", "-l"], capture_output=True, text=True,
+                             timeout=20).stdout
+    except (OSError, subprocess.SubprocessError):
+        return []
+    return [line for line in out.splitlines()
+            if f"CHAN_ROOT={chan.ROOT}" in line and not line.startswith("#")]
+
+
+def scheduled(lines, script):
+    """Whether something runs that script for this channel."""
+    return any(f"/{script}" in line for line in lines)
+
+
 def newest_arrival(folders):
     newest = 0
     for folder in folders:
@@ -139,9 +156,13 @@ def newest_arrival(folders):
 def run():
     pid = int(chan.systemctl("show", "-p", "MainPID", "--value", chan.unit("push")) or 0)
     moved = moving(pid, 6) if pid > 0 else None
+    # the witness is the same probe put to a process that holds no socket: the
+    # feeder writes into a pipe. A zero second window was tried first and is not
+    # one, since the two readings themselves take long enough for a megabit
+    # stream to move, which this harness caught on the run that added it.
+    mute = int(chan.systemctl("show", "-p", "MainPID", "--value", chan.unit("feed")) or 0)
     check("le pousseur envoie des octets", moved is not None and moved > 0,
-          # the same counter, the same process, over no time at all
-          witness=(moving(pid, 0) or 0) > 0 if pid > 0 else False,
+          witness=(moving(mute, 0) or 0) > 0 if mute > 0 else False,
           detail=f"{moved} octets en 6 s" if moved is not None else "pas de pid")
 
     session = chan.read_json(feed.SESSION, {}).get("profile")
@@ -204,6 +225,30 @@ def run():
     check("le disque est au-dessus du plancher", free > chan.FLOOR_BYTES,
           witness=0 > chan.FLOOR_BYTES,
           detail=f"{free / chan.GIB:.1f} Go libres")
+
+    lines = crontab_lines()
+    for script in ("supply.py", "watch.py", "ceiling.py"):
+        check(f"{script} est bien dans le cron de la chaine", scheduled(lines, script),
+              # the same reading, asked about something no channel ever schedules
+              witness=scheduled(lines, "jamais-programme.py"),
+              detail=f"{len(lines)} ligne(s) pour cette chaine")
+
+    clip = chan.probe(chan.FILLER)
+    blocked = 0
+    if clip and clip["height"] != chan.MAXH:
+        book, held = cut.ledger(), cut.reserved()
+        durations = chan.read_json(chan.STATE / "durations.json", {})
+        for folder in (chan.QUEUE, chan.CURRENT, chan.AIRED):
+            for path in chan.media(folder):
+                free = len(cut.unaired(path, book, durations, held))
+                info = chan.probe(path) if free else None
+                if info and info["height"] > chan.MAXH:
+                    blocked += free
+    check("le fil est a la hauteur que disent les reglages",
+          bool(clip) and clip["height"] == chan.MAXH,
+          witness=bool(clip) and clip["height"] == chan.MAXH + 1,
+          detail=(f"clip {clip['height'] if clip else '?'} lignes, MAXH {chan.MAXH}"
+                  + (f", {blocked} unites au-dessus a passer" if blocked else "")))
 
     for role in ("push", "feed", "cut", "bot"):
         if role == "bot" and chan.systemctl("is-enabled", chan.unit(role)) != "enabled":
