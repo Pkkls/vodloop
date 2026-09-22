@@ -1004,6 +1004,18 @@ check("control: one short of the cap still asks",
 check("control: an empty rotation asks",
       not shorts.rotation_full(set(), keep=2))
 
+print("ceiling: a flip takes the shorts built for the old frame with it")
+import ceiling  # noqa: E402
+
+check("one built at the old height is dropped",
+      ceiling.stale_shorts([("vieux.ts", 1080), ("neuf.ts", 720)], 720) == ["vieux.ts"])
+check("control: one already at the new height stays",
+      ceiling.stale_shorts([("neuf.ts", 720)], 720) == [])
+# a built short nobody can measure cannot be sent either, and rebuilding one
+# costs the board four megabytes
+check("one nothing could measure goes too, rather than sit there unsendable",
+      ceiling.stale_shorts([("illisible.ts", 0)], 720) == ["illisible.ts"])
+
 print("bot: a vote that sends the board shopping puts a short on the wire")
 real_conf = dict(chan.CONF)
 real_probe = chan.probe

@@ -72,6 +72,19 @@ def build_clip(size):
     return True
 
 
+def stale_shorts(probed, ceiling):
+    """Built shorts that no longer fit the frame the channel serves.
+
+    A short is padded into the channel's own frame rather than copied, so one
+    built for the old ceiling can only ever be skipped: feed.py refuses
+    anything above the session. Twenty-one of them were in that state on
+    2026-09-22, which would have made the reward that plays one do nothing at
+    all. Dropping them puts their ids back in front of the board, and the
+    rotation refills by the ordinary path. (name, height) pairs in, pure.
+    """
+    return [name for name, height in probed if height != ceiling]
+
+
 def state():
     """(clip height, blocking files, blocking units), all read and none assumed."""
     info = chan.probe(chan.FILLER)
@@ -107,6 +120,12 @@ def main(argv):
     subprocess.run(["sudo", "-n", "systemctl", "restart", chan.unit("push")])
     feed.SESSION.unlink(missing_ok=True)
     chan.log(f"fil bascule en {size} a 60 i/s, session rouverte")
+    gone = stale_shorts([(p.name, (chan.probe(p) or {}).get("height", 0))
+                         for p in sorted(chan.SHORTS.glob("*.ts"))], chan.MAXH)
+    for name in gone:
+        (chan.SHORTS / name).unlink(missing_ok=True)
+    if gone:
+        chan.log(f"{len(gone)} short(s) au format d avant retires, la carte les refera")
     chan.telegram(f"le fil passe en {size}, session rouverte, environ 6 s hors ligne")
     return 0
 
