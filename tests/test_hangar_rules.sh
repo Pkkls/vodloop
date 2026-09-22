@@ -44,5 +44,13 @@ is "deux enregistrements inedits: le chat n a nulle part ou sauter"    "$(shorte
 is "controle: trois, c est assez, on tire large" "$(shortest_first 2 3)" ""
 is "controle: un far side trop vieux pour envoyer streams ne declenche rien"    "$(shortest_first 2 0)" ""
 
+echo "on n expedie pas contre une offre qui ne sait pas ce qu elle a deja recu"
+now=1790000000
+is "rien a fournir: on ne bouge pas"    "$(may_ship 0 $now 0 $now)" "rien a fournir"
+is "une offre ecrite avant la derniere livraison ne la connait pas"    "$(may_ship 3600 $((now - 60)) $now $now)" "offre plus vieille que la derniere livraison"
+is "une offre de plus d une demi-heure est perimee"    "$(may_ship 3600 $((now - 1801)) 0 $now)" perime
+is "controle: fraiche, posterieure, et un besoin: on expedie"    "$(may_ship 3600 $((now - 60)) $((now - 600)) $now)" ""
+is "controle: pile a la limite de la demi-heure, ca passe encore"    "$(may_ship 3600 $((now - 1799)) 0 $now)" ""
+
 echo
 [ "$fail" -eq 0 ] && echo "tout passe" || { echo "$fail echec(s)"; exit 1; }

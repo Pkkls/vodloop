@@ -103,6 +103,20 @@ note_throttle() {
 
 mkdir -p "$BASE"
 # --- ship ------------------------------------------------------------------
+# Why not to ship, or nothing when there is no reason. Four rules, and the
+# second one is the only one that is not obvious: an offer written before the
+# last delivery landed does not know about it, so shipping against it would send
+# a second file into room that is already taken.
+may_ship() {
+  need=$1
+  at=$2
+  shipped=$3
+  now=$4
+  [ "$need" -gt 0 ] || { echo "rien a fournir"; return 0; }
+  [ "$at" -gt "$shipped" ] || { echo "offre plus vieille que la derniere livraison"; return 0; }
+  [ $((now - at)) -lt 1800 ] || { echo "perime"; return 0; }
+}
+
 ship() {
   chan=$1
   dir=$BASE/hangar/$chan
@@ -112,10 +126,12 @@ ship() {
   at=$(num "$(field at "$want")")
   shipped=$(num "$(cat "$BASE/$chan.shipped" 2>/dev/null)")
   now=$(date +%s)
-  [ "$need" -gt 0 ] || return 0
-  # an offer written before the last delivery landed does not know about it
-  [ "$at" -gt "$shipped" ] || return 0
-  [ $((now - at)) -lt 1800 ] || { log "$chan: want.json perime ($((now - at)) s)"; return 0; }
+  why=$(may_ship "$need" "$at" "$shipped" "$now")
+  case "$why" in
+    "") ;;
+    perime) log "$chan: want.json perime ($((now - at)) s)"; return 0 ;;
+    *) return 0 ;;
+  esac
   pick=$(for f in "$dir"/*.mkv "$dir"/*.mp4; do
            [ -f "$f" ] && echo "$(bytes "$f") $f"
          done | awk -v max="$offer" 'BEGIN { srand() } $1 > 0 && $1 <= max { c[++k] = $2 }
