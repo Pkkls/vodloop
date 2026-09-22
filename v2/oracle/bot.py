@@ -468,29 +468,10 @@ def threshold():
     return max(1, min(VOTE_MIN, seen), math.ceil(seen * VOTE_RATIO))
 
 
-def set_next(name, now, paid=False, force=False):
-    """Write what plays next. False when a paid pick already holds the slot.
-
-    The cutter reads this at its next draw, which can be an hour away, so two
-    picks inside one hour meant the first one bought nothing: no refund, no
-    message, and the file simply overwritten. At a hundred points that was
-    rare enough never to be seen; kil put every reward at one point on
-    2026-09-22, which is what made it ordinary.
-
-    Two things deliberately still overwrite a pending paid pick. A free vote
-    does, because a room that voted should outrank one viewer who spent a
-    point. A request that has just landed does, because those points were
-    spent hours earlier and the alternative is stranding them.
-    """
-    pending = chan.read_json(PICK, {})
-    # including the same name: the slot is already bought, so a second point
-    # spent on it buys nothing at all. Two viewers paying to keep the same
-    # stream on get one extra hour between them, and the second one should
-    # hear that rather than pay for it
-    if paid and not force and pending.get("paid"):
-        return False
-    PICK.write_text(json.dumps({"name": name, "at": int(now), "paid": bool(paid)}))
-    return True
+# what plays next is cut.set_next: the slot belongs to the module that
+# consumes it, and keeping the rule there is what stopped the seventh writer
+# from taking a paid pick without knowing the other six existed
+set_next = cut.set_next
 
 
 def do_skip(data, now, reason, live=None, who=""):
@@ -754,7 +735,8 @@ def cmd_vote(data, now, sender, args):
         need = vote["need"]
         if len(vote["voters"]) >= need:
             if vote["kind"] == "pick":
-                set_next(vote["target"], now)
+                # a room that voted outranks one viewer who spent a point
+                set_next(vote["target"], now, force=True)
                 data["vote"] = None
                 return f"{pretty(vote['target'])} · " + four("is_next")
             do_skip(data, now, "vote", playing(), vote["voters"][0])
@@ -845,7 +827,7 @@ def cmd_pick(data, now, sender, args):
     data["vote"] = {"kind": "pick", "target": target, "voters": [sender["user_id"]],
                     "need": need, "closes": now + VOTE_WINDOW}
     if need <= 1:
-        set_next(target, now)
+        set_next(target, now, force=True)
         data["vote"] = None
         return f"{said} · " + four("is_next")
     return f"{said[:40]} · " + four("vote_play", need=need, n=index + 1)

@@ -1936,8 +1936,13 @@ try:
         check("TEMOIN: the same name again is refused too, it was already bought",
               bot.set_next("deux.mkv", 1000, paid=True) is False
               and chan.read_json(bot.PICK, {})["name"] == "deux.mkv")
-        check("control: a room that voted still outranks one paid point",
-              bot.set_next("quatre.mkv", 1000)
+        # the seventh writer: the primer serving a skip wrote the slot straight
+        # and took a paid pick with it, without knowing the other six existed
+        check("TEMOIN: a write with no authority yields to the paid slot",
+              bot.set_next("primer.mkv", 1000) is False
+              and chan.read_json(bot.PICK, {})["name"] == "deux.mkv")
+        check("control: a room that voted says so and outranks one paid point",
+              bot.set_next("quatre.mkv", 1000, force=True)
               and chan.read_json(bot.PICK, {})["name"] == "quatre.mkv")
         bot.set_next("cinq.mkv", 1000, paid=True)
         check("control: a request that landed hours ago may still pass",

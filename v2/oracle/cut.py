@@ -383,6 +383,29 @@ def next_source():
     return None, None
 
 
+def set_next(name, now, paid=False, force=False):
+    """Write what plays next. False when a paid slot is held and stays held.
+
+    This file is read at the next draw, which can be an hour away, so two
+    picks inside one hour meant the first one bought nothing: no refund, no
+    message, the file simply overwritten. At a hundred points that was rare
+    enough never to be seen; kil put every reward at one point on 2026-09-22,
+    which is what made it ordinary.
+
+    The rule lives here because this is where the slot is consumed, and it was
+    six copies in bot.py plus a seventh here that none of them knew about: the
+    primer, serving a skip, wrote the slot straight and took a paid pick with
+    it. Two authorities still outrank a paid slot and both pass force: a vote,
+    because a room that voted outranks one viewer who spent a point, and a
+    request that has just landed, because those points were spent hours
+    earlier and the alternative is stranding them.
+    """
+    if not force and chan.read_json(PICK, {}).get("paid"):
+        return False
+    PICK.write_text(json.dumps({"name": name, "at": int(now), "paid": bool(paid)}))
+    return True
+
+
 def draw(book, durations, just_played, avoid=(), held=None, since=0):
     """(path, origin) the draw would take, moving nothing. None when spent."""
     for folder, origin in ((chan.QUEUE, "queue"), (chan.AIRED, "reserve")):
@@ -676,7 +699,9 @@ def serve_ready():
     clear_ready()
     if not moved:
         return False
-    PICK.write_text(json.dumps({"name": source, "at": int(time.time())}))
+    # the seventh writer, and the one none of the others knew about: it yields
+    # to a paid slot rather than taking it, which is what set_next answers
+    set_next(source, time.time())
     chan.write_json(PRIMED, {"source": source, "number": number, "done": len(moved)})
     chan.log(f"saut servi par l'heure tenue prete: {source[:50]} heure "
              f"{number // per_slice() + 1} (chunk {number}), "
