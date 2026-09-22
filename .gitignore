@@ -1,6 +1,7 @@
 # secrets and per-host configuration
 .env
 web.env
+hosts.env
 cookies*.txt
 *.key
 
