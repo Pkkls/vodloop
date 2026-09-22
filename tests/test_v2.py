@@ -1359,6 +1359,20 @@ try:
     time.sleep = lambda _: None
     check("a refusal that does not reach Kick is tried again, not dropped",
           kickapi.settle_redemption("r", False) is False and len(tries) == 2, tries)
+    # everything above is this function failing. One that always failed would
+    # pass all of it, and nothing would settle: points taken and never handed
+    # back, which is the one thing a viewer notices immediately
+    tries.clear()
+    kickapi._call = lambda method, path, **_: tries.append(path) or {"ok": 1}
+    check("a settlement that reaches Kick is done once, not twice",
+          kickapi.settle_redemption("r", True) is True and len(tries) == 1, tries)
+    check("taking the points and giving them back are not the same door",
+          tries[0].endswith("accept"), tries)
+    tries.clear()
+    kickapi.settle_redemption("r", False)
+    check("control: a refusal goes to the door that hands them back",
+          tries[0].endswith("reject"), tries)
+    tries.clear()
     kickapi._call = lambda method, path, **_: {"data": [
         {"reward": {"title": "Skip"},
          "redemptions": [{"id": "a", "redeemed_at": "2026-09-19T12:00:00Z"},
