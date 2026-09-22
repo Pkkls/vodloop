@@ -96,6 +96,11 @@ JUMP_SECONDS = int(chan.conf_num("JUMP_MINUTES", 10)) * 60
 REQUEST_MAX_SECONDS = int(chan.conf_num("REQUEST_MAX_HOURS", 6)) * 3600
 REQUEST_RICH_SECONDS = int(chan.conf_num("REQUEST_RICH_HOURS", 12)) * 3600
 REQUEST_DEADLINE = int(chan.conf_num("REQUEST_DEADLINE_HOURS", 6)) * 3600
+# Every path that settles a redemption runs inside one webhook call, so a
+# crash, a dead socket or a restart in the wrong second leaves it pending in
+# Kick's queue with the points already taken. Five minutes is far past any
+# answer this bot takes to give, and well short of a viewer wondering.
+STRAY_AFTER = int(chan.conf_num("STRAY_REDEMPTION_SECONDS", 300))
 TITLE_MIN_INTERVAL = int(chan.conf_num("TITLE_MIN_INTERVAL_SECONDS", 90))
 TITLE_CHECK_INTERVAL = int(chan.conf_num("TITLE_CHECK_INTERVAL_SECONDS", 300))
 SEEN_KEPT = 300
@@ -539,6 +544,8 @@ SAID = {
     "nothing_asked": ("nothing asked for right now", "nada pedido ahora mismo",
                       "今リクエストはありません", "şu anda istek yok"),
     "points_back": ("points back", "puntos devueltos", "ポイント返却", "puan iade"),
+    "broke": ("that one broke, points back", "eso falló, puntos devueltos",
+             "エラーです、ポイント返却", "hata oldu, puan iade"),
     "not_a_number": ("not a number from !list", "no es un número de !list",
                     "!list の番号では", "!list numarası değil"),
     "no_video_there": ("no video at that number", "no hay vídeo ahí",
@@ -1202,8 +1209,17 @@ def redeemed(payload):
     # the guards count skips per viewer, and a redemption names its redeemer
     # where a chat command names a sender: same person, two shapes
     data["redeemer_id"] = person.get("user_id")
-    honoured, answer = ACTIONS[known["key"]](
-        data, time.time(), who, payload.get("user_input") or "")
+    try:
+        honoured, answer = ACTIONS[known["key"]](
+            data, time.time(), who, payload.get("user_input") or "")
+    except Exception as problem:
+        # anything thrown in there used to walk out of this function with the
+        # redemption still pending and the points already taken. A crash is a
+        # refusal like any other. The state is read again rather than saved
+        # half-written by whatever stopped halfway through it.
+        chan.log(f"recompense {known['key']} par {who} a casse: {problem}")
+        data = load()
+        honoured, answer = False, f"@{who} " + four("broke")
     # A video the board has not brought back yet: accepting now would take the
     # points for a delivery the daily ceiling may still swallow, so the
     # redemption stays in Kick's queue and announce_arrivals settles it either
@@ -1293,12 +1309,15 @@ def keep_title():
     title rewritten every poll is a call to the API every poll, and the channel
     gains nothing from it.
     """
-    checked = 0
+    checked = swept = 0
     while True:
         try:
             data = load()
             want = wanted_title()
             now = time.time()
+            if now - swept > STRAY_AFTER:
+                swept = now
+                sweep_redemptions(data, now)
             # Every few minutes, believe the channel rather than our own memory.
             # Comparing a wanted title to the last one we think we set means a
             # failed call, or somebody editing the title by hand, is never
@@ -1345,6 +1364,23 @@ def settle_request(row, honoured):
     """Take the points, or give them back. Silent for a request made by hand."""
     if row.get("redemption"):
         kickapi.settle_redemption(row["redemption"], honoured)
+
+
+def sweep_redemptions(data, now):
+    """Hand back the points for anything pending that nothing here is waiting on.
+
+    The only thing in this file that reads Kick's queue instead of trusting
+    what we remember doing to it. A paid fetch is deliberately left pending
+    until the video lands, so those ids are stepped over; everything else that
+    is still sitting there five minutes on was dropped by something, and the
+    viewer is owed their points back rather than an explanation.
+    """
+    held = {row.get("redemption") for row in (data.get("asked") or {}).values()}
+    for row in kickapi.pending_redemptions():
+        if not row["id"] or row["id"] in held or now - row["at"] < STRAY_AFTER:
+            continue
+        if kickapi.settle_redemption(row["id"], False):
+            chan.log(f"redemption oubliee remboursee: {row['title']} ({row['id']})")
 
 
 def announce_arrivals(data):
@@ -1439,11 +1475,19 @@ class Handler(BaseHTTPRequestHandler):
         pass
 
     def _send(self, code, body=b"", kind="text/plain"):
-        self.send_response(code)
-        self.send_header("Content-Type", kind)
-        self.send_header("Content-Length", str(len(body)))
-        self.end_headers()
-        self.wfile.write(body)
+        # kil, 2026-09-22: "wtf tu les manges juste". A redemption webhook whose
+        # client had already hung up died right here, on the 200 that do_POST
+        # sends before the work, so the work never ran: no skip, no refund, no
+        # word in chat, and the points gone into Kick's pending queue for good.
+        # Answering is a courtesy to Kick. Doing the thing is not.
+        try:
+            self.send_response(code)
+            self.send_header("Content-Type", kind)
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+        except OSError as problem:
+            chan.log(f"reponse {code} non remise: {problem}")
 
     def do_GET(self):
         path, _, query = self.path.partition("?")

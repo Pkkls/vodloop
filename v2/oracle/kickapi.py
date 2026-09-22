@@ -283,9 +283,44 @@ def delete_reward(reward_id):
 
 
 def settle_redemption(redemption_id, honoured):
-    """Spend the points, or hand them back. One call, one redemption."""
+    """Spend the points, or hand them back. One call, one redemption.
+
+    Tried twice, because the one call that fails silently here is the refusal:
+    a redemption nobody settles stays pending in Kick's queue with the points
+    already taken, and nothing comes back for it later. A second attempt costs
+    a second; not making it costs somebody their points.
+    """
     path = "/channels/rewards/redemptions/" + ("accept" if honoured else "reject")
-    return _call("POST", path, json={"ids": [redemption_id]}) is not None
+    for attempt in (1, 2):
+        if _call("POST", path, json={"ids": [redemption_id]}) is not None:
+            return True
+        if attempt == 1:
+            time.sleep(2)
+    chan.log(f"redemption {redemption_id} non reglee: les points restent pris")
+    return False
+
+
+def pending_redemptions():
+    """Every redemption still waiting on us, flattened out of its reward.
+
+    Kick nests them a level down, one list per reward, and gives the moment as
+    an ISO string. The caller wants a flat list it can hold against a clock.
+    """
+    got = _call("GET", "/channels/rewards/redemptions", params={"status": "pending"})
+    out = []
+    for block in (got or {}).get("data") or []:
+        title = (block.get("reward") or {}).get("title") or ""
+        for row in block.get("redemptions") or []:
+            try:
+                at = time.mktime(time.strptime(
+                    (row.get("redeemed_at") or "")[:19],
+                    "%Y-%m-%dT%H:%M:%S")) - time.timezone
+            except ValueError:
+                # unreadable means old enough to refund: erring the other way
+                # is how points are kept for something that never happened
+                at = 0
+            out.append({"id": row.get("id"), "title": title, "at": at})
+    return out
 
 
 def live_title(slug):

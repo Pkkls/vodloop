@@ -1128,6 +1128,23 @@ check("control: a signature over the wrong body is refused too",
       not kickapi.verify({"Kick-Event-Message-Id": "1",
                           "Kick-Event-Message-Timestamp": "2026-09-19T12:00:00Z",
                           "Kick-Event-Signature": "Zm9v"}, b"{}"))
+tries = []
+real_call, real_sleep = kickapi._call, time.sleep
+try:
+    kickapi._call = lambda method, path, **_: tries.append(path) or None
+    time.sleep = lambda _: None
+    check("a refusal that does not reach Kick is tried again, not dropped",
+          kickapi.settle_redemption("r", False) is False and len(tries) == 2, tries)
+    kickapi._call = lambda method, path, **_: {"data": [
+        {"reward": {"title": "Skip"},
+         "redemptions": [{"id": "a", "redeemed_at": "2026-09-19T12:00:00Z"},
+                         {"id": "b", "redeemed_at": "not a date"}]}]}
+    got = kickapi.pending_redemptions()
+    check("the queue is read flat, and a date nobody can parse reads as old",
+          [r["id"] for r in got] == ["a", "b"] and got[1]["at"] == 0
+          and got[0]["title"] == "Skip", got)
+finally:
+    kickapi._call, time.sleep = real_call, real_sleep
 
 
 print("bot: the title a viewer can read, with the handle always last")
@@ -1637,6 +1654,48 @@ try:
     finally:
         bot.shelf = real_shelf
         bot.PICK.unlink(missing_ok=True)
+
+    # kil, 2026-09-22: "wtf tu les manges juste". Observed on Oracle: a webhook
+    # whose client had hung up died on the 200 do_POST answers with before it
+    # does the work, so the redemption was never acted on and never settled.
+    print("  -- nothing between the webhook and the settle may keep the points")
+    real_action = bot.ACTIONS["skip"]
+    try:
+        def boom(*_):
+            raise RuntimeError("the disk went away")
+        bot.ACTIONS["skip"] = boom
+        check("an action that throws hands the points back instead of keeping them",
+              redeem("Skip") == ("r1", False))
+    finally:
+        bot.ACTIONS["skip"] = real_action
+
+    class HungUp:
+        """A client gone before the answer it is not waiting for."""
+        def send_response(self, *_):
+            raise BrokenPipeError(32, "Broken pipe")
+
+    try:
+        bot.Handler._send(HungUp(), 200)
+        survived = True
+    except OSError:
+        survived = False
+    check("a client that hung up does not take the work down with it", survived)
+
+    print("  -- and whatever the queue still holds is given back on its own")
+    real_pending = bot.kickapi.pending_redemptions
+    try:
+        stamp = time.time()
+        bot.kickapi.pending_redemptions = lambda: [
+            {"id": "dropped", "title": "Skip", "at": stamp - bot.STRAY_AFTER - 1},
+            {"id": "just now", "title": "Skip", "at": stamp},
+            {"id": "paid fetch", "title": "Travel", "at": stamp - 99999}]
+        settled.clear()
+        bot.sweep_redemptions({"asked": {"v": {"redemption": "paid fetch"}}}, stamp)
+        check("one nothing settled comes back; the fresh one and the paid "
+              "fetch waiting on a video are left where they are",
+              settled == [("dropped", False)], settled)
+    finally:
+        bot.kickapi.pending_redemptions = real_pending
 finally:
     bot.kickapi.settle_redemption = real_settle
     bot.shelf, bot.playing = real_unseen, real_playing
