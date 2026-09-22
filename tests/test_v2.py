@@ -1074,6 +1074,27 @@ check("control: a copy still being written is not",
 check("control: an empty upload says nothing",
       watch.stalled_deliveries([], instant) == [])
 
+print("watch: the last link, the one that actually tells kil")
+# every fault above reaches him through here or not at all, and it sat inline
+# in main() where nothing could call it
+dit, revenu, livre = watch.alarm_traffic({"disque": "plus de place"}, {}, 5000, repeat=600)
+check("a new fault is said once and written down",
+      dit == ["ALERTE plus de place"] and revenu == [] and livre == {"disque": 5000},
+      (dit, revenu, livre))
+dit, revenu, livre = watch.alarm_traffic({"disque": "plus de place"}, livre, 5100, repeat=600)
+check("TEMOIN: the same fault inside the window says nothing, and keeps its hour",
+      dit == [] and livre == {"disque": 5000}, (dit, livre))
+dit, revenu, livre = watch.alarm_traffic({"disque": "plus de place"}, livre, 5700, repeat=600)
+check("control: past the window it is said again",
+      dit == ["ALERTE plus de place"] and livre == {"disque": 5700}, (dit, livre))
+dit, revenu, livre = watch.alarm_traffic({}, livre, 5800, repeat=600)
+check("a fault that clears says so, once, and leaves the book empty",
+      dit == [] and revenu == ["revenu a la normale: disque"] and livre == {},
+      (dit, revenu, livre))
+dit, revenu, livre = watch.alarm_traffic({}, {}, 5900, repeat=600)
+check("control: nothing wrong, nothing said at all",
+      (dit, revenu, livre) == ([], [], {}), (dit, revenu, livre))
+
 print("shorts: a full rotation stops asking the board for more")
 import shorts  # noqa: E402
 

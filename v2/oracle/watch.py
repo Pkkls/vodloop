@@ -73,6 +73,27 @@ def stalled_deliveries(stamped, now, limit=UPLOAD_STALL_SECONDS):
     return [name for name, mtime in stamped if now - mtime > limit]
 
 
+def alarm_traffic(faults, alarms, now, repeat=REPEAT_SECONDS):
+    """(what to say now, what has come back, the alarm book to keep). Pure.
+
+    This is the last link in the chain that tells kil anything: every fault
+    above reaches him through here or not at all, and it sat inline in main()
+    where nothing could call it and nothing could check it. A fault repeats
+    only every REPEAT_SECONDS, because an alarm that speaks every five minutes
+    is one nobody reads.
+    """
+    a_dire, garde = [], {}
+    for key, message in faults.items():
+        last = alarms.get(key, 0)
+        if now - last > repeat:
+            a_dire.append(f"ALERTE {message}")
+            garde[key] = now
+        else:
+            garde[key] = last
+    revenus = [f"revenu a la normale: {key}" for key in alarms if key not in faults]
+    return a_dire, revenus, garde
+
+
 def main(argv):
     apply = "--apply" in argv
     now = time.time()
@@ -145,17 +166,10 @@ def main(argv):
           f"{(want.get('runway_seconds') or 0) / 3600:.1f} h, besoin "
           f"{(want.get('need_seconds') or 0) / 3600:.1f} h, libre {free / chan.GIB:.1f} Go, "
           f"fautes {sorted(faults) or 'aucune'}")
-    alarms = data.get("alarms", {})
-    for key, message in faults.items():
-        last = alarms.get(key, 0)
-        if apply and now - last > REPEAT_SECONDS:
-            chan.telegram(f"ALERTE {message}")
-            alarms[key] = now
-    for key in list(alarms):
-        if key not in faults:
-            if apply:
-                chan.telegram(f"revenu a la normale: {key}")
-            alarms.pop(key)
+    a_dire, revenus, alarms = alarm_traffic(faults, data.get("alarms", {}), now)
+    if apply:
+        for ligne in a_dire + revenus:
+            chan.telegram(ligne)
     data["alarms"] = alarms
     if apply:
         chan.write_json(STATEFILE, data)
