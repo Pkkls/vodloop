@@ -124,6 +124,22 @@ request. Import the module or run its entry point once.
 
 **A running process keeps the old code.** Deploying does not fix a job that
 started before the deploy. Check `ps` before concluding the fix did not work.
+On 2026-09-22 a beacon came back without a field the installed script writes,
+for exactly this reason: the run that wrote it had started six minutes before
+the install, and the next tick had the field.
+
+**On the board, never `cp` over a shell script that may be running.** A shell
+reads a script as it goes, by offset, so overwriting the file under a running
+`hangar` can hand it the second half of a different file. Nothing warns, and
+what it does next is undefined. Copy beside and rename, which is atomic and
+leaves the running process on the old inode:
+
+    scp hangar root@board:/tmp/hangar
+    ssh root@board 'cp /tmp/hangar /usr/bin/hangar.new &&                     chmod +x /usr/bin/hangar.new &&                     mv /usr/bin/hangar.new /usr/bin/hangar'
+
+The same applies to `/root/v2/*.sh`. Python on Oracle is safer, since the
+interpreter reads the whole file before running it, but the rule above about
+a job already running still holds there.
 
 ## Escaping, twice bitten
 
