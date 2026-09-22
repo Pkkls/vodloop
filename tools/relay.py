@@ -31,6 +31,14 @@ import subprocess
 import sys
 import time
 
+# Les titres de la chaine sont ecrits par leur auteur, pas par nous: celui du
+# 2026-09-22 portait un crochet japonais. La console Windows encode en cp1252,
+# qui ne sait pas l ecrire, et print() leve alors UnicodeEncodeError. --plan est
+# mort au cinquieme titre de sa propre file, et --fetch serait mort au meme
+# endroit, apres avoir choisi quoi prendre et avant de le prendre. Le nom d une
+# video n est pas une raison d interrompre le relais: il s affiche approxime.
+sys.stdout.reconfigure(errors="replace")
+
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "tools"))
 from drift import hosts, ssh_argv, remote  # noqa: E402
@@ -48,6 +56,16 @@ COOKIES = STORE / "state" / "cookies.txt"
 # glissante et non un compteur journalier, parce que c est un debit qui a ete
 # puni, pas un total.
 HOUR_MB = int(os.environ.get("VODLOOP_HOUR_MB", 1800))
+# Un plafond horaire ne gouverne rien quand l unite de travail pese cinq heures
+# de video. Mesure du 2026-09-22: 1800 Mo/h annonces, 5938 Mo pris dans l heure,
+# parce que le plafond etait lu avant de choisir et jamais contre la taille de
+# ce qui venait. En regime ca donne un fichier par heure, soit 2.3 a 6.8 Go/h
+# selon le fichier, au-dessus des 2800 Mo/h qui ont fait murer l adresse.
+# Le budget se compte donc sur une fenetre ou un fichier entier tient, et ce qui
+# vient est pese avec ce qui est deja pris. 1800 Mo/h de moyenne tiennent, le
+# tampon de 40 Go se remplit en une vingtaine d heures, et aucune heure ne part
+# seule au-dessus du debit puni.
+WINDOW_H = int(os.environ.get("VODLOOP_WINDOW_H", 6))
 PAUSE_S = int(os.environ.get("VODLOOP_PAUSE_S", 45))
 # kil, 2026-09-22: "tu prends que 40 go max sur D". Le disque est le sien et
 # n est pas a moi de remplir: le tampon a une taille, pas la place restante.
@@ -85,8 +103,21 @@ def _hour_from(lines, floor):
     return total // 1024
 
 
-def spent_last_hour(conf=None):
-    """Mo pris dans la derniere heure glissante, PAR L ADRESSE, pas par moi.
+def budget_mb():
+    """Ce que la fenetre entiere autorise."""
+    return HOUR_MB * WINDOW_H
+
+
+def peut_prendre(pris_mb, attendu_mb):
+    """Le plafond se lit contre la taille de ce qui vient, pas seulement contre
+    ce qui est deja pris. Lu autrement, un tampon vide autorise n importe quel
+    fichier, et c est ainsi que 5938 Mo sont passes sous 1800 le 2026-09-22.
+    """
+    return pris_mb + attendu_mb <= budget_mb()
+
+
+def spent_in_window(conf=None):
+    """Mo pris dans la fenetre glissante, PAR L ADRESSE, pas par moi.
 
     Le PC et la carte sortent par la meme adresse publique, mesure le
     2026-09-22: 82.67.100.152 des deux cotes. Deux gouverneurs qui s ignorent
@@ -94,7 +125,7 @@ def spent_last_hour(conf=None):
     la somme des deux que YouTube voit. Le registre de la carte est donc lu
     avec le notre, et le plafond s applique au total.
     """
-    floor = time.time() - 3600
+    floor = time.time() - WINDOW_H * 3600
     mine = _hour_from(
         LEDGER.read_text(encoding="utf-8", errors="ignore").splitlines()
         if LEDGER.exists() else [], floor)
@@ -245,8 +276,8 @@ def run(args, conf):
     print("  place sur D:  %.1f Go (le plafond ci-dessus mord bien avant)"
           % (shutil.disk_usage(STORE).free / 2**30))
     print("  candidats     %d, dont %d deja vus ou refuses" % (n_cands, n_skip))
-    print("  pris cette h. %d Mo sur %d autorises (PC + carte, une seule adresse)"
-          % (spent_last_hour(conf), HOUR_MB))
+    print("  pris en %2d h.  %d Mo sur %d autorises (PC + carte, une seule adresse)"
+          % (WINDOW_H, spent_in_window(conf), budget_mb()))
     print("  session       %s" % ("connectee" if COOKIES.exists() else
                                   "anonyme (tools/cookies.py --install)"))
     print("  libre Oracle  %.1f Go" % (libre_mb / 1024))
@@ -273,14 +304,20 @@ def run(args, conf):
                           % (store_mb(), STORE_MAX_MB, attendu))
                     break
             waited = 0
-            while spent_last_hour(conf) >= HOUR_MB:
+            while not peut_prendre(spent_in_window(conf), attendu):
                 if waited == 0:
-                    print("  plafond horaire atteint, on patiente")
+                    print("  %d Mo pris sur %d dans les %d h, le prochain en "
+                          "demande %d: on patiente"
+                          % (spent_in_window(conf), budget_mb(), WINDOW_H, attendu))
                 time.sleep(60)
                 waited += 1
                 if waited > 90:
-                    print("  toujours au plafond apres 90 min, on s arrete")
-                    return 0
+                    # break et non return: renoncer au quota n est pas une
+                    # raison de ne pas livrer ce qui est deja sur le disque.
+                    print("  toujours au plafond apres 90 min, on n en prend plus")
+                    break
+            if not peut_prendre(spent_in_window(conf), attendu):
+                break
             print("  -> %s  %.1f h  %s" % (vid, secs / 3600, title[:50]))
             began = time.time()
             got, why = fetch_one(vid)
