@@ -468,6 +468,27 @@ def threshold():
     return max(1, min(VOTE_MIN, seen), math.ceil(seen * VOTE_RATIO))
 
 
+def set_next(name, now, paid=False, force=False):
+    """Write what plays next. False when a paid pick already holds the slot.
+
+    The cutter reads this at its next draw, which can be an hour away, so two
+    picks inside one hour meant the first one bought nothing: no refund, no
+    message, and the file simply overwritten. At a hundred points that was
+    rare enough never to be seen; kil put every reward at one point on
+    2026-09-22, which is what made it ordinary.
+
+    Two things deliberately still overwrite a pending paid pick. A free vote
+    does, because a room that voted should outrank one viewer who spent a
+    point. A request that has just landed does, because those points were
+    spent hours earlier and the alternative is stranding them.
+    """
+    pending = chan.read_json(PICK, {})
+    if paid and not force and pending.get("paid") and pending.get("name") != name:
+        return False
+    PICK.write_text(json.dumps({"name": name, "at": int(now), "paid": bool(paid)}))
+    return True
+
+
 def do_skip(data, now, reason, live=None, who=""):
     """Move on, and write down what it cost and who asked, because both are
     what the guards read next time."""
@@ -547,6 +568,9 @@ SAID = {
                       "前回はあなた、{min}分", "son atlama sendeydi, {min} dk"),
     "downloading": ("downloading", "descargando", "取得中", "indiriliyor"),
     "already_coming": ("already coming", "ya viene", "取得中", "zaten geliyor"),
+    "already_picked": ("somebody already picked what plays next",
+                       "ya eligieron el siguiente", "次はもう決まっています",
+                       "siradaki zaten secildi"),
     "one_each": ("you have one coming already", "ya tienes uno en camino",
                 "すでに1件取得中", "zaten bir tane geliyor"),
     "queue_full": ("{n} downloading already, wait for one", "{n} descargando, espera",
@@ -726,7 +750,7 @@ def cmd_vote(data, now, sender, args):
         need = vote["need"]
         if len(vote["voters"]) >= need:
             if vote["kind"] == "pick":
-                PICK.write_text(json.dumps({"name": vote["target"], "at": int(now)}))
+                set_next(vote["target"], now)
                 data["vote"] = None
                 return f"{pretty(vote['target'])} · " + four("is_next")
             do_skip(data, now, "vote", playing(), vote["voters"][0])
@@ -817,7 +841,7 @@ def cmd_pick(data, now, sender, args):
     data["vote"] = {"kind": "pick", "target": target, "voters": [sender["user_id"]],
                     "need": need, "closes": now + VOTE_WINDOW}
     if need <= 1:
-        PICK.write_text(json.dumps({"name": target, "at": int(now)}))
+        set_next(target, now)
         data["vote"] = None
         return f"{said} · " + four("is_next")
     return f"{said[:40]} · " + four("vote_play", need=need, n=index + 1)
@@ -1089,7 +1113,8 @@ def reward_pick(data, now, who, text):
             return False, refusal
         return True, (f"@{who} {title[:44]} · " + four("downloading")
                       + f" {waiting_for(seconds)}")
-    PICK.write_text(json.dumps({"name": ready[index][1], "at": int(now)}))
+    if not set_next(ready[index][1], now, paid=True):
+        return False, f"@{who} " + four("already_picked")
     return True, f"@{who} {ready[index][2][:48]} · " + four("is_next")
 
 
@@ -1111,7 +1136,8 @@ def reward_stay(data, now, who, text):
     for folder in (chan.CURRENT, chan.QUEUE, chan.AIRED):
         path = folder / live["name"]
         if path.exists() and cut.unaired(path, book, durations, cut.reserved()):
-            PICK.write_text(json.dumps({"name": live["name"], "at": int(now)}))
+            if not set_next(live["name"], now, paid=True):
+                return False, f"@{who} " + four("already_picked")
             return True, f"@{who} {live['title'][:44]} · " + four("one_more_hour")
     return False, f"@{who} " + four("no_hours_left")
 
@@ -1194,7 +1220,8 @@ def reward_place(data, now, who, text):
     for path, _ in shelf():
         low = clean_title(path.name, SLUG).lower()
         if any(t in low for t in terms):
-            PICK.write_text(json.dumps({"name": path.name, "at": int(now)}))
+            if not set_next(path.name, now, paid=True):
+                return False, f"@{who} " + four("already_picked")
             return True, f"@{who} {clean_title(path.name, SLUG)[:52]} · " + four("is_next")
     # kil, 2026-09-21: two "peru" and a "vietnam" came back refunded while the
     # catalogue held plenty of both. The first match was one somebody had
@@ -1446,8 +1473,10 @@ def announce_arrivals(data):
         if vid in here:
             for path, _ in shelf():
                 if chan.video_id(path) == vid:
-                    # it was paid for, so it does not take its chances in the draw
-                    PICK.write_text(json.dumps({"name": path.name, "at": int(now)}))
+                    # it was paid for, so it does not take its chances in the
+                    # draw, and those points were spent hours ago: this is the
+                    # one write allowed past a pending paid pick
+                    set_next(path.name, now, paid=True, force=True)
                     break
             settle_request(row, True)
             say(f"@{who} the stream you asked for landed: {title} "

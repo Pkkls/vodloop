@@ -1893,6 +1893,39 @@ try:
         bot.shelf = real_shelf
         bot.PICK.unlink(missing_ok=True)
 
+    print("  -- a paid pick is not overwritten in silence")
+    # the cutter reads this file at its next draw, up to an hour later. At a
+    # hundred points two picks inside one hour were rare; at one point they are
+    # ordinary, and the first one bought nothing: no refund, no message
+    real_shelf_p = bot.shelf
+    try:
+        bot.PICK.unlink(missing_ok=True)
+        check("a free pick writes, and records that it was free",
+              bot.set_next("un.mkv", 1000)
+              and not chan.read_json(bot.PICK, {}).get("paid"))
+        check("a paid pick takes the slot from a free one",
+              bot.set_next("deux.mkv", 1000, paid=True)
+              and chan.read_json(bot.PICK, {})["name"] == "deux.mkv")
+        check("TEMOIN: a second paid pick is refused instead of swallowed",
+              bot.set_next("trois.mkv", 1000, paid=True) is False
+              and chan.read_json(bot.PICK, {})["name"] == "deux.mkv")
+        check("control: the same paid pick again is not a refusal",
+              bot.set_next("deux.mkv", 1000, paid=True))
+        check("control: a room that voted still outranks one paid point",
+              bot.set_next("quatre.mkv", 1000)
+              and chan.read_json(bot.PICK, {})["name"] == "quatre.mkv")
+        bot.set_next("cinq.mkv", 1000, paid=True)
+        check("control: a request that landed hours ago may still pass",
+              bot.set_next("six.mkv", 1000, paid=True, force=True)
+              and chan.read_json(bot.PICK, {})["name"] == "six.mkv")
+        bot.shelf = lambda: [(pathlib.Path("1789819373-Un_Titre-dQw4w9WgXcQ.mkv"), 2)]
+        ok_p, said_p = bot.reward_pick({}, 1000, "v", "1")
+        check("TEMOIN: and the viewer is told, so the point comes back",
+              ok_p is False and "already picked" in said_p, said_p)
+    finally:
+        bot.shelf = real_shelf_p
+        bot.PICK.unlink(missing_ok=True)
+
     # kil, 2026-09-22: "wtf tu les manges juste". Observed on Oracle: a webhook
     # whose client had hung up died on the 200 do_POST answers with before it
     # does the work, so the redemption was never acted on and never settled.
