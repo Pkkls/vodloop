@@ -439,6 +439,69 @@ late.
 
 ---
 
+## 2026-09-22 One refusal became four, and the budget sat on the floor for six hours
+
+**What it looked like.** The channel drained from ten hours of reserve to under
+two overnight. `watch.py` raised `carte` and `reserve` together, so it read like
+the card being dead while the shelf ran out, which is two faults and the worst
+pair.
+
+**What it actually was.** One YouTube refusal at 02:10, turned into four by the
+board's own pacing. A failed fetch buys three hours of patience, except that a
+thin shelf shortens that to ten minutes, which is right against a source that
+works and exactly wrong against one that has just said no. The board retried at
+02:15, 02:20 and 02:25, walked into the same wall each time, and each retry
+raised the throttle a level. Four refusals inside fifteen minutes reached the
+lowest budget there is and held it for six hours.
+
+The card was not dead either. It was merging a fourteen gigabyte download on one
+core, which starves its own sshd and delays the beacon past the staleness
+threshold.
+
+**The measurement that told them apart.**
+
+```sh
+# on the board: what the log calls a wall, and what it calls a failure
+grep -c "YouTube a refuse" /root/v2/hangar.log
+grep "echec" /root/v2/hangar.log | tail -5
+
+# the budget in force against what has already been drawn
+cat /root/v2/throttle                      # level, and until when
+awk -v t=$(($(date +%s)-86400)) '$1 >= t { s += $2 } END { print s/1024 }' \
+    /root/v2/fetched.tsv
+```
+
+It read 12500 MB allowed against 11349 already drawn *before* the wall, so
+1151 MB were left for six and a half hours, against a channel that eats about
+17000 MB a day. That is the number that separates "the source is refusing us"
+from "we are refusing ourselves".
+
+**The fix.** A wall is written down as `wall` in `$BASE/last` rather than as any
+other failure, and it always costs the full `FAIL_GAP_MIN`, whatever the shelf
+looks like. The throttle was put back by hand to level 1, which is what a single
+incident warrants, and the old value kept in `/root/v2/throttle.avant`.
+
+**The control that keeps it fixed.** `tests/test_hangar_rules.sh`, run on the
+card in busybox, pins the whole pacing table down. The line that matters is the
+bug itself as a witness:
+
+```
+temoin: en le prenant pour un echec ordinaire, on retapait dans le mur   25 min
+mur avec une reserve mince: attente complete                            180 min
+```
+
+**Two things this cost that were not the bug.** Large merges fail on that card:
+`ERROR: Postprocessing` after reaching the last frame of a nine and a twelve
+hour file, with no out of memory kill in dmesg, 106 MB of 211 available and
+109 GB free. `MAX_SECONDS` went to eight hours, which dodges the class without
+explaining it, and the last failure's log is kept in `/root/v2/derniere-panne.log`
+so the next one is evidence instead of a reproduction costing three hours.
+
+And a twelve hour video requested by the chat had held the one supply line for
+three hours before any of this. A request longer than six hours is refused while
+the reserve is under twelve, in bot.py, which is the only shape of that guard
+that is not a refusal on principle.
+
 ## Standing hazards that have not bitten yet
 
 **Chunks written into `segments/` without a matching queue item are deleted
