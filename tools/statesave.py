@@ -18,6 +18,7 @@ script de sauvegarde. L outil les nomme et s arrete la.
 """
 import argparse
 import base64
+import json
 import os
 import pathlib
 import subprocess
@@ -103,10 +104,76 @@ def ramener(conf, dossier, noms, base):
     return bons
 
 
+def relisible(dossier):
+    """Ce qui a ete ramene se relit-il. Rend (echecs, lignes a dire).
+
+    Un fichier copie n est pas une sauvegarde: la seule question qui compte est
+    si on pourrait s en servir. Les json se corrompent quand une ecriture est
+    coupee, et units.tsv porte la memoire du jamais deux fois, qui ne vaut que
+    si elle se relit.
+    """
+    dits, fail = [], 0
+
+    def juge(nom, vrai, detail=""):
+        nonlocal fail
+        fail += not vrai
+        dits.append("  %s  %-46s %s" % ("PASS" if vrai else "FAIL", nom, detail))
+
+    units = (dossier / "state-units.tsv")
+    lignes = units.read_text(errors="replace").splitlines() if units.exists() else []
+    couples, casses = {}, 0
+    for ligne in lignes:
+        bouts = ligne.split("\t")
+        if len(bouts) >= 3:
+            couples[(bouts[1], bouts[2])] = couples.get((bouts[1], bouts[2]), 0) + 1
+        elif ligne.strip():
+            casses += 1
+    juge("units.tsv se lit ligne a ligne", lignes and casses == 0,
+         "%d illisible(s)" % casses)
+    juge("aucune heure diffusee deux fois",
+         bool(couples) and max(couples.values()) == 1,
+         "%d couples sur %d lignes" % (len(couples), len(lignes)))
+    for nom in sorted(p.name for p in dossier.glob("*.json")):
+        try:
+            charge = json.loads((dossier / nom).read_text(errors="replace"))
+            juge("%s se relit" % nom, True, "%d cle(s)" % len(charge))
+        except (OSError, ValueError) as souci:
+            juge("%s se relit" % nom, False, str(souci)[:40])
+    cat = dossier / "state-catalog.tsv"
+    entrees = [l.split("\t") for l in cat.read_text(errors="replace").splitlines()
+               if l.strip()] if cat.exists() else []
+    juge("catalog.tsv garde ses colonnes",
+         bool(entrees) and all(len(e) >= 4 for e in entrees),
+         "%d entree(s)" % len(entrees))
+    juge("et aucun id en double",
+         len({e[0] for e in entrees}) == len(entrees))
+    return fail, dits
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser()
     ap.add_argument("--pull", action="store_true", help="ecrire, au lieu de dire")
+    ap.add_argument("--verify", metavar="DOSSIER", nargs="?", const="",
+                    help="juger une copie deja ramenee (la derniere par defaut)")
     args = ap.parse_args(argv)
+    if args.verify is not None:
+        racine = ROOT / "backups" / CHAINE
+        # par date de modification, pas par nom: max() sur les noms prenait le
+        # dernier alphabetiquement, et un dossier appele ESSAI-abime passait
+        # devant toutes les copies datees. Mesure du 2026-09-22, sur le
+        # controle meme qui devait prouver que ce verificateur sait rougir.
+        copies = sorted((p for p in racine.iterdir() if p.is_dir()),
+                        key=lambda p: p.stat().st_mtime) if racine.is_dir() else []
+        dossier = (pathlib.Path(args.verify) if args.verify
+                   else (copies[-1] if copies else None))
+        if dossier is None or not dossier.is_dir():
+            return print("aucune copie a juger dans %s" % racine) or 1
+        print("copie jugee: %s" % dossier.name)
+        fail, dits = relisible(dossier)
+        print("\n".join(dits))
+        print()
+        print("%d echec(s)" % fail)
+        return 1 if fail else 0
     conf = hosts()
     fige = figer(conf) if args.pull else None
     noms = inventaire(conf, fige)
@@ -129,7 +196,13 @@ def main(argv=None):
     print()
     print("%d/%d fichier(s) ramenes avec la bonne taille dans %s"
           % (bons, len(noms), dossier))
-    return 0 if bons == len(noms) else 1
+    # ramene n est pas sauvegarde: la copie doit se relire, sinon on a
+    # transporte des octets et cru avoir une sauvegarde
+    fail, dits = relisible(dossier)
+    print()
+    print("relecture de ce qui vient d arriver:")
+    print("\n".join(dits))
+    return 0 if bons == len(noms) and not fail else 1
 
 
 if __name__ == "__main__":
