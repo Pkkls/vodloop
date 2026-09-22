@@ -102,48 +102,6 @@ note_throttle() {
 }
 
 mkdir -p "$BASE"
-# yt-dlp writes into this log, so it grows by megabytes a day on a card that
-# also holds the hangar. Kept to its last two thousand lines.
-if [ -f "$LOG" ] && [ "$(wc -c < "$LOG")" -gt 5000000 ]; then
-  tail -n 2000 "$LOG" > "$LOG.tmp" && mv "$LOG.tmp" "$LOG"
-fi
-# --- report ----------------------------------------------------------------
-# A beacon, sent on every tick even when another run holds the lock: a fetch
-# takes the best part of an hour, and without this the watcher on the far side
-# reads a board that has not spoken since it started and calls it dead.
-report() {
-  [ -z "$DRY" ] || return 0
-  free=$(df -Pm "$BASE" | tail -1 | awk '{print $4}')
-  parts=""
-  for chan in $CHANNELS; do
-    n=$(ls "$BASE/hangar/$chan" 2>/dev/null | grep -c '\.m[kp][v4]$')
-    mb=$(du -sm "$BASE/hangar/$chan" 2>/dev/null | cut -f1)
-    parts="$parts${parts:+,}\"$chan\":{\"files\":$(num "$n"),\"mb\":$(num "$mb")}"
-  done
-  last_at=0; last_res=none
-  [ -f "$BASE/last" ] && read -r last_at last_res < "$BASE/last"
-  printf '{"at":%s,"free_mb":%s,"last_fetch":%s,"last_result":"%s","hangar":{%s}}'     "$(date +%s)" "$(num "$free")" "$(num "$last_at")" "$last_res" "$parts"     | $OSSH "$ORACLE" "cat > $V2/board.json.tmp && mv $V2/board.json.tmp $V2/board.json" 2>/dev/null
-}
-
-report
-
-if [ -z "$DRY" ]; then
-  # the owner's pid, not the lock's age, says whether a run is still alive:
-  # an age threshold once declared an eleven hour download orphaned mid-merge
-  if [ -d "$LOCK" ]; then
-    owner=$(cat "$LOCK/pid" 2>/dev/null)
-    [ -n "$owner" ] && [ -d "/proc/$owner" ] && exit 0
-    rm -rf "$LOCK"
-  fi
-  mkdir "$LOCK" 2>/dev/null || exit 0
-  echo $$ > "$LOCK/pid"
-  trap 'rm -rf "$LOCK"' EXIT INT TERM
-fi
-
-for chan in $CHANNELS; do
-  case "$chan" in *[!a-z0-9-]*) log "canal refuse: $chan"; exit 1 ;; esac
-done
-
 # --- ship ------------------------------------------------------------------
 ship() {
   chan=$1
@@ -187,6 +145,33 @@ ship() {
 }
 
 # --- fill ------------------------------------------------------------------
+# Minutes to wait before the next fetch, from the hours the far side can still
+# show and how the last one ended. A function rather than eight lines inside
+# fill() because this is the rule that broke on 2026-09-22 and a rule nothing
+# can call is a rule nothing can test.
+gap_for() {
+  runway_h=$1
+  last_res=$2
+  # The pace follows the wire, not the clock: a channel with hours in hand
+  # waits, one about to put up a loading card does not.
+  if [ "$runway_h" -lt 4 ]; then gap=15
+  elif [ "$runway_h" -lt 8 ]; then gap=35
+  elif [ "$runway_h" -lt 16 ]; then gap=$GAP_MIN
+  else gap=$((GAP_MIN * 2)); fi
+  # a failure of ours costs a wait, but never one that outlives the material
+  # in hand
+  [ "$last_res" = fail ] && [ "$runway_h" -ge 8 ] && gap=$FAIL_GAP_MIN
+  [ "$last_res" = fail ] && [ "$runway_h" -lt 8 ] && gap=$((gap + 10))
+  # a refusal is not a failure of ours, and the short gap a thin shelf buys
+  # must not apply to it. On 2026-09-22 it did: the reserve was under eight
+  # hours, so a wall at 02:10 was retried every twenty-five minutes, each retry
+  # walked into the same wall and raised the throttle again, and four of them
+  # inside fifteen minutes took the budget to its lowest level for six hours.
+  # Hurrying is what you do against a healthy source, not one that just said no.
+  [ "$last_res" = wall ] && gap=$FAIL_GAP_MIN
+  echo "$gap"
+}
+
 fill() {
   chan=$1
   dir=$BASE/hangar/$chan
@@ -203,23 +188,9 @@ fill() {
   # underneath is untouched: it is what keeps the address, and no shortage on
   # the far side is worth being refused by YouTube for.
   runway_h=$(( $(num "$(field runway_seconds "$want")") / 3600 ))
-  if [ "$runway_h" -lt 4 ]; then gap=15
-  elif [ "$runway_h" -lt 8 ]; then gap=35
-  elif [ "$runway_h" -lt 16 ]; then gap=$GAP_MIN
-  else gap=$((GAP_MIN * 2)); fi
   last_at=0; last_res=ok
   [ -f "$BASE/last" ] && read -r last_at last_res < "$BASE/last"
-  # a failure costs a wait, but never one that outlives the material in hand
-  [ "$last_res" = fail ] && [ "$runway_h" -ge 8 ] && gap=$FAIL_GAP_MIN
-  [ "$last_res" = fail ] && [ "$runway_h" -lt 8 ] && gap=$((gap + 10))
-  # a refusal is not a failure of ours, and the short gap a thin reserve buys
-  # must not apply to it. On 2026-09-22 it did: the reserve was under eight
-  # hours, so a wall at 02:10 was retried every twenty-five minutes, each retry
-  # walked into the same wall and raised the throttle again, and four of them
-  # inside fifteen minutes took the budget to its lowest level for six hours.
-  # Hurrying is what you do against a healthy source, not against one that has
-  # just said no.
-  [ "$last_res" = wall ] && gap=$FAIL_GAP_MIN
+  gap=$(gap_for "$runway_h" "$last_res")
   wait_s=$(( $(num "$last_at") + gap * 60 - now ))
   # Somebody spent channel points and is being quoted a wait: the pacing gap
   # is the board being polite to itself, not a limit that keeps the address,
@@ -463,6 +434,53 @@ turn() {
     printf '%s %s %s\n' "$debt" "$r" "$c"
   done | sort -n -k1,1 -k2,2 | awk '{print $3}'
 }
+
+# A test sources this file for its functions. Everything above is definitions;
+# everything below does the work, so that is where sourcing stops.
+[ -z "${HANGAR_SOURCED:-}" ] || return 0
+
+# yt-dlp writes into this log, so it grows by megabytes a day on a card that
+# also holds the hangar. Kept to its last two thousand lines.
+if [ -f "$LOG" ] && [ "$(wc -c < "$LOG")" -gt 5000000 ]; then
+  tail -n 2000 "$LOG" > "$LOG.tmp" && mv "$LOG.tmp" "$LOG"
+fi
+# --- report ----------------------------------------------------------------
+# A beacon, sent on every tick even when another run holds the lock: a fetch
+# takes the best part of an hour, and without this the watcher on the far side
+# reads a board that has not spoken since it started and calls it dead.
+report() {
+  [ -z "$DRY" ] || return 0
+  free=$(df -Pm "$BASE" | tail -1 | awk '{print $4}')
+  parts=""
+  for chan in $CHANNELS; do
+    n=$(ls "$BASE/hangar/$chan" 2>/dev/null | grep -c '\.m[kp][v4]$')
+    mb=$(du -sm "$BASE/hangar/$chan" 2>/dev/null | cut -f1)
+    parts="$parts${parts:+,}\"$chan\":{\"files\":$(num "$n"),\"mb\":$(num "$mb")}"
+  done
+  last_at=0; last_res=none
+  [ -f "$BASE/last" ] && read -r last_at last_res < "$BASE/last"
+  printf '{"at":%s,"free_mb":%s,"last_fetch":%s,"last_result":"%s","hangar":{%s}}'     "$(date +%s)" "$(num "$free")" "$(num "$last_at")" "$last_res" "$parts"     | $OSSH "$ORACLE" "cat > $V2/board.json.tmp && mv $V2/board.json.tmp $V2/board.json" 2>/dev/null
+}
+
+report
+
+if [ -z "$DRY" ]; then
+  # the owner's pid, not the lock's age, says whether a run is still alive:
+  # an age threshold once declared an eleven hour download orphaned mid-merge
+  if [ -d "$LOCK" ]; then
+    owner=$(cat "$LOCK/pid" 2>/dev/null)
+    [ -n "$owner" ] && [ -d "/proc/$owner" ] && exit 0
+    rm -rf "$LOCK"
+  fi
+  mkdir "$LOCK" 2>/dev/null || exit 0
+  echo $$ > "$LOCK/pid"
+  trap 'rm -rf "$LOCK"' EXIT INT TERM
+fi
+
+for chan in $CHANNELS; do
+  case "$chan" in *[!a-z0-9-]*) log "canal refuse: $chan"; exit 1 ;; esac
+done
+
 
 for chan in $CHANNELS; do ship "$chan"; done
 took=""
