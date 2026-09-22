@@ -357,6 +357,16 @@ finally:
     feed.pusher_pid, feed.profile_of, os.kill = was_pid, was_profile, was_kill
     feed.SESSION.unlink(missing_ok=True)
 
+print("chan: the frame rates Kick relays, and the one that cost a week")
+check("30 passes", chan.fps_supported(30.0))
+check("29.97 passes, which is what 30 usually is", chan.fps_supported(29.97))
+check("60 passes", chan.fps_supported(60.0))
+check("59.94 passes too", chan.fps_supported(59.94))
+check("50 does not: Kick re-encodes it and says nothing", not chan.fps_supported(50.0))
+check("control: 45 does not either", not chan.fps_supported(45.0))
+check("control: under 30 is fine, it is the middle that is refused",
+      chan.fps_supported(24.0))
+
 if shutil.which("ffmpeg"):
     print("cut: one real pass")
     for folder in (chan.QUEUE, chan.CURRENT, chan.AIRED, chan.CHUNKS, chan.WORK, chan.STATE):
@@ -379,6 +389,12 @@ if shutil.which("ffmpeg"):
     check("and remembered", "goodvideo01" in (chan.STATE / "aired.tsv").read_text())
     check("the chunk is h264 at the source's shape",
           chan.probe(chunks[0])["height"] == 480 if chunks else False)
+    check("a file the cutter accepted also probes as safe to remux",
+          chan.remux_is_safe(chan.AIRED / source.name) is True)
+    # v1 wrote off 22 good files because a probe that could not run read as a
+    # refusal. None is the third answer and it has to stay one
+    check("control: a probe that cannot run answers None, never False",
+          chan.remux_is_safe(chan.STATE / "pas-un-media.mkv") is None)
     make("2-Mauvaise_video-badvideo001.mkv", 50)
     source, origin = cut.next_source()
     cut.run_job(source, origin, 0)
