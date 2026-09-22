@@ -198,6 +198,53 @@ empty hashes that look like empty files.
 `grep` are compacted in transit. When output looks structurally wrong rather
 than factually wrong, run the tool by its direct path and compare.
 
+### 2026-09-22: the counter that watches the wrong kind of write
+
+`check.py` was written to say whether the pusher is actually emitting, and its
+first run reported the wire dead while the channel was streaming to viewers.
+
+```sh
+# what it read
+grep write_bytes: /proc/$(systemctl show -p MainPID --value vodloop-v2-push@nanatty247)/io
+```
+
+`write_bytes` in `/proc/<pid>/io` counts bytes a process sends to *storage*. The
+pusher sends bytes to a socket, so the counter sits still while everything is
+fine, and it would sit equally still if ffmpeg had died. Both answers are the
+same number, which is the definition of a probe that measures nothing.
+
+What settles it is the socket's own counter, which `watch.py` has read since the
+cutover:
+
+```sh
+ss -tnip | grep -A2 "pid=$PID," | grep -o 'bytes_sent:[0-9]*'
+```
+
+The error was caught in six seconds only because two probes for the same
+question disagreed. Written down here because the next person to reach for
+`/proc/<pid>/io` will reach for it for exactly the same reason: it is the
+obvious file and it is right for a process that writes to disk.
+
+### 2026-09-22: the ledger that stopped being about today
+
+`supply.aired_countries()` avoids sending the board a country the wire has just
+shown. It read `state/hours.tsv`, which nothing has written since the ledger
+moved to the chunk in 737aaa3. Its last line is dated 2026-09-20 07:22.
+
+The probe did not fail. It returned a list of countries, in the right shape,
+with plausible names in it, for ever. The only way to see it was to look at the
+file's timestamp while checking something else:
+
+```sh
+ls -la --time-style=+%m-%d_%H:%M state/*.tsv     # which ledgers still move
+```
+
+A file that stopped being written has no failure mode. It answers, and the
+answer was true once. Anything that reads state from a file should be read
+beside `ls -la` on that file at least once, and a reader that outlives the
+writer is the one class of fault nothing in this system alarms on.
+
+
 ## The rule under all of these
 
 Before believing a measurement, answer two questions. What would this command
