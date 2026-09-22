@@ -973,38 +973,38 @@ def waiting_for(seconds):
 # a reward had before, which is what lets an existing one be renamed in place:
 # a redemption is matched on its title, so creating the new one beside the old
 # would leave the old taking points for something nothing answers any more.
+# kil, 2026-09-22: "c'est que de l'AI slop la, incomprehensible. il faut que ce
+# soit minimaliste". Four languages on one line is already a crowd, and a whole
+# sentence in each made it a wall. Each one is now the shortest phrase that
+# still says what happens, and nothing else. What a refusal gives back is said
+# in chat at the moment it happens, which is the only moment it is worth reading.
 REWARDS = [
     {"key": "skip", "title": "Skip · Saltar · スキップ · Geç", "cost": 100, "input": False,
      "was": ["Skip this hour"],
-     "description": "Another stream now, points back if not · Otro directo ya, "
-                    "si no, puntos devueltos · 今すぐ別の配信へ、無理なら返却 · "
-                    "Hemen başka yayına, olmazsa iade"},
+     "description": "Another stream, now · Otro directo, ya · 今すぐ別の配信 · "
+                    "Hemen başka yayın"},
     {"key": "stay", "title": "Stay · Seguir · 続ける · Devam", "cost": 100, "input": False,
      "was": ["Keep this one going"],
-     "description": "One more hour of this one, points back if none left · "
-                    "Una hora más, si no queda, puntos devueltos · "
-                    "この配信をもう1時間、残りが無ければ返却 · "
-                    "Bir saat daha, kalmadıysa iade"},
+     "description": "One more hour of this · Una hora más · もう1時間 · "
+                    "Bir saat daha"},
     {"key": "pick", "title": "Pick · Elegir · 選ぶ · Seç", "cost": 100, "input": True,
      "was": ["Pick what plays next"],
-     "description": "Type !list in chat, put its number here · Escribe !list "
-                    "en el chat y pon el número aquí · チャットで!list、その番号をここに · "
-                    "Sohbette !list yaz, numarasını buraya"},
+     "description": "!list in chat, then the number here · !list en el chat, "
+                    "el número aquí · チャットで!list、番号をここに · "
+                    "Sohbette !list, numara buraya"},
     {"key": "request", "title": "Request · Pedir · リクエスト · İste", "cost": 100, "input": True,
      "was": ["Request a stream"],
-     "description": "Paste a YouTube link from this channel, it gets "
-                    "downloaded · Pega un enlace de YouTube del canal · "
-                    "このチャンネルのYouTubeリンクを貼る · "
-                    "Kanalın YouTube linkini yapıştır"},
+     "description": "Paste a YouTube link from this channel · Pega un enlace "
+                    "del canal · このチャンネルのYouTubeリンクを貼る · "
+                    "Bu kanalın YouTube linkini yapıştır"},
     {"key": "jump", "title": "+10 min · Avanzar · 10分進む · İleri sar", "cost": 100,
      "input": False, "was": ["+30 min · Avanzar · 30分進む · İleri sar"],
-     "description": "Moves 10 minutes forward in this stream · Avanza 10 "
-                    "minutos en este directo · この配信を10分進める · "
-                    "Bu yayında 10 dakika ileri sarar"},
+     "description": "Jumps 10 minutes ahead · Avanza 10 minutos · 10分進む · "
+                    "10 dakika ileri sarar"},
     {"key": "place", "title": "Travel · Viajar · 旅先 · Gezi", "cost": 100, "input": True,
      "was": ["Take me somewhere"],
-     "description": "A country or a city: Japan, Turkey, Peru, Chile, Korea · "
-                    "Un país o una ciudad · 国名か都市名を · Bir ülke veya şehir"},
+     "description": "A country or a city · Un país o una ciudad · 国か都市の名前 · "
+                    "Bir ülke veya şehir"},
 ]
 # the old spellings answer too: a redemption made in the seconds before the
 # rename lands carries the title the viewer saw, and it was paid for all the same
