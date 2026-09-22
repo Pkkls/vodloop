@@ -1326,6 +1326,32 @@ try:
           not kickapi.verify(_entetes("m1", _now, _corps, _autre), _corps))
 finally:
     kickapi.public_key = _vraie_cle
+
+print("kickapi: le jeton se refuse proprement quand le reseau tombe")
+_vrai_post = kickapi.requests.post
+_vieux_jetons = chan.read_json(kickapi.TOKENS, None)
+try:
+    _appels = []
+    kickapi.requests.post = lambda *a, **k: _appels.append(1)
+    chan.write_json(kickapi.TOKENS, {"access_token": "abc", "refresh_token": "r",
+                                     "expires_at": time.time() + 86400})
+    check("a token with margin left is handed back without touching the network",
+          kickapi.token() == "abc" and not _appels, _appels)
+    chan.write_json(kickapi.TOKENS, {"access_token": "abc", "refresh_token": "r",
+                                     "expires_at": time.time() - 1})
+
+    def _tombe(*a, **k):
+        raise kickapi.requests.RequestException("reseau coupe")
+
+    kickapi.requests.post = _tombe
+    check("control: a network that drops at refresh time answers None, it does not raise",
+          kickapi.token() is None)
+finally:
+    kickapi.requests.post = _vrai_post
+    if _vieux_jetons is None:
+        kickapi.TOKENS.unlink(missing_ok=True)
+    else:
+        chan.write_json(kickapi.TOKENS, _vieux_jetons)
 tries = []
 real_call, real_sleep = kickapi._call, time.sleep
 try:

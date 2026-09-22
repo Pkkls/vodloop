@@ -135,10 +135,19 @@ def token():
         return data["access_token"]
     if not data.get("refresh_token"):
         return None
-    answer = requests.post(f"{ID_BASE}/oauth/token", timeout=30, data={
-        "grant_type": "refresh_token", "refresh_token": data["refresh_token"],
-        "client_id": APP.get("KICK_CLIENT_ID", ""),
-        "client_secret": APP.get("KICK_CLIENT_SECRET", "")})
+    try:
+        answer = requests.post(f"{ID_BASE}/oauth/token", timeout=30, data={
+            "grant_type": "refresh_token", "refresh_token": data["refresh_token"],
+            "client_id": APP.get("KICK_CLIENT_ID", ""),
+            "client_secret": APP.get("KICK_CLIENT_SECRET", "")})
+    except requests.RequestException as souci:
+        # public_key() garde deja sa requete; celle-ci, qui compte plus, ne la
+        # gardait pas. Un incident reseau a la minute du rafraichissement
+        # remontait alors en exception jusqu a l appelant, qui l ecrit en
+        # "commande en erreur": le viewer n a pas de reponse au lieu d avoir un
+        # refus, et le log accuse la commande plutot que le reseau.
+        chan.log(f"refresh injoignable: {str(souci)[:80]}")
+        return None
     if answer.status_code != 200:
         chan.log(f"refresh refuse ({answer.status_code}): autorisation a refaire")
         return None
