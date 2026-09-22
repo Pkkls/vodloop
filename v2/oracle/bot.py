@@ -187,16 +187,23 @@ def playing():
 
 
 def shelf():
-    """Files that still hold time nobody has seen, queue first then reserve.
+    """Files that still hold time nobody has seen: queue, the one being cut, reserve.
 
     The second value is hours, rounded down, because that is what the chat
     counts in. The ledger counts in chunks, so a file holding forty unseen
     minutes reads as nought hours here and is still perfectly drawable.
+
+    current/ was missing until 2026-09-22 and it is where a delivery sits for
+    the whole time it is on air. Leaving it out told the chat there was less to
+    watch than there was, refused skips against a floor the channel was above,
+    and answered "this is the only stream left" while another one was being
+    cut. The same hole was in supply's runway, where it also told the board to
+    hurry.
     """
     book = cut.ledger()
     durations = chan.read_json(chan.STATE / "durations.json", {})
     held, out = cut.reserved(), []
-    for folder in (chan.QUEUE, chan.AIRED):
+    for folder in (chan.QUEUE, chan.CURRENT, chan.AIRED):
         for path in chan.media(folder):
             free = cut.unaired(path, book, durations, held)
             if free:
