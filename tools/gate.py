@@ -97,6 +97,35 @@ def suite_v2(witness):
     return (not ok if witness else ok), resume
 
 
+ERRORGUARD = [
+    pathlib.Path(r"C:\Users\kil\Downloads\02 - Projects\disk-triage\errorguard.py"),
+    pathlib.Path(r"C:\Users\kil\Downloads\disk-triage\errorguard.py"),
+]
+
+
+def garde_des_commandes(witness):
+    """errorguard et son propre corpus historique.
+
+    Il est ici parce qu il a passe des semaines a sortir 0 sur chaque commande:
+    son hook pointait sur un chemin perime et personne ne l a su. Un garde dont
+    la mort est invisible est pire qu une absence de garde, et le seul remede
+    est que quelque chose le compte.
+    """
+    outil = next((p for p in ERRORGUARD if p.exists()), None)
+    if outil is None:
+        return False, "errorguard introuvable dans %d chemin(s) connus" % len(ERRORGUARD)
+    if witness:
+        # Son rouge: une commande de son corpus doit etre attrapee, et --check
+        # rend 1 quand il attrape. Lu sur le code de sortie et non sur le texte:
+        # le resume ne garde que la derniere ligne, et l identifiant de regle
+        # est sur celle d avant. C est la meme erreur que de lire un verdict a
+        # travers un tube, en plus petit.
+        ok, verdict = run([sys.executable, str(outil), "--check",
+                           "node --check /tmp/x.js 2>&1 | tail -5 && echo 'syntax valid'"])
+        return (not ok), verdict
+    return run([sys.executable, str(outil), "--selftest"])
+
+
 def livraison_du_relais(witness):
     """Ce que le relais garde et ce qu il jette: la suite porte ses temoins."""
     cible = "tests/test_relay.py"
@@ -114,6 +143,7 @@ def livraison_du_relais(witness):
 ETAPES = [
     ("noms morts dans les suites", noms_morts, False),
     ("regles du garde", regles_du_garde, False),
+    ("garde des commandes", garde_des_commandes, False),
     ("livraison du relais", livraison_du_relais, False),
     ("derive deploye/commite", derive, True),
     ("suite v2 contre le deploye", suite_v2, True),
