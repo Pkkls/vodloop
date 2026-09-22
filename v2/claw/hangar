@@ -58,7 +58,12 @@ RECENT=120
 BREADTH=3
 [ -f "$CONF" ] && . "$CONF"
 
-DRY=""
+# --dry, or DRY=1 in the environment. The argument was the only way in until
+# 2026-09-22, and DRY=1 in front of the command silently did the real thing:
+# it took the lock, sent the beacon and would have started a download on the
+# home line. A flag that reads as a rehearsal has to be one whichever way it
+# is spelled.
+DRY="${DRY:-}"
 [ "${1:-}" = "--dry" ] && DRY=1
 OSSH="ssh -i $KEY -o BatchMode=yes -o ConnectTimeout=20 -o StrictHostKeyChecking=accept-new"
 ts() { date '+%Y-%m-%d %H:%M:%S'; }
