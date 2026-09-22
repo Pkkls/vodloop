@@ -306,6 +306,57 @@ finally:
     feed.profile_of = real_profile
     feed.SESSION.unlink(missing_ok=True)
 
+print("feed: the net under a chunk the session cannot carry")
+# it ends the live when it fires, so every reason not to fire is checked here:
+# the wire was restarted 1298 times in a day once, and this is the function
+# that would do it again
+was_pid, was_profile, was_kill = feed.pusher_pid, feed.profile_of, os.kill
+signals = []
+
+
+def ouverte(reopened_at=0):
+    chan.write_json(feed.SESSION,
+                    {"pid": 4242, "profile": [1280, 720, 60.0], "reopened_at": reopened_at})
+
+
+try:
+    feed.pusher_pid = lambda: 4242
+    feed.profile_of = lambda chunk: (1920, 1080, 60.0)
+    os.kill = lambda pid, sig: signals.append(pid)
+    ouverte()
+    check("a chunk above the session ends the session, once",
+          feed.reopen_if_above("x.ts", True, now=lambda: 10_000) and signals == [4242],
+          signals)
+    signals.clear()
+    ouverte(reopened_at=10_000)
+    check("control: not again inside the gap, whatever the chunk says",
+          not feed.reopen_if_above("x.ts", True, now=lambda: 10_000) and signals == [])
+    ouverte()
+    check("control: not when the caller says it may not",
+          not feed.reopen_if_above("x.ts", False, now=lambda: 10_000) and signals == [])
+    feed.profile_of = lambda chunk: (1280, 720, 60.0)
+    check("control: a chunk the session carries is left alone",
+          not feed.reopen_if_above("x.ts", True, now=lambda: 10_000) and signals == [])
+    feed.profile_of = lambda chunk: None
+    check("control: a chunk nothing could measure is not a reason to cut the wire",
+          not feed.reopen_if_above("x.ts", True, now=lambda: 10_000) and signals == [])
+    # the session is written before the signal, so a kill that fails has to put
+    # it back or the next pass reads a session that never ended
+    feed.profile_of = lambda chunk: (1920, 1080, 60.0)
+
+    def refuse(pid, sig):
+        raise OSError("pas de processus")
+
+    os.kill = refuse
+    ouverte(reopened_at=7)
+    check("control: a signal that cannot be sent leaves the session as it was",
+          not feed.reopen_if_above("x.ts", True, now=lambda: 10_000)
+          and chan.read_json(feed.SESSION, {}).get("reopened_at") == 7,
+          chan.read_json(feed.SESSION, {}))
+finally:
+    feed.pusher_pid, feed.profile_of, os.kill = was_pid, was_profile, was_kill
+    feed.SESSION.unlink(missing_ok=True)
+
 if shutil.which("ffmpeg"):
     print("cut: one real pass")
     for folder in (chan.QUEUE, chan.CURRENT, chan.AIRED, chan.CHUNKS, chan.WORK, chan.STATE):
