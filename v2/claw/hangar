@@ -35,6 +35,11 @@ DAY_MB=16000
 # and the daily budget goes back to being what it should be: a long stop, not
 # the thing that decides how fast a starving channel may be fed.
 HOUR_MB=2500
+# Mo par heure de video, mesure sur ce que la chaine recoit reellement. Un
+# candidat ne dit pas sa taille, il dit sa duree: c est par ce chiffre que le
+# plafond ci-dessus peut etre lu contre ce qui vient et pas seulement contre ce
+# qui est deja pris.
+MB_PER_HOUR=780
 # how long a refusal keeps the budget halved, and how far down it can go
 THROTTLE_HOLD_MIN=360
 THROTTLE_MAX_LEVEL=3
@@ -203,6 +208,29 @@ gap_for() {
   echo "$gap"
 }
 
+# Un plafond lu contre ce qui est deja pris, et jamais contre ce qui vient, ne
+# borne rien: a budget vide il autorise un fichier de n importe quelle taille.
+# Mesure du 2026-09-22 sur fetched.tsv: 8053 Mo dans une heure glissante contre
+# HOUR_MB=2500, et 3801 Mo/h soutenus sur six heures, soit au-dessus des
+# 2800 Mo/h qui ont fait murer l adresse le 2026-09-14. Le plafond etait donc
+# une intention, pas une borne.
+#
+# Un candidat ne dit pas sa taille avant d etre pris, mais il dit sa duree:
+# colonne 2 de candidates.tsv. Ce qui reste du budget se convertit donc en
+# secondes de video, et le tirage ne voit que ce qui tient dedans. Zero veut
+# dire que plus rien ne tient et que le tirage doit rendre vide.
+#
+# La demande du chat ne passe pas par ici: elle est prise et non tiree, c est
+# deja ecrit plus bas, et un viewer qui demande explicitement vaut le
+# depassement. C est une decision, pas un oubli.
+seconds_affordable() {
+  # $1 ce qui reste de l heure en Mo, $2 ce qui reste des 24 h en Mo
+  reste=$1
+  [ "$2" -lt "$reste" ] && reste=$2
+  [ "$reste" -gt 0 ] || { echo 0; return; }
+  echo $((reste * 3600 / MB_PER_HOUR))
+}
+
 fill() {
   chan=$1
   dir=$BASE/hangar/$chan
@@ -246,6 +274,9 @@ fill() {
   hour_kb=$(awk -v t=$((now - 3600)) '$1 >= t { s += $2 } END { print s + 0 }' "$BASE/fetched.tsv" 2>/dev/null)
   hour_mb=$((HOUR_MB >> lvl))
   [ "$(num "$hour_kb")" -lt $((hour_mb * 1024)) ] || { log "debit horaire atteint ($((hour_kb / 1024)) sur $hour_mb Mo)"; return 1; }
+  # ce que les deux plafonds laissent encore prendre, en secondes de video
+  affordable=$(seconds_affordable \
+    "$((hour_mb - $(num "$hour_kb") / 1024))" "$((budget_mb - $(num "$day_kb") / 1024))")
 
   maxh=$(num "$(field maxh "$want")")
   case "$maxh" in 1080 | 720 | 480) ;; *) maxh=720 ;; esac
@@ -279,11 +310,11 @@ fill() {
   # rather than drawn, and it is the only thing that jumps the random pick.
   vid=$(printf '%s\n' "$cands" | sed -n 's/^!\([A-Za-z0-9_-]\{11\}\).*/\1/p' | head -1)
   [ -n "$vid" ] && log "$chan: demande du chat, $vid passe devant le tirage"
-  [ -n "$vid" ] || vid=$(printf '%s\n' "$cands" | awk -v skip="$skip" '
+  [ -n "$vid" ] || vid=$(printf '%s\n' "$cands" | awk -v skip="$skip" -v maxs="$affordable" '
     BEGIN { n = split(skip, s, " "); for (i = 1; i <= n; i++) x[s[i]] = 1; srand() }
-    NF >= 2 && length($1) == 11 && !($1 in x) { c[++k] = $1 }
+    NF >= 2 && length($1) == 11 && !($1 in x) && $2 + 0 <= maxs { c[++k] = $1 }
     END { if (k) print c[int(rand() * k) + 1] }')
-  [ -n "$vid" ] || { log "$chan: aucun candidat"; echo "$now ok" > "$BASE/last"; return 1; }
+  [ -n "$vid" ] || { log "$chan: aucun candidat (le budget tient ${affordable} s de video)"; echo "$now ok" > "$BASE/last"; return 1; }
   log "$chan: telecharge $vid en ${maxh}p (hangar $held Mo, 24 h $((day_kb / 1024)) Mo)"
   [ -z "$DRY" ] || return 0
   date +%s > "$BASE/$chan.tried"

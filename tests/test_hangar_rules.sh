@@ -44,6 +44,20 @@ is "deux enregistrements inedits: le chat n a nulle part ou sauter"    "$(shorte
 is "controle: trois, c est assez, on tire large" "$(shortest_first 2 3)" ""
 is "controle: un far side trop vieux pour envoyer streams ne declenche rien"    "$(shortest_first 2 0)" ""
 
+echo "le plafond se lit contre la duree de ce qui vient, pas seulement contre le pris"
+is "budget horaire intact: trois heures de video tiennent"  "$(seconds_affordable 2500 100000)" 11538
+is "le plus petit des deux plafonds borne"                  "$(seconds_affordable 2500 300)" 1384
+is "temoin: plafond horaire epuise, plus rien ne tient"     "$(seconds_affordable 0 100000)" 0
+is "temoin: deja depasse, on ne rend pas un negatif"        "$(seconds_affordable -500 100000)" 0
+# le 2026-09-22 le registre montrait 8053 Mo dans une heure glissante contre un
+# plafond de 2500: le fichier de 6.8 h etait tire sans que sa taille soit pesee,
+# et un budget intact autorisait n importe quelle taille
+tirable() { [ "$1" -le "$(seconds_affordable "$2" "$3")" ] && echo tirable || echo hors-budget; }
+is "temoin: les 6.8 h qui ont fait l heure a 8053 Mo ne sont plus tirables" \
+   "$(tirable 24480 2500 100000)" hors-budget
+is "controle: trois heures tiennent sous le meme plafond" \
+   "$(tirable 10800 2500 100000)" tirable
+
 echo "on n expedie pas contre une offre qui ne sait pas ce qu elle a deja recu"
 now=1790000000
 is "rien a fournir: on ne bouge pas"    "$(may_ship 0 $now 0 $now)" "rien a fournir"
