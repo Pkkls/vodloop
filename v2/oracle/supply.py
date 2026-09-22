@@ -220,13 +220,19 @@ def aired_countries(titles, recent=12):
     """
     seen, out = set(), []
     rows = []
-    try:
-        for line in (chan.STATE / "hours.tsv").read_text().splitlines():
-            fields = line.split("	")
-            if len(fields) >= 3:
-                rows.append((int(fields[0]), fields[1]))
-    except (OSError, ValueError):
-        pass
+    # Both ledgers, because the granularity moved and this reader did not. An
+    # hour is spent by the chunk since 737aaa3, so units.tsv is the one that
+    # still grows and hours.tsv stopped on 2026-09-20: reading it alone was
+    # rotating countries against a two day old memory, for ever. The two have
+    # the same shape, epoch then id, and the id is all this needs.
+    for name in ("units.tsv", "hours.tsv"):
+        try:
+            for line in (chan.STATE / name).read_text().splitlines():
+                fields = line.split("	")
+                if len(fields) >= 3:
+                    rows.append((int(fields[0]), fields[1]))
+        except (OSError, ValueError):
+            continue
     for _, vid in sorted(rows, reverse=True):
         if vid in seen:
             continue
