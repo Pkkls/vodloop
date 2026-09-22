@@ -17,6 +17,7 @@ Nothing here writes to the channel. The failing cases are empty directories,
 made-up numbers and a unit name that was never installed.
 """
 import pathlib
+import re
 import shutil
 import subprocess
 import sys
@@ -151,6 +152,19 @@ def newest_arrival(folders):
     return newest
 
 
+def hour_overrun(title):
+    """An hour count in a title that is past the total it counts out of.
+
+    Every other probe here watches a state. This one watches a sentence, which
+    is the thing viewers actually read, and it exists because on 2026-09-22 the
+    channel said "hour 3/2" all evening: seven of the eight files on disk
+    announced one hour more than they hold. Nothing could have caught that, both
+    calculations being correct on their own.
+    """
+    found = re.search(r"hour (\d+)/(\d+)", title or "")
+    return bool(found) and int(found.group(1)) > int(found.group(2))
+
+
 # --- the pass ---------------------------------------------------------------
 
 def run():
@@ -191,6 +205,13 @@ def run():
         check("il reste de l inedit a montrer", unseen > 0,
               witness=unseen_units((pathlib.Path(empty),), book, durations, held) > 0,
               detail=f"{unseen * chan.CHUNK_SECONDS / 3600:.1f} h")
+
+    said = chan.read_json(chan.STATE / "bot.json", {}).get("title") or ""
+    check("l heure annoncee ne depasse pas le total qu elle annonce",
+          not hour_overrun(said),
+          witness=not hour_overrun("Day 9.1 IRL Pushkar (18 Apr 2026) · hour 3/2"),
+          detail=(found.group(0) if (found := re.search(r"hour \d+/\d+", said))
+                  else ("titre sans heure" if said else "aucun titre pose")))
 
     ready = sorted(chan.SHORTS.glob("*.ts"))
     check("aucun short ne depasse la session", not oversized(ready, session),
