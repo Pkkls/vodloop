@@ -223,6 +223,35 @@ gap_for() {
 # La demande du chat ne passe pas par ici: elle est prise et non tiree, c est
 # deja ecrit plus bas, et un viewer qui demande explicitement vaut le
 # depassement. C est une decision, pas un oubli.
+# Three rules that lived inline in fill() and shorts(), which is to say three
+# rules nothing could call and nothing could check. The pacing rule was in that
+# state on 2026-09-22 and cost a day of supply, so these come out with it.
+may_jump() {
+  # $1 secondes d attente restantes, $2 resultat du dernier essai, $3 demandes
+  # du chat en attente. Vide: la demande a le droit de sauter l attente.
+  if [ "$1" -le 0 ]; then echo "rien a sauter"
+  elif [ "$2" = wall ]; then echo "mur"
+  elif [ "$3" -le 0 ]; then echo "pas de demande"
+  else echo ""
+  fi
+}
+
+pick_requested() {
+  # $1 les candidats, $2 les ids ecartes. Une demande passe devant le tirage,
+  # jamais devant le registre des echecs.
+  printf '%s\n' "$1" | sed -n 's/^!\([A-Za-z0-9_-]\{11\}\).*/\1/p' |
+    awk -v skip="$2" '
+      BEGIN { n = split(skip, s, " "); for (i = 1; i <= n; i++) x[s[i]] = 1 }
+      !($1 in x) { print; exit }'
+}
+
+pick_short() {
+  # $1 la liste des shorts, $2 les ids ecartes
+  printf '%s\n' "$1" | awk -v bad="$2" '
+      BEGIN { n = split(bad, s, " "); for (i = 1; i <= n; i++) x[s[i]] = 1 }
+      length($1) == 11 && !($1 in x) { print $1; exit }'
+}
+
 seconds_affordable() {
   # $1 ce qui reste de l heure en Mo, $2 ce qui reste des 24 h en Mo
   reste=$1
@@ -263,8 +292,8 @@ fill() {
   # quarter of an hour, each one halving the budget, which left the board at
   # an eighth and still at half six hours later. The wall is about the
   # address, not about the video, so nothing jumps it.
-  if [ "$wait_s" -gt 0 ] && [ "$last_res" != wall ] \
-     && [ "$(num "$(field requested "$want")")" -gt 0 ]; then
+  if [ -z "$(may_jump "$wait_s" "$last_res" \
+              "$(num "$(field requested "$want")")")" ]; then
     log "$chan: une demande du chat attend, on ne patiente pas les $((wait_s / 60 + 1)) min"
     wait_s=0
   fi
@@ -318,9 +347,7 @@ fill() {
   # rather than drawn, and it is the only thing that jumps the random pick.
   # It jumps the draw, not the failure record: a paid request for something
   # that cannot be fetched used to come back every five minutes forever.
-  vid=$(printf '%s\n' "$cands" | sed -n 's/^!\([A-Za-z0-9_-]\{11\}\).*/\1/p' |
-        awk -v skip="$skip" 'BEGIN { n = split(skip, s, " "); for (i = 1; i <= n; i++) x[s[i]] = 1 }
-                             !($1 in x) { print; exit }')
+  vid=$(pick_requested "$cands" "$skip")
   [ -n "$vid" ] && log "$chan: demande du chat, $vid passe devant le tirage"
   [ -n "$vid" ] || vid=$(printf '%s\n' "$cands" | awk -v skip="$skip" -v maxs="$affordable" '
     BEGIN { n = split(skip, s, " "); for (i = 1; i <= n; i++) x[s[i]] = 1; srand() }
@@ -471,9 +498,7 @@ shorts() {
   bad=$(awk -v t=$((now - 7 * 86400)) -v m="$MAX_FAILS" \
           '$1 >= t { c[$2]++ } END { for (k in c) if (c[k] >= m) print k }' \
           "$BASE/failed.tsv" 2>/dev/null | tr '\n' ' ')
-  vid=$(printf '%s\n' "$list" | awk -v bad="$bad" '
-          BEGIN { n = split(bad, s, " "); for (i = 1; i <= n; i++) x[s[i]] = 1 }
-          length($1) == 11 && !($1 in x) { print $1; exit }')
+  vid=$(pick_short "$list" "$bad")
   [ -n "$vid" ] || return 0
   log "$chan: short $vid"
   [ -z "$DRY" ] || return 0
