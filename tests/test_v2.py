@@ -929,6 +929,17 @@ try:
     check("control: a run with nothing new says nothing", len(said_tg) == 1, said_tg)
     supply.announce([un], {}, True)
     check("control: a file leaving is not an arrival either", len(said_tg) == 1, said_tg)
+    # 2026-09-22: the queue empties every time the cutter takes the last file,
+    # and the guard meant for the very first run fired again on the next one
+    for stale in (un, deux):
+        stale.unlink(missing_ok=True)
+    supply.announce([], {}, True)
+    trois = chan.QUEUE / "1789000002-Trois-ccccccccccc.mkv"
+    trois.write_bytes(b"x")
+    supply.announce([trois], {f"{trois.name}:{trois.stat().st_size}": 3600}, True)
+    check("an arrival after the queue ran empty is still announced",
+          len(said_tg) == 2 and "Trois" in said_tg[-1], said_tg)
+    trois.unlink(missing_ok=True)
 finally:
     chan.telegram = real_tg
     supply.SEEN.unlink(missing_ok=True)

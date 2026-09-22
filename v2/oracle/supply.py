@@ -99,17 +99,26 @@ def announce(queue, durations, apply):
     reads the names it knew last time from the disk, so a restart does not
     announce the whole library.
     """
-    now = {p.name for p in queue}
+    # every folder a delivery can be in by the time this runs, not just the
+    # queue: the cutter takes a file out of it within the minute, so a delivery
+    # that lands between two passes was never in the queue when either looked
+    now = {p.name for folder in (chan.QUEUE, chan.CURRENT, chan.AIRED)
+           for p in chan.media(folder)}
+    first = not SEEN.exists()
     before = set(chan.read_json(SEEN, {}).get("queue") or [])
     fresh = sorted(now - before)
     if apply:
         chan.write_json(SEEN, {"queue": sorted(now)})
-    if not before or not fresh:
-        # the first run has nothing to compare against, and announcing the
-        # library once would be the wrong kind of first impression
+    if first or not fresh:
+        # nothing to compare against on the very first run, and announcing the
+        # whole library once would be the wrong kind of first impression. An
+        # empty set is not the same as no set: the queue empties every time the
+        # cutter takes the last file, and that used to silence the next arrival
         return []
     for name in fresh:
-        hours = chan.duration(chan.QUEUE / name, durations) / 3600
+        where = next((f / name for f in (chan.QUEUE, chan.CURRENT, chan.AIRED)
+                      if (f / name).exists()), chan.QUEUE / name)
+        hours = chan.duration(where, durations) / 3600
         # the same reading bot.py gives a viewer: no epoch prefix, no video id,
         # no extension, because this line is read by a person on a phone
         title = re.sub(r"^\d{9,}-", "", pathlib.Path(name).stem)
