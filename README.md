@@ -352,4 +352,15 @@ for t in tests/test_*.py; do VODLOOP_ROOT=$(mktemp -d) python3 "$t"; done
 ```
 
 Several tests do not isolate `VODLOOP_ROOT` on their own, so run them against a
-throwaway root or they write into live state.
+throwaway root or they write into live state. `tests/test_v2.py` makes its own
+temporary channel and needs nothing set.
+
+Three suites are shell rather than Python, and they run where their subject
+runs, because busybox ash and bash disagree about exactly the things they
+measure:
+
+```sh
+sh tests/test_hangar_rules.sh /usr/bin/hangar   # on the board: pacing, breadth
+sh tests/test_claw_scripts.sh                   # on the board: quoting, globs, awk
+sh tests/test_vodloopctl.sh                     # on the server
+```
