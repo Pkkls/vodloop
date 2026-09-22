@@ -1,0 +1,188 @@
+#!/usr/bin/env python3
+"""What is true of the running chain, and proof that the probe could say no.
+
+    CHAN_ROOT=... python3 check.py            everything, one pass
+    CHAN_ROOT=... python3 check.py --quiet    the verdict line only
+
+Thirty-one test files prove the code. Nothing proved the chain, which is the
+gap every handoff since the cutover has named and none has closed.
+
+The shape is the whole point. Every line asks a question of the live system,
+then asks the *same* question, through the same code, of a case built to fail.
+A probe that cannot say no has not said yes, it has said nothing, and the two
+are indistinguishable exactly when it matters. A line whose witness does not
+fail is reported as blind rather than as passing.
+
+Nothing here writes to the channel. The failing cases are empty directories,
+made-up numbers and a unit name that was never installed.
+"""
+import pathlib
+import shutil
+import sys
+import tempfile
+import time
+
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
+
+import chan  # noqa: E402
+import cut  # noqa: E402
+import feed  # noqa: E402
+import watch  # noqa: E402
+
+ARRIVAL_HOURS = int(chan.conf_num("CHECK_ARRIVAL_HOURS", 12))
+BEACON_MINUTES = int(chan.conf_num("CHECK_BEACON_MINUTES", 45))
+
+rows = []
+
+
+def check(name, live, witness, detail=""):
+    """live is the answer about the channel. witness is the same question put
+    to something built to fail, so it has to come back false."""
+    rows.append((name, bool(live), witness is False, detail))
+
+
+# --- the probes, each one a function of its inputs so a witness can reach it -
+
+def moving(pid, seconds):
+    """Bytes the pusher's socket has sent over a window, or None.
+
+    The counter is the socket's, not the process's: /proc/<pid>/io counts what
+    a process writes to storage, and a pusher writes to a socket, so it reads
+    zero while the wire is perfectly alive. This probe said the channel was
+    dead the first time it ran, which is the whole reason the line below asks
+    the same question of a window nothing can happen in.
+    """
+    first = watch.sent_bytes(pid)
+    if first is None:
+        return None
+    time.sleep(seconds)
+    second = watch.sent_bytes(pid)
+    return None if second is None else second - first
+
+
+def unseen_units(folders, book, durations, held):
+    """Units on the disk nobody has been shown, over the folders given."""
+    total = 0
+    for folder in folders:
+        for path in chan.media(folder):
+            total += len(cut.unaired(path, book, durations, held))
+    return total
+
+
+def doubled(book):
+    """Files whose ledger holds the same unit twice: a repeat that already happened."""
+    return [vid for vid, units in book.items() if len(units) != len(set(units))]
+
+
+def oversized(paths, session):
+    """Those whose picture the session would refuse, plus those unreadable."""
+    out = []
+    for path in paths:
+        info = chan.probe(path)
+        if info is None:
+            out.append(path.name)
+        elif session and feed.exceeds((info["width"], info["height"], info["fps"]),
+                                      tuple(session)):
+            out.append(path.name)
+    return out
+
+
+def newest_arrival(folders):
+    newest = 0
+    for folder in folders:
+        for path in chan.media(folder):
+            head = path.name.split("-", 1)[0]
+            if head.isdigit():
+                newest = max(newest, int(head))
+    return newest
+
+
+# --- the pass ---------------------------------------------------------------
+
+def run():
+    pid = int(chan.systemctl("show", "-p", "MainPID", "--value", chan.unit("push")) or 0)
+    moved = moving(pid, 6) if pid > 0 else None
+    check("le pousseur envoie des octets", moved is not None and moved > 0,
+          # the same counter, the same process, over no time at all
+          witness=(moving(pid, 0) or 0) > 0 if pid > 0 else False,
+          detail=f"{moved} octets en 6 s" if moved is not None else "pas de pid")
+
+    session = chan.read_json(feed.SESSION, {}).get("profile")
+    clip = chan.probe(chan.FILLER)
+    shape = (clip["width"], clip["height"], clip["fps"]) if clip else None
+    check("la session porte le profil du clip d attente",
+          bool(session and shape and tuple(session) == shape),
+          witness=bool(session) and tuple(session) == (856, 480, 30.0),
+          detail=f"session {session}, clip {shape}")
+
+    waiting = sorted(chan.CHUNKS.glob("*.ts"))
+    with tempfile.TemporaryDirectory() as empty:
+        check("des morceaux attendent d etre envoyes", len(waiting) > 0,
+              witness=len(sorted(pathlib.Path(empty).glob("*.ts"))) > 0,
+              detail=f"{len(waiting)} morceaux")
+
+    book = cut.ledger()
+    check("aucune heure n est inscrite deux fois au registre", not doubled(book),
+          witness=not doubled({"temoin": [3, 3]}),
+          detail=", ".join(doubled(book))[:60])
+
+    durations = chan.read_json(chan.STATE / "durations.json", {})
+    held = cut.reserved()
+    unseen = unseen_units((chan.QUEUE, chan.CURRENT, chan.AIRED), book, durations, held)
+    with tempfile.TemporaryDirectory() as empty:
+        check("il reste de l inedit a montrer", unseen > 0,
+              witness=unseen_units((pathlib.Path(empty),), book, durations, held) > 0,
+              detail=f"{unseen * chan.CHUNK_SECONDS / 3600:.1f} h")
+
+    ready = sorted(chan.SHORTS.glob("*.ts"))
+    check("aucun short ne depasse la session", not oversized(ready, session),
+          # a picture no session opened on can accept, put to the same function
+          witness=not (session and feed.exceeds((3840, 2160, 60.0), tuple(session))),
+          detail=f"{len(ready)} shorts prets")
+
+    board = chan.read_json(chan.ROOT.parent / "board.json", {})
+    age = (time.time() - board.get("at", 0)) / 60
+    check("la carte donne signe de vie", age < BEACON_MINUTES,
+          witness=(time.time() - 0) / 60 < BEACON_MINUTES,
+          detail=f"balise il y a {age:.0f} min")
+
+    newest = newest_arrival((chan.QUEUE, chan.CURRENT, chan.AIRED))
+    hours = (time.time() - newest) / 3600 if newest else 999
+    with tempfile.TemporaryDirectory() as empty:
+        empty_age = newest_arrival((pathlib.Path(empty),))
+        check("une livraison est arrivee recemment", hours < ARRIVAL_HOURS,
+              witness=(time.time() - empty_age) / 3600 < ARRIVAL_HOURS,
+              detail=f"derniere il y a {hours:.1f} h")
+
+    free = shutil.disk_usage(chan.ROOT).free
+    check("le disque est au-dessus du plancher", free > chan.FLOOR_BYTES,
+          witness=0 > chan.FLOOR_BYTES,
+          detail=f"{free / chan.GIB:.1f} Go libres")
+
+    for role in ("push", "feed", "cut", "bot"):
+        if role == "bot" and chan.systemctl("is-enabled", chan.unit(role)) != "enabled":
+            continue
+        state = chan.systemctl("is-active", chan.unit(role))
+        check(f"l unite {role} tourne", state == "active",
+              witness=chan.systemctl("is-active", chan.unit("jamais-installee")) == "active",
+              detail=state)
+
+
+def main(argv):
+    try:
+        run()
+    except Exception as problem:  # a probe that raises is a finding, not a crash
+        check("la passe est allee au bout", False, witness=False, detail=str(problem)[:80])
+    wrong = [r for r in rows if not r[1]]
+    blind = [r for r in rows if not r[2]]
+    if "--quiet" not in argv:
+        for name, live, witnessed, detail in rows:
+            mark = "AVEUGLE" if not witnessed else ("OK     " if live else "NON    ")
+            print(f"  {mark}  {name}{'  ' + detail if detail else ''}")
+    print(f"{len(rows) - len(wrong)}/{len(rows)} vrai, "
+          f"{len(blind)} sonde(s) incapable(s) de dire non")
+    return 1 if wrong or blind else 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))
