@@ -97,9 +97,24 @@ def suite_v2(witness):
     return (not ok if witness else ok), resume
 
 
+def livraison_du_relais(witness):
+    """Ce que le relais garde et ce qu il jette: la suite porte ses temoins."""
+    cible = "tests/test_relay.py"
+    if witness:
+        # son rouge ne se fabrique pas en argument: on lui donne un fichier
+        # qui n a jamais existe, et il doit refuser plutot que passer
+        code = ("import sys; sys.path.insert(0, 'tools'); import relay; "
+                "bon, why = relay.verify('nexiste_pas.mkv', 10); "
+                "print(why); sys.exit(0 if bon else 1)")
+        ok, resume = run([sys.executable, "-c", code])
+        return (not ok), resume
+    return run([sys.executable, cible])
+
+
 ETAPES = [
     ("noms morts dans les suites", noms_morts, False),
     ("regles du garde", regles_du_garde, False),
+    ("livraison du relais", livraison_du_relais, False),
     ("derive deploye/commite", derive, True),
     ("suite v2 contre le deploye", suite_v2, True),
 ]

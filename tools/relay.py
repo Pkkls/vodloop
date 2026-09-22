@@ -180,6 +180,37 @@ def held_elsewhere():
     return lock, False
 
 
+def verify(path, attendu_s):
+    """(bon, pourquoi). Un fichier qu on n a pas ouvert n est pas un fichier livre.
+
+    Le relais comptait un telechargement comme reussi sur le code de sortie de
+    yt-dlp seul. C est precisement ce qui a coute 8 Go a la carte le
+    2026-09-22: les deux pistes etaient la, le merge est mort a la derniere
+    image, et ce qui restait avait l air d un fichier. Deux pistes et une duree
+    qui tient la route, sinon ce sont des octets depenses pour rien, et ils sont
+    inscrits au registre comme tels parce que l adresse les a payes pareil.
+    """
+    argv = ["ffprobe", "-v", "error", "-show_entries",
+            "format=duration:stream=codec_type", "-of", "csv=p=0", str(path)]
+    try:
+        out = subprocess.run(argv, capture_output=True, text=True, timeout=300).stdout
+    except (OSError, subprocess.SubprocessError) as exc:
+        return False, "ffprobe n a pas tourne: %s" % str(exc)[:50]
+    pistes = {l.strip() for l in out.splitlines() if l.strip() in ("video", "audio")}
+    duree = 0.0
+    for ligne in out.splitlines():
+        try:
+            duree = max(duree, float(ligne.strip()))
+        except ValueError:
+            continue
+    if not {"video", "audio"} <= pistes:
+        return False, "pistes trouvees: %s" % (", ".join(sorted(pistes)) or "aucune")
+    if attendu_s and duree < attendu_s * 0.97:
+        return False, ("tronque: %.0f s sur %d attendues (%.0f%%)"
+                       % (duree, attendu_s, 100 * duree / attendu_s))
+    return True, "%.1f h, video et audio" % (duree / 3600)
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--plan", action="store_true")
@@ -260,11 +291,19 @@ def run(args, conf):
                     return 1
                 continue
             size = got.stat().st_size
-            final = HANGAR / got.name
-            got.replace(final)
+            # Les octets sont inscrits avant le verdict: l adresse les a payes,
+            # que le fichier serve ou non. Un registre qui ne compte que les
+            # reussites sous-estime exactement ce qu il est la pour brider.
             with LEDGER.open("a", encoding="utf-8") as fh:
                 fh.write("%d\t%d\t%s\n" % (time.time(), size // 1024, vid))
-            print("     %d Mo en %.0f s" % (size // 2**20, time.time() - began))
+            bon, pourquoi = verify(got, secs)
+            if not bon:
+                got.unlink(missing_ok=True)
+                print("     %d Mo pris et jetes: %s" % (size // 2**20, pourquoi))
+                continue
+            got.replace(HANGAR / got.name)
+            print("     %d Mo en %.0f s, %s"
+                  % (size // 2**20, time.time() - began, pourquoi))
             time.sleep(PAUSE_S)
 
     if args.ship:
