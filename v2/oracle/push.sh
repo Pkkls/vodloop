@@ -1,8 +1,17 @@
 #!/bin/bash
-# The one ffmpeg that talks to Kick. Restarting it ends the live, closes the
-# VOD and drops every viewer, so nothing restarts it but watch.py on a pusher
-# proven mute. The placeholder writer holds the FIFO open between chunks,
-# otherwise ffmpeg reads EOF when one chunk ends and exits.
+# The one ffmpeg that talks to Kick. Nothing restarts it but watch.py on a
+# pusher proven mute, and ceiling.py when the wire has to change height.
+#
+# What a restart costs, measured on 2026-09-22 on one six second restart: Kick
+# kept the session (start_time unchanged through it) and still refixed its
+# ladder on the new source, 720p60 replacing 1080p60 in the master playlist.
+# So a short restart is cheaper than this comment used to claim. It is one
+# measurement of one short gap: what a long one does was never measured, and
+# the belief it replaces was that any restart ends the live, closes the VOD
+# and drops every viewer. Restart it for a reason, not because it is cheap.
+#
+# The placeholder writer holds the FIFO open between chunks, otherwise ffmpeg
+# reads EOF when one chunk ends and exits.
 set -u
 : "${CHAN_ROOT:?CHAN_ROOT manquant}"
 FIFO="$CHAN_ROOT/pipe"
