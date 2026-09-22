@@ -212,6 +212,14 @@ fill() {
   # a failure costs a wait, but never one that outlives the material in hand
   [ "$last_res" = fail ] && [ "$runway_h" -ge 8 ] && gap=$FAIL_GAP_MIN
   [ "$last_res" = fail ] && [ "$runway_h" -lt 8 ] && gap=$((gap + 10))
+  # a refusal is not a failure of ours, and the short gap a thin reserve buys
+  # must not apply to it. On 2026-09-22 it did: the reserve was under eight
+  # hours, so a wall at 02:10 was retried every twenty-five minutes, each retry
+  # walked into the same wall and raised the throttle again, and four of them
+  # inside fifteen minutes took the budget to its lowest level for six hours.
+  # Hurrying is what you do against a healthy source, not against one that has
+  # just said no.
+  [ "$last_res" = wall ] && gap=$FAIL_GAP_MIN
   wait_s=$(( $(num "$last_at") + gap * 60 - now ))
   # Somebody spent channel points and is being quoted a wait: the pacing gap
   # is the board being polite to itself, not a limit that keeps the address,
@@ -346,7 +354,7 @@ fill() {
     echo "$(date +%s) $vid $chan" >> "$BASE/failed.tsv"
     if throttled_by "$run"; then
       note_throttle
-      echo "$(date +%s) fail" > "$BASE/last"
+      echo "$(date +%s) wall" > "$BASE/last"
       log "$chan: echec $vid, pas de nouvel essai avant $FAIL_GAP_MIN min"
     elif grep -q "Requested format is not available" "$run"; then
       # Nothing was downloaded, it took under a minute, and Oracle has just
