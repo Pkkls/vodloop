@@ -1066,7 +1066,11 @@ def reward_stay(data, now, who, text):
     if not live:
         return False, f"@{who} " + four("nothing_on")
     book, durations = cut.ledger(), chan.read_json(chan.STATE / "durations.json", {})
-    for folder in (chan.QUEUE, chan.AIRED):
+    # current/ first: the file on air lives there for as long as its cutting job
+    # is alive, which is most of the hour it is playing. Without it this reward
+    # refunded a viewer for asking to keep watching what was on, which is the
+    # one moment they are certain to ask
+    for folder in (chan.CURRENT, chan.QUEUE, chan.AIRED):
         path = folder / live["name"]
         if path.exists() and cut.unaired(path, book, durations, cut.reserved()):
             PICK.write_text(json.dumps({"name": live["name"], "at": int(now)}))

@@ -894,6 +894,33 @@ bot.note_use(data, "pick", ["banane"])
 check("control: something that is not a number leaves the depth alone",
       data["used"]["pick_max"] == 340 and data["used"]["pick"] == 4, data["used"])
 
+print("bot: keeping this one going finds it where it actually is")
+real_playing_s, real_ledger, real_reserved = bot.playing, cut.ledger, cut.reserved
+try:
+    chan.CURRENT.mkdir(parents=True, exist_ok=True)
+    en_cours = chan.CURRENT / "1789000009-En_Cours-ddddddddddd.mkv"
+    en_cours.write_bytes(b"x")
+    bot.playing = lambda: {"title": "En Cours", "name": en_cours.name, "hour": 1,
+                           "hours": 3, "vid": "ddddddddddd", "started": 0, "elapsed": 600}
+    cut.ledger = lambda: {}
+    cut.reserved = lambda: {}
+    chan.write_json(chan.STATE / "durations.json",
+                    {f"{en_cours.name}:{en_cours.stat().st_size}": 3 * 3600})
+    bot.PICK.unlink(missing_ok=True)
+    ok, said = bot.reward_stay({}, 1000, "v", "")
+    # the file on air lives in current/ for as long as its cutting job is alive
+    check("the file on air is found while it is still on the cutting table",
+          ok is True and bot.PICK.exists(), (ok, said))
+    bot.PICK.unlink(missing_ok=True)
+    en_cours.unlink(missing_ok=True)
+    ok, said = bot.reward_stay({}, 1000, "v", "")
+    check("control: a file that is nowhere on the disk is refunded",
+          ok is False and not bot.PICK.exists(), (ok, said))
+finally:
+    bot.playing, cut.ledger, cut.reserved = real_playing_s, real_ledger, real_reserved
+    (chan.STATE / "durations.json").unlink(missing_ok=True)
+    bot.PICK.unlink(missing_ok=True)
+
 print("check: a skip that landed nowhere is readable from history alone")
 # imported under another name: this file already has a check() of its own
 import check as chain  # noqa: E402
