@@ -245,6 +245,43 @@ beside `ls -la` on that file at least once, and a reader that outlives the
 writer is the one class of fault nothing in this system alarms on.
 
 
+### 2026-09-22: the count that forgot a folder, three times in one file tree
+
+The runway is the number that says how close the channel is to repeating
+itself. It read 5.2 h at 06:20 and 1.8 h at 06:30, with nothing consumed in
+between: the cutter had taken the last queued file, and `current/` was in none
+of the folder lists.
+
+```sh
+# what the number says, against where the material actually is
+grep "file " state/../log/supply.log | tail -3
+ls queue/ current/ aired/ | grep mkv
+```
+
+Three readers had the same hole, written years apart and all correct on the day
+they were written:
+
+- `supply`'s runway, which raises the thin reserve alarm **and** sets the
+  board's pace: under four hours it waits fifteen minutes between fetches
+  instead of ninety. The under-reading is what told the board to hurry, and
+  hurrying is what turned one refusal into four on the night of the same day.
+- `bot.shelf()`, so `!stats` said 1.4 h against a real 4.3, `!list` offered two
+  videos out of three, and the skip floor was measured against the smaller
+  number.
+- `reward_stay`, which looks up the file on air so a viewer can buy another
+  hour of it, and could not find it for most of the hour it was playing.
+
+**The shape to recognise.** None of these failed. Each returned a number of the
+right kind, in the right units, plausible on its face, and wrong by a third. A
+count over a hand written list of directories is a probe whose blind spot is
+invisible from its output, and the list grows a member every time the pipeline
+gains a stage.
+
+The question that finds it: where can the thing I am counting be, and is every
+one of those places in my list? Ask it of the code, not of the number, because
+the number will not tell you.
+
+
 ## The rule under all of these
 
 Before believing a measurement, answer two questions. What would this command
