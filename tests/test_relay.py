@@ -148,5 +148,21 @@ finally:
     livre.unlink(missing_ok=True)
 
 print()
+print("cookies: le pot part sur un chemin que wsl resout, quel que soit le disque")
+# le levier numero un de l approvisionnement est bloque sur une action de kil,
+# et la traduction ne connaissait que D:. Un pot pose ailleurs serait parti sur
+# un chemin que wsl ne resout pas, au seul moment ou il agit
+import cookies  # noqa: E402
+
+check("le tampon d aujourd hui", cookies.wsl_path(r"D:\vodloop\state\cookies.txt"),
+      "/mnt/d/vodloop/state/cookies.txt")
+check("TEMOIN: un autre disque aussi", cookies.wsl_path(r"C:\Users\kil\pot.txt"),
+      "/mnt/c/Users/kil/pot.txt")
+check("TEMOIN: n importe quelle lettre", cookies.wsl_path(r"E:\ailleurs\pot.txt"),
+      "/mnt/e/ailleurs/pot.txt")
+check("controle: un chemin deja unix n est pas touche",
+      cookies.wsl_path("/deja/unix/pot.txt"), "/deja/unix/pot.txt")
+
+print()
 print("%d echec(s)" % fail)
 sys.exit(1 if fail else 0)

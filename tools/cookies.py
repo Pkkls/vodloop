@@ -66,6 +66,19 @@ def verdict(path):
                   % (lignes, ", ".join(sorted(noms))))
 
 
+def wsl_path(chemin):
+    """Un chemin Windows tel que wsl le comprend. Pur.
+
+    Ne connaissait que D:\\, parce que c est la que le tampon vit aujourd hui.
+    VODLOOP_STORE peut le poser ailleurs, et un pot de cookies qui part sur un
+    chemin que wsl ne resout pas echoue au pire moment: celui ou kil agit enfin.
+    """
+    texte = str(chemin).replace("\\", "/")
+    if len(texte) > 1 and texte[1] == ":":
+        return "/mnt/%s%s" % (texte[0].lower(), texte[2:])
+    return texte
+
+
 def install(path, conf):
     LOCAL.parent.mkdir(parents=True, exist_ok=True)
     if path.resolve() != LOCAL.resolve():
@@ -74,15 +87,22 @@ def install(path, conf):
     # La carte lit son propre pot; elle tient deja la cle SSH d Oracle, ce n est
     # pas un cran de confiance de plus.
     argv = ["wsl", "scp", "-i", conf["CLAW_KEY"], "-o", "BatchMode=yes",
-            str(LOCAL).replace("D:\\", "/mnt/d/").replace("\\", "/"),
-            "%s:%s" % (conf["CLAW"], FAR)]
+            wsl_path(LOCAL), "%s:%s" % (conf["CLAW"], FAR)]
     env = dict(os.environ, MSYS_NO_PATHCONV="1")
     if subprocess.run(argv, capture_output=True, timeout=120, env=env).returncode:
         print("  carte          : envoi echoue")
         return 1
-    subprocess.run(ssh_argv("claw", conf, "chmod 600 %s; wc -l < %s" % (FAR, FAR)),
-                   capture_output=True, timeout=60, env=env)
-    print("  pose sur carte : %s (chmod 600)" % FAR)
+    # Le chmod etait lance et son verdict jete: l outil annoncait 600 sans
+    # jamais l avoir regarde, sur un fichier d identifiants. On lit le mode
+    # qu on obtient et on dit celui-la.
+    vu = subprocess.run(ssh_argv("claw", conf, "chmod 600 %s 2>/dev/null; "
+                                 "ls -l %s | cut -c1-10" % (FAR, FAR)),
+                        capture_output=True, timeout=60, env=env)
+    mode = vu.stdout.decode(errors="replace").strip()
+    if vu.returncode or not mode.startswith("-rw-------"):
+        print("  carte          : droits non confirmes (%s)" % (mode or "muet"))
+        return 1
+    print("  pose sur carte : %s (%s, verifie)" % (FAR, mode))
     return 0
 
 
