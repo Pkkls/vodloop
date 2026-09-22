@@ -976,6 +976,11 @@ def waiting_for(seconds):
 # kil, 2026-09-21: the five at a hundred points each. They were priced against
 # each other, a skip cheap and a fetch dear, which only made the dear ones
 # never happen; one price says every lever is worth pulling.
+# kil, 2026-09-22: "met les points de chaine a 1". A hundred still rationed
+# them, on a channel whose problem is that nobody pulls a lever at all. At one
+# point the price stops being the gate and the guards are: the cooldowns, the
+# floor under the reserve and the per viewer budget, which is where the
+# refusals belong anyway.
 # "was" carries every title a reward has had, which is what lets an existing one
 # be renamed in place: a redemption is matched on its title, so creating the new
 # one beside the old would leave the old taking points for something nothing
@@ -990,20 +995,20 @@ def waiting_for(seconds):
 # the button does. The chat still answers in four languages, because that is a
 # line somebody reads once, not a label they scan.
 REWARDS = [
-    {"key": "skip", "title": "Skip", "cost": 100, "input": False,
+    {"key": "skip", "title": "Skip", "cost": 1, "input": False,
      "was": ["Skip · Saltar · スキップ · Geç", "Skip this hour"],
      "description": "Plays a different stream right now"},
-    {"key": "stay", "title": "Stay", "cost": 100, "input": False,
+    {"key": "stay", "title": "Stay", "cost": 1, "input": False,
      "was": ["Stay · Seguir · 続ける · Devam", "Keep this one going"],
      "description": "Keeps this stream on for one more hour"},
-    {"key": "pick", "title": "Pick", "cost": 100, "input": True,
+    {"key": "pick", "title": "Pick", "cost": 1, "input": True,
      "was": ["Pick · Elegir · 選ぶ · Seç", "Pick what plays next"],
      "description": "Type !list in chat, then put that number here"},
-    {"key": "jump", "title": "+10 min", "cost": 100, "input": False,
+    {"key": "jump", "title": "+10 min", "cost": 1, "input": False,
      "was": ["+10 min · Avanzar · 10分進む · İleri sar",
              "+30 min · Avanzar · 30分進む · İleri sar"],
      "description": "Jumps 10 minutes forward in this stream"},
-    {"key": "place", "title": "Travel", "cost": 100, "input": True,
+    {"key": "place", "title": "Travel", "cost": 1, "input": True,
      "was": ["Travel · Viajar · 旅先 · Gezi", "Take me somewhere"],
      "description": "Type a country or a city, a stream from there plays next"},
 ]
