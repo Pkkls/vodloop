@@ -166,6 +166,20 @@ def fetch_one(vid, want_h=720):
     return got[0], ""
 
 
+def held_elsewhere():
+    """Un seul relais a la fois, sinon deux courses demandent la meme video.
+
+    Le verrou porte son age: un processus tue laisse le fichier, et un verrou
+    qu on ne sait pas perimer est un relais qui ne repart jamais.
+    """
+    lock = STORE / "state" / "relay.lock"
+    if lock.exists() and time.time() - lock.stat().st_mtime < 3 * 3600:
+        return lock, True
+    lock.parent.mkdir(parents=True, exist_ok=True)
+    lock.write_text(str(os.getpid()), encoding="utf-8")
+    return lock, False
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--plan", action="store_true")
@@ -175,6 +189,20 @@ def main():
     conf = hosts()
     for d in (HANGAR, PART, LEDGER.parent):
         d.mkdir(parents=True, exist_ok=True)
+    lock = None
+    if args.fetch:
+        lock, pris = held_elsewhere()
+        if pris:
+            print("un relais tourne deja (%s), rien fait" % lock)
+            return 0
+    try:
+        return run(args, conf)
+    finally:
+        if lock is not None and lock.exists():
+            lock.unlink()
+
+
+def run(args, conf):
 
     picked, n_cands, n_skip, libre_mb = choose(conf, max(args.fetch, 5))
     stock = sorted(HANGAR.glob("*.mkv"))
