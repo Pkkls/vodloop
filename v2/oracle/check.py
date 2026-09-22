@@ -213,6 +213,14 @@ def run():
           witness=(time.time() - 0) / 60 < BEACON_MINUTES,
           detail=f"balise il y a {age:.0f} min")
 
+    # the card runs its own rule suite every tick and says so here, which is the
+    # only way this side learns that an edit over there broke a rule: Oracle
+    # cannot reach the board, and nothing else crosses the NAT
+    rules = board.get("rules", "inconnu")
+    check("les regles de la carte passent chez elle", rules == "ok",
+          witness={"rules": "casse"}.get("rules") == "ok",
+          detail=rules)
+
     newest = newest_arrival((chan.QUEUE, chan.CURRENT, chan.AIRED))
     hours = (time.time() - newest) / 3600 if newest else 999
     with tempfile.TemporaryDirectory() as empty:
