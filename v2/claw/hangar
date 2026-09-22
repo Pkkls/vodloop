@@ -30,10 +30,17 @@ GAP_MIN=90
 FAIL_GAP_MIN=180
 DAY_MB=16000
 # The address was refused at 28 Go in ten hours on 2026-09-14, which is a rate
-# and not a total, so the rate is what is capped. Under this ceiling the board
-# never reaches the speed that lost the address, whatever the daily budget says,
-# and the daily budget goes back to being what it should be: a long stop, not
-# the thing that decides how fast a starving channel may be fed.
+# and not a total, so the rate is what is capped, and the daily budget goes back
+# to being what it should be: a long stop, not the thing that decides how fast a
+# starving channel may be fed.
+#
+# This used to claim that under this ceiling the board never reaches the speed
+# that lost the address. It does not hold: the PC relay goes out by the same
+# public address and this ceiling counts one register of the two. Measured on
+# 2026-09-22, the address carried 5938 Mo in the hour of 08h, 658 from here and
+# 5280 from the relay, against the 2800 Mo/h that had it refused. The relay
+# already counts both sides; this side does not, and until it does the number
+# below bounds this machine and not the address.
 HOUR_MB=2500
 # Mo par heure de video, mesure sur ce que la chaine recoit reellement. Un
 # candidat ne dit pas sa taille, il dit sa duree: c est par ce chiffre que le
