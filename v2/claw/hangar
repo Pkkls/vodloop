@@ -461,11 +461,20 @@ share_of() {
 shorts() {
   chan=$1
   list=$($OSSH "$ORACLE" "cat $V2/$chan/state/shorts.tsv" 2>/dev/null) || return 0
-  vid=$(printf '%s\n' "$list" | awk 'length($1) == 11 { print $1; exit }')
-  [ -n "$vid" ] || return 0
-  tried=$(num "$(cat "$BASE/$chan.short.tried" 2>/dev/null)")
   now=$(date +%s)
+  tried=$(num "$(cat "$BASE/$chan.short.tried" 2>/dev/null)")
   [ $((now - tried)) -ge $((${SHORT_GAP_MIN:-20} * 60)) ] || return 0
+  # The head of the list, and only the head, so one short nobody can fetch used
+  # to be taken again every twenty minutes for ever, and a walled one halved
+  # the budget on every one of those turns. The same failure record as the
+  # draw, and the queue moves on to the next one.
+  bad=$(awk -v t=$((now - 7 * 86400)) -v m="$MAX_FAILS" \
+          '$1 >= t { c[$2]++ } END { for (k in c) if (c[k] >= m) print k }' \
+          "$BASE/failed.tsv" 2>/dev/null | tr '\n' ' ')
+  vid=$(printf '%s\n' "$list" | awk -v bad="$bad" '
+          BEGIN { n = split(bad, s, " "); for (i = 1; i <= n; i++) x[s[i]] = 1 }
+          length($1) == 11 && !($1 in x) { print $1; exit }')
+  [ -n "$vid" ] || return 0
   log "$chan: short $vid"
   [ -z "$DRY" ] || return 0
   date +%s > "$BASE/$chan.short.tried"
@@ -479,6 +488,7 @@ shorts() {
        --merge-output-format mp4 -P "$tmp" -o '%(id)s.%(ext)s' \
        "https://www.youtube.com/shorts/$vid" > "$tmp/run.log" 2>&1; then
     log "$chan: short $vid echoue"
+    echo "$(date +%s) $vid $chan" >> "$BASE/failed.tsv"
     grep -qi "sign in to confirm" "$tmp/run.log" && note_throttle
     rm -rf "$tmp"
     return 1
