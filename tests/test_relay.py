@@ -71,6 +71,19 @@ check("la fenetre tient le plus gros fichier possible (8 h de video)",
       "sinon le relais patiente sur un fichier qu il ne prendra jamais")
 
 print()
+print("relay: ce qui tient dans le budget restant passe devant")
+file = [("gros", 25200, ""), ("moyen", 21240, ""), ("court", 8640, "")]
+ordre = lambda reste: [c[0] for c in relay.abordables_d_abord(file, reste)]
+check("TEMOIN: 3074 Mo restants, seul le 2.4 h tient: il passe premier",
+      ordre(3074)[0], "court", "sinon le relais attend 90 min sur un 7 h")
+check("entre deux abordables, l ordre de la file est garde",
+      ordre(5000), ["moyen", "court", "gros"], "5000 Mo: le 7 h ne tient pas")
+check("controle: budget large, on ne reclasse rien",
+      ordre(100000), ["gros", "moyen", "court"], "")
+check("rien n est ecarte, seulement repousse",
+      len(ordre(0)), 3, "un budget a zero garde les trois")
+
+print()
 print("relay: un titre que la console ne sait pas ecrire ne tue pas le relais")
 # La vraie console de kil encode en cp1252. On la reproduit dans un sous-processus
 # plutot que de deviner celle qui lance la suite, et on imprime le crochet

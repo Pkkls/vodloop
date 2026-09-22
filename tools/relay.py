@@ -116,6 +116,17 @@ def peut_prendre(pris_mb, attendu_mb):
     return pris_mb + attendu_mb <= budget_mb()
 
 
+def abordables_d_abord(cands, reste_mb):
+    """Ce qui tient dans ce qui reste passe devant, l ordre garde entre eux.
+
+    Le tri est stable, donc c est un reclassement et non un choix: aucun
+    enregistrement n est ecarte, celui qui ne tient pas maintenant tiendra quand
+    la fenetre aura tourne.
+    """
+    return sorted(cands,
+                  key=lambda c: int(c[1] / 3600 * MB_PER_HOUR_VIDEO) > reste_mb)
+
+
 def spent_in_window(conf=None):
     """Mo pris dans la fenetre glissante, PAR L ADRESSE, pas par moi.
 
@@ -289,6 +300,13 @@ def run(args, conf):
         return 0
 
     if args.fetch:
+        # La tete de file peut peser plus que ce que la fenetre laisse encore.
+        # Attendre 90 min sur elle pendant qu un enregistrement plus court tient
+        # tout de suite, c est un tampon qui ne se remplit pas, et l attente est
+        # le seul cas ou le gouverneur coute quelque chose a la chaine. L ordre
+        # est une preference et non une contrainte: la carte tire au hasard dans
+        # le meme catalogue, et entre deux abordables l ordre est garde.
+        picked = abordables_d_abord(picked, budget_mb() - spent_in_window(conf))
         for vid, secs, title in picked[:args.fetch]:
             # Le plafond du tampon se verifie AVANT de demander, avec la taille
             # attendue du fichier: s en apercevoir apres coup, c est avoir deja
