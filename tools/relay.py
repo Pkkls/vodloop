@@ -41,6 +41,7 @@ STORE = pathlib.Path(os.environ.get("VODLOOP_STORE", r"D:\vodloop"))
 HANGAR = STORE / "hangar" / CHANNEL
 PART = STORE / "part"
 LEDGER = STORE / "state" / "fetched.tsv"
+COOKIES = STORE / "state" / "cookies.txt"
 
 # Le debit soutenu au-dela duquel l adresse a ete refusee le 2026-09-14: 28 Go
 # en dix heures, soit 2800 Mo/h. On reste franchement dessous, et la fenetre est
@@ -72,17 +73,40 @@ def have_locally():
     return {m.group(1) for p in HANGAR.glob("*.mkv") for m in [ID.search(p.name)] if m}
 
 
-def spent_last_hour():
-    """Mo pris dans la derniere heure glissante, d apres notre propre registre."""
-    if not LEDGER.exists():
-        return 0
-    floor = time.time() - 3600
+def _hour_from(lines, floor):
     total = 0
-    for line in LEDGER.read_text(encoding="utf-8", errors="ignore").splitlines():
-        bits = line.split("\t")
-        if len(bits) >= 2 and bits[0].isdigit() and float(bits[0]) >= floor:
-            total += int(bits[1])
+    for line in lines:
+        bits = line.split("\t") if "\t" in line else line.split()
+        if len(bits) >= 2 and bits[0].strip().isdigit() and float(bits[0]) >= floor:
+            try:
+                total += int(bits[1])
+            except ValueError:
+                pass
     return total // 1024
+
+
+def spent_last_hour(conf=None):
+    """Mo pris dans la derniere heure glissante, PAR L ADRESSE, pas par moi.
+
+    Le PC et la carte sortent par la meme adresse publique, mesure le
+    2026-09-22: 82.67.100.152 des deux cotes. Deux gouverneurs qui s ignorent
+    sur une seule adresse, c est un gouverneur qui ne gouverne rien, et c est
+    la somme des deux que YouTube voit. Le registre de la carte est donc lu
+    avec le notre, et le plafond s applique au total.
+    """
+    floor = time.time() - 3600
+    mine = _hour_from(
+        LEDGER.read_text(encoding="utf-8", errors="ignore").splitlines()
+        if LEDGER.exists() else [], floor)
+    if conf is None:
+        return mine
+    try:
+        far = remote("claw", conf, "cat /root/v2/fetched.tsv 2>/dev/null")
+        return mine + _hour_from(far.splitlines(), floor)
+    except SystemExit:
+        # carte injoignable: on compte ce qu on sait, et on le dit
+        print("  (carte injoignable, son quota n est pas compte)")
+        return mine
 
 
 def far_state(conf):
@@ -124,8 +148,12 @@ def fetch_one(vid, want_h=720):
     argv = ["yt-dlp", "--force-ipv4", "--no-playlist", "--restrict-filenames",
             "--no-progress", "--max-filesize", "%dM" % cap_mb, "-f", fmt,
             "--merge-output-format", "mkv", "-P", str(PART),
-            "-o", "%(title).80B-%(id)s.%(ext)s",
-            "https://www.youtube.com/watch?v=%s" % vid]
+            "-o", "%(title).80B-%(id)s.%(ext)s"]
+    # Le pot, s il existe. Anonyme sinon: la chaine tourne comme ca depuis le
+    # debut, l absence de pot ralentit, elle n arrete pas.
+    if COOKIES.exists():
+        argv += ["--cookies", str(COOKIES)]
+    argv += ["https://www.youtube.com/watch?v=%s" % vid]
     done = subprocess.run(argv, capture_output=True, text=True, timeout=7200)
     log = (done.stdout or "") + (done.stderr or "")
     if "Sign in to confirm" in log:
@@ -158,7 +186,10 @@ def main():
     print("  place sur D:  %.1f Go (le plafond ci-dessus mord bien avant)"
           % (shutil.disk_usage(STORE).free / 2**30))
     print("  candidats     %d, dont %d deja vus ou refuses" % (n_cands, n_skip))
-    print("  pris cette h. %d Mo sur %d autorises" % (spent_last_hour(), HOUR_MB))
+    print("  pris cette h. %d Mo sur %d autorises (PC + carte, une seule adresse)"
+          % (spent_last_hour(conf), HOUR_MB))
+    print("  session       %s" % ("connectee" if COOKIES.exists() else
+                                  "anonyme (tools/cookies.py --install)"))
     print("  libre Oracle  %.1f Go" % (libre_mb / 1024))
     print()
     if args.plan or not (args.fetch or args.ship):
@@ -183,7 +214,7 @@ def main():
                           % (store_mb(), STORE_MAX_MB, attendu))
                     break
             waited = 0
-            while spent_last_hour() >= HOUR_MB:
+            while spent_last_hour(conf) >= HOUR_MB:
                 if waited == 0:
                     print("  plafond horaire atteint, on patiente")
                 time.sleep(60)
