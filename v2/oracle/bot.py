@@ -1018,7 +1018,7 @@ def reward_skip(data, now, who, text):
     live = playing()
     blocked = skip_blocked(data, now, live, data.get("redeemer_id") or who)
     if blocked:
-        return False, f"@{who} {blocked}" + four("points_back")
+        return False, f"@{who} {blocked} · " + four("points_back")
     do_skip(data, now, f"points from {who}", live, data.get("redeemer_id") or who)
     return True, f"@{who} " + four("moving_on")
 
