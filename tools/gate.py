@@ -82,12 +82,30 @@ def suite_v2(witness):
     if subprocess.run(scp, capture_output=True, timeout=300).returncode:
         return False, "envoi de la suite impossible"
     # Le fichier arrive de Windows: ses retours chariot partent avant de courir.
-    lance = ("tr -d '\\r' < /tmp/gate_test_v2.py > /tmp/gate_t.py; "
+    #
+    # Il court dans un dossier a lui, et sa sortie passe par un fichier. Les
+    # deux pour la meme raison, mesuree le 2026-09-22. Lance depuis /tmp, le
+    # dossier du script passe en tete de sys.path, et /tmp portait cent
+    # quarante .py laisses par des sessions passees, dont cut.py, chan.py,
+    # feed.py, supply.py et kickapi.py: la suite jugeait ces copies-la et pas
+    # le code deploye. Et le resultat partait dans "| tail -1", donc le code de
+    # sortie lu etait celui de tail, qui ne rate jamais. Cette etape a rendu
+    # OK pendant des jours sans pouvoir rendre autre chose.
+    dossier = "/tmp/vodloop-gate"
+    lance = (f"rm -rf {dossier} && mkdir -p {dossier} && "
+             f"tr -d '\\r' < /tmp/gate_test_v2.py > {dossier}/suite.py && "
              "cd /home/ubuntu/v2/nanatty247 && "
              "CHAN_ROOT=/home/ubuntu/v2/nanatty247 "
-             "PYTHONPATH=/home/ubuntu/v2/bin python3 /tmp/gate_t.py 2>&1 | tail -1")
+             f"PYTHONPATH=/home/ubuntu/v2/bin python3 {dossier}/suite.py "
+             f"> {dossier}/sortie 2>&1; code=$?; tail -1 {dossier}/sortie; exit $code")
     if witness:
-        lance = "echo 'temoin: on force l echec'; exit 1"
+        # le rouge passe par la meme plomberie que le vert: un echec doit
+        # traverser la redirection, le $? et le exit, sinon le temoin ne
+        # temoigne que de lui-meme
+        lance = (f"rm -rf {dossier} && mkdir -p {dossier} && "
+                 f"printf 'raise SystemExit(1)\\n' > {dossier}/suite.py && "
+                 f"python3 {dossier}/suite.py > {dossier}/sortie 2>&1; code=$?; "
+                 "echo \"temoin: la suite sort en $code\"; exit $code")
     done = subprocess.run(ssh_argv("oracle", conf, lance),
                           capture_output=True, text=True, timeout=1200,
                           env=dict(os.environ, MSYS_NO_PATHCONV="1"))
