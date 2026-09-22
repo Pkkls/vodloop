@@ -6,8 +6,12 @@
 set -u
 : "${CHAN_ROOT:?CHAN_ROOT manquant}"
 FIFO="$CHAN_ROOT/pipe"
-INGEST=$(sed -n 's/^KICK_INGEST=//p' "$CHAN_ROOT/channel.env")
-KEY=$(sed -n 's/^KICK_STREAM_KEY=//p' "$CHAN_ROOT/channel.env")
+# the last line wins, as chan.load_env does: a setting is changed by appending
+# an override, which every Python component reads correctly and which this read
+# would otherwise turn into a two line variable and an ingest URL that resolves
+# to nothing. Three keys were in exactly that state on 2026-09-22.
+INGEST=$(sed -n 's/^KICK_INGEST=//p' "$CHAN_ROOT/channel.env" | tail -n 1)
+KEY=$(sed -n 's/^KICK_STREAM_KEY=//p' "$CHAN_ROOT/channel.env" | tail -n 1)
 [ -n "$INGEST" ] && [ -n "$KEY" ] || { echo "KICK_INGEST ou KICK_STREAM_KEY absent" >&2; exit 1; }
 
 [ -p "$FIFO" ] || { rm -f "$FIFO"; mkfifo "$FIFO"; }
