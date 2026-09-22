@@ -380,7 +380,12 @@ def refresh_catalog(apply):
             rows.setdefault(vid, (secs, rank, place, name))
         if not kept:
             empty.append(rank)
-        chan.log(f"catalogue {url}: {len(kept)} dans la bande")
+        # sur combien: un "0 dans la bande" seul se lit comme une source morte
+        # et coute une demi-heure a quiconque le croit. Le 2026-09-22 c etait
+        # une chaine de clips, seize videos de moins de six minutes, zero dans
+        # une bande qui commence a l heure, et le systeme avait raison
+        listees = len([l for l in out.splitlines() if l.strip()])
+        chan.log(f"catalogue {url}: {len(kept)} dans la bande sur {listees} listee(s)")
     for rank in empty:
         kept_back = {vid: row for vid, row in previous.items() if row[1] == rank}
         if kept_back:
