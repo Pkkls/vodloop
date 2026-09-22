@@ -1016,6 +1016,32 @@ check("control: one already at the new height stays",
 check("one nothing could measure goes too, rather than sit there unsendable",
       ceiling.stale_shorts([("illisible.ts", 0)], 720) == ["illisible.ts"])
 
+print("config: a setting is changed by appending, so the last line wins")
+# push.sh reads the ingest and the stream key out of the same file with sed and
+# has to agree with this on every point, so what it promises is written here
+essai = chan.STATE / "essai.conf"
+chan.STATE.mkdir(parents=True, exist_ok=True)
+try:
+    essai.write_text("SKIP_MAX_PER_HOUR=3\n# un commentaire\n\n"
+                     "SKIP_MAX_PER_HOUR=6\nKICK_INGEST=rtmp://un/app\n")
+    lu = chan.load_env(essai)
+    check("the override at the end is the one that counts",
+          lu["SKIP_MAX_PER_HOUR"] == "6", lu)
+    check("control: a key written once keeps its value",
+          lu["KICK_INGEST"] == "rtmp://un/app", lu)
+    check("control: a comment is not a setting",
+          "# un commentaire" not in lu and len(lu) == 2, sorted(lu))
+    essai.write_text("  ESPACES  =  autour  \nAVEC_EGAL=a=b=c\n")
+    lu = chan.load_env(essai)
+    check("spaces around a setting are not part of it",
+          lu["ESPACES"] == "autour", lu)
+    check("a value holding an equals sign survives whole, which a key can",
+          lu["AVEC_EGAL"] == "a=b=c", lu)
+    check("control: a file that is not there reads as no settings, not a crash",
+          chan.load_env(chan.STATE / "pas-la.conf") == {})
+finally:
+    essai.unlink(missing_ok=True)
+
 print("bot: a vote that sends the board shopping puts a short on the wire")
 real_conf = dict(chan.CONF)
 real_probe = chan.probe
