@@ -1364,8 +1364,20 @@ check("no reward description would be cut in half by Kick's limit",
       [(r["title"], len(r["description"])) for r in bot.REWARDS])
 check("the ones that need typing are the ones that ask a question",
       [r["input"] for r in bot.REWARDS]
-      == [r["key"] in ("pick", "place", "request") for r in bot.REWARDS],
+      == [r["key"] in ("pick", "place") for r in bot.REWARDS],
       [(r["key"], r["input"]) for r in bot.REWARDS])
+# the panel shows the title and nothing else, in a tile two lines tall
+check("no title is a crowd: one language, short enough to read in the tile",
+      all(len(r["title"]) <= 12 and " · " not in r["title"] for r in bot.REWARDS),
+      [r["title"] for r in bot.REWARDS])
+check("control: the spellings they used to carry are still answered",
+      all(t.lower() in bot.BY_TITLE for t in
+          ("Skip · Saltar · スキップ · Geç", "Take me somewhere")),
+      sorted(bot.BY_TITLE))
+check("nothing asks a viewer to paste a link any more",
+      not any("link" in r["description"].lower() for r in bot.REWARDS)
+      and "request" not in bot.ACTIONS,
+      [r["description"] for r in bot.REWARDS])
 settled = []
 real_settle, real_unseen, real_playing = bot.kickapi.settle_redemption, bot.shelf, bot.playing
 try:
@@ -1432,35 +1444,11 @@ try:
           line.startswith("~") and "on air ~" in line and "yay" in line, line)
     chan.PART_SECONDS = was_part
 
-    print("  -- a stream asked for by link")
-    for shape in ("https://www.youtube.com/watch?v=dQw4w9WgXcQ",
-                  "https://youtu.be/dQw4w9WgXcQ?t=42",
-                  "youtube.com/live/dQw4w9WgXcQ",
-                  "https://m.youtube.com/watch?app=desktop&v=dQw4w9WgXcQ",
-                  "dQw4w9WgXcQ"):
-        if bot.video_asked(shape) != "dQw4w9WgXcQ":
-            check("every shape of link gives the id", False, shape)
-            break
-    else:
-        check("every shape of link gives the id", True)
-    check("control: something that is not a link gives nothing",
-          bot.video_asked("vas y stp") is None and bot.video_asked("") is None)
-    real_titles = supply.catalog_titles
-    try:
-        supply.catalog_titles = lambda: {"dQw4w9WgXcQ": "Day 7 IRL Cappadocia Turkey"}
-        supply.REQUESTS.unlink(missing_ok=True)
-        check("a link to something the channel follows is fetched",
-              redeem("Request a stream", "https://youtu.be/dQw4w9WgXcQ") is None
-              and "dQw4w9WgXcQ" in supply.REQUESTS.read_text())
-        check("control: a link to anything else is refunded, not fetched blind",
-              redeem("Request a stream", "https://youtu.be/AAAAAAAAAAA") == ("r1", False))
-        check("control: nonsense is refunded",
-              redeem("Request a stream", "coucou") == ("r1", False))
-    finally:
-        supply.catalog_titles = real_titles
-        supply.REQUESTS.unlink(missing_ok=True)
-
-    print("  -- a paid request is followed to its end, or the points come back")
+    # kil, 2026-09-22: "enleve le paste a youtube link, c'est a proscrire". The
+    # shapes of a pasted link, and the reward that took one, are gone. What that
+    # reward reached is still reached by Travel, so the lifecycle below is
+    # checked through the button that survived.
+    print("  -- a paid fetch is followed to its end, or the points come back")
     real_titles2, real_shelf3, real_say3 = supply.catalog_titles, bot.shelf, bot.say
     real_excluded = supply.excluded
     said2, landed = [], chan.QUEUE / "1789819373-Day_7_IRL_Cappadocia-dQw4w9WgXcQ.mkv"
@@ -1475,7 +1463,7 @@ try:
         fresh["asked"] = {}
         bot.save(fresh)
         check("a fetch the board still owes takes no points yet",
-              redeem("Request a stream", "https://youtu.be/dQw4w9WgXcQ") is None)
+              redeem("Travel", "Cappadocia") is None)
         state = bot.load()
         check("and the redemption is held so it can be settled either way",
               (state.get("asked") or {}).get("dQw4w9WgXcQ", {}).get("redemption") == "r1",
