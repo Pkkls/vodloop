@@ -361,6 +361,13 @@ fill() {
       echo "$(date +%s) fail" > "$BASE/last"
       log "$chan: echec $vid, pas de nouvel essai avant $FAIL_GAP_MIN min"
     fi
+    # 2026-09-22: two merges of long videos died at the very end, after
+    # reaching the last frame, and all that survived was yt-dlp quoting
+    # ffmpeg's last progress line. The run log was deleted with the parts, so
+    # the only way to learn anything was to spend three hours reproducing it.
+    # The last failure's log is kept now: it costs a few kilobytes and it is
+    # the difference between a cause and a guess.
+    { echo "=== $(ts) $chan $vid"; tail -c 200000 "$run"; } > "$BASE/derniere-panne.log" 2>/dev/null
   fi
   rm -f "$dir/.part"/*
   return 0
