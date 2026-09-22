@@ -988,6 +988,22 @@ check("control: a copy still being written is not",
 check("control: an empty upload says nothing",
       watch.stalled_deliveries([], instant) == [])
 
+print("shorts: a full rotation stops asking the board for more")
+import shorts  # noqa: E402
+
+# 2026-09-22: 21 built against a cap of 20, and the list still held 17 ids.
+# retire() drops the oldest as soon as there are more than KEEP, which puts its
+# id back among the things to fetch, so the board would have spent a yt-dlp run
+# every twenty minutes re-fetching what it had just thrown away
+check("at the cap, nothing more is asked",
+      shorts.rotation_full({"a", "b"}, keep=2))
+check("past the cap either, which is where retire() leaves it",
+      shorts.rotation_full({"a", "b", "c"}, keep=2))
+check("control: one short of the cap still asks",
+      not shorts.rotation_full({"a"}, keep=2))
+check("control: an empty rotation asks",
+      not shorts.rotation_full(set(), keep=2))
+
 print("bot: a vote that sends the board shopping puts a short on the wire")
 real_conf = dict(chan.CONF)
 real_probe = chan.probe

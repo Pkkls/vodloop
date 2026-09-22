@@ -135,6 +135,18 @@ def prune():
     return len(kept)
 
 
+def rotation_full(have, keep=KEEP):
+    """Whether anything more should be asked of the board.
+
+    retire() drops the oldest built short as soon as there are more than KEEP,
+    which takes its id straight back out of have. A list written past the cap
+    therefore asks the board to fetch again what it has just thrown away: one
+    yt-dlp run every twenty minutes, for ever, against an address that is
+    walled about one attempt in five.
+    """
+    return len(have) >= keep
+
+
 def wanted(now=None):
     """Write the ids the board should still fetch, most recent first.
 
@@ -146,7 +158,9 @@ def wanted(now=None):
     have |= {chan.video_id(p.name) or p.stem for p in chan.SHORTS_IN.glob("*")
              if p.is_file()}
     rows, seen = [], set()
-    for url in sources():
+    # a full rotation does not even list: the listing costs a network call a
+    # page and it can only produce work nobody will keep
+    for url in ([] if rotation_full(have) else sources()):
         for vid, secs, title in listing(url):
             if vid in have or vid in seen or secs > MAX_SECONDS:
                 continue
