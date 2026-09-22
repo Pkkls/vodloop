@@ -457,7 +457,14 @@ def completed(listing):
 
 
 def settle(source, origin):
-    """The file has aired: remembered, and set aside in aired/.
+    """The file is set aside in aired/, and its id remembered.
+
+    Set aside, not finished: a file the chat picks again is drawn back out of
+    the reserve, cut further, and set aside once more, so one file can write
+    several lines here and none of them is a repeat. Whether an hour has been
+    on the wire twice is units.tsv's business, not this ledger's. Measured on
+    2026-09-22: 809 units recorded, 809 distinct, five ids with more than one
+    line here and not one hour aired twice.
 
     kil, 2026-09-17: a video that has been on air never goes back on air, and
     the ledger keeps its id out of the catalogue for REFETCH_DAYS, set long
