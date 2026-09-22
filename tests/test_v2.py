@@ -879,6 +879,21 @@ try:
 finally:
     bot.shelf, bot.fetch_eta, bot.catalog_seconds = real_shelf, real_eta, real_secs
 
+print("bot: what the chat reaches for is counted, and how deep it goes")
+data = {}
+bot.note_use(data, "list", [])
+bot.note_use(data, "list", [])
+bot.note_use(data, "pick", ["7"])
+check("each command is counted under its own name",
+      data["used"]["list"] == 2 and data["used"]["pick"] == 1, data["used"])
+bot.note_use(data, "pick", ["340"])
+bot.note_use(data, "pick", ["12"])
+check("and the deepest number ever picked is kept, not the last one",
+      data["used"]["pick_max"] == 340, data["used"])
+bot.note_use(data, "pick", ["banane"])
+check("control: something that is not a number leaves the depth alone",
+      data["used"]["pick_max"] == 340 and data["used"]["pick"] == 4, data["used"])
+
 print("supply: a delivery says so once, and an empty run says nothing")
 real_tg = chan.telegram
 said_tg = []

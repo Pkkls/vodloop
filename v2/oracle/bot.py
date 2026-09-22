@@ -824,6 +824,24 @@ COMMANDS = {
 }
 
 
+def note_use(data, word, args):
+    """Count what the chat actually reaches for.
+
+    The list runs to five hundred entries over sixty six pages and nothing knew
+    whether anyone ever left the first one. Kept in the bot's own state rather
+    than logged, because this answers a question asked now and then, not one
+    asked at four in the morning, and a line per command would drown the log
+    that is read then.
+    """
+    used = data.setdefault("used", {})
+    used[word] = used.get(word, 0) + 1
+    if word in ("pick", "choix") and args:
+        try:
+            used["pick_max"] = max(used.get("pick_max", 0), int(args[0]))
+        except ValueError:
+            pass
+
+
 def handle(payload):
     """One chat message in, at most one line of chat out."""
     sender = payload.get("sender") or {}
@@ -843,6 +861,7 @@ def handle(payload):
            "privileged": bool(badges & {"moderator", "broadcaster", "owner"})}
     now = time.time()
     data = load()
+    note_use(data, word.lower(), rest.split())
     last = data["users"].get(who["user_id"], 0)
     if now - last < USER_COOLDOWN and not who["privileged"]:
         return
@@ -1549,9 +1568,15 @@ def main(argv):
     if "--status" in argv:
         live = playing()
         print(f"a l'antenne: {live['title'] if live else 'rien'}")
-        print(f"inedit en reserve: {unseen_hours()} h sur {len(shelf())} videos")
+        print(f"inedit en reserve: {unseen_hours():.1f} h sur {len(shelf())} videos")
         print(f"titre vise: {wanted_title()}")
         print(f"jeton: {'present' if kickapi.token() else 'absent, --authorize'}")
+        used = load().get("used") or {}
+        if used:
+            counts = ", ".join(f"{k} {v}" for k, v in sorted(used.items())
+                               if k != "pick_max")
+            print(f"commandes: {counts}")
+            print(f"numero le plus loin choisi: {used.get('pick_max', 0)}")
         return 0
     if not BROADCASTER:
         chan.log("KICK_USER_ID absent de channel.env")
