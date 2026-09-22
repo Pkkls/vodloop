@@ -114,6 +114,20 @@ def slices_in(seconds):
     return max(1, int(seconds // chan.PART_SECONDS)) if chan.PART_SECONDS else 1
 
 
+def slice_of(number, seconds):
+    """Which slice a chunk falls in, counting from one, the stub folded in.
+
+    On 2026-09-22 the channel's title read "hour 3/2" for most of an evening.
+    A 2 h 48 file holds two slices, because slices_in folds the stub into the
+    last one, but its thirty-third chunk divided into thirds all the same. The
+    stub has to fold at both ends of that division or the one number a viewer
+    actually reads contradicts itself.
+    """
+    if not chan.PART_SECONDS:
+        return 1
+    return min(slices_in(seconds), number // per_slice() + 1)
+
+
 def unit_seconds():
     """The ledger's grain: a chunk, or the whole block when a block is the
     smaller of the two. They only invert where a slice is seconds long, which

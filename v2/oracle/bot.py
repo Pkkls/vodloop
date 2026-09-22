@@ -184,7 +184,7 @@ def playing():
     # the title a viewer reads here is the one the channel carries, not the
     # uploader's file name: !now said "260203 nanatty - Day 17 IRL Ushuaia"
     return {"name": live["source"], "title": clean_title(live["source"], SLUG),
-            "hour": number // cut.per_slice() + 1,
+            "hour": cut.slice_of(number, seconds),
             "hours": cut.slices_in(seconds) if seconds else 1,
             "started": started,
             "elapsed": max(0.0, time.time() - started) if started else 0.0,

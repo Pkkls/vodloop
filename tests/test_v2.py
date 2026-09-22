@@ -465,6 +465,15 @@ try:
     check("and a stub is folded into the last, not counted as a sixth",
           cut.slices_in(18120) == 5, cut.slices_in(18120))
     check("control: a file shorter than a slice still holds one", cut.slices_in(600) == 1)
+    # the channel's title said "hour 3/2" all through the evening of 2026-09-22
+    check("the stub folds at both ends: the last chunk of 2 h 48 is in hour 2",
+          cut.slice_of(32, 10080) == 2, cut.slice_of(32, 10080))
+    check("witness: dividing without the fold puts that chunk in an hour 3",
+          32 // cut.per_slice() + 1 == 3)
+    check("control: the first chunk past the hour is in hour 2",
+          cut.slice_of(12, 10080) == 2)
+    check("control: a five hour file's last chunk is in hour 5",
+          cut.slice_of(59, 18000) == 5, cut.slice_of(59, 18000))
     span = cut.per_slice()
     check("the ledger counts in chunks, twelve to an aired hour",
           (cut.unit_seconds(), span, cut.units_in(18000)) == (300, 12, 60),
