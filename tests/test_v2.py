@@ -5,6 +5,7 @@ The pure rules first, each with the case that must fail beside it, then one
 real ffmpeg pass through the cutter: a playable file goes queue -> chunks ->
 aired, a 50 fps one is refused and never reaches the wire.
 """
+import base64
 import os
 import pathlib
 import shutil
@@ -1282,6 +1283,49 @@ check("control: a signature over the wrong body is refused too",
       not kickapi.verify({"Kick-Event-Message-Id": "1",
                           "Kick-Event-Message-Timestamp": "2026-09-19T12:00:00Z",
                           "Kick-Event-Signature": "Zm9v"}, b"{}"))
+
+# Everything above is a refusal, and a verify() that answered False to
+# everything would pass all of it while the chat went silent. Kick's timestamp
+# is UTC and it was read as local time: exact on Oracle, which runs UTC, and
+# 3600 s out anywhere else, against a 300 s window. Nothing could see it
+# because nothing here ever asked for a yes.
+from cryptography.hazmat.primitives import hashes as _h, serialization as _s  # noqa: E402
+from cryptography.hazmat.primitives.asymmetric import padding as _p, rsa as _rsa  # noqa: E402
+
+_cle = _rsa.generate_private_key(public_exponent=65537, key_size=2048)
+_pem = _cle.public_key().public_bytes(
+    _s.Encoding.PEM, _s.PublicFormat.SubjectPublicKeyInfo)
+
+
+def _signe(mid, stamp, corps, cle=None):
+    return base64.b64encode((cle or _cle).sign(
+        b".".join([mid.encode(), stamp.encode(), corps]),
+        _p.PKCS1v15(), _h.SHA256())).decode()
+
+
+def _entetes(mid, stamp, corps, cle=None):
+    return {"Kick-Event-Message-Id": mid,
+            "Kick-Event-Message-Timestamp": stamp,
+            "Kick-Event-Signature": _signe(mid, stamp, corps, cle)}
+
+
+_vraie_cle = kickapi.public_key
+try:
+    kickapi.public_key = lambda: _pem
+    _corps = b'{"content":"!list"}'
+    _now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+    check("a webhook Kick really signed is accepted, whatever this machine's clock says",
+          kickapi.verify(_entetes("m1", _now, _corps), _corps))
+    check("control: the same signature over a changed body is refused",
+          not kickapi.verify(_entetes("m1", _now, _corps), b'{"content":"!force"}'))
+    _vieux = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(time.time() - 600))
+    check("control: a replay from ten minutes ago is outside the window",
+          not kickapi.verify(_entetes("m1", _vieux, _corps), _corps))
+    _autre = _rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    check("control: signed by any other key, refused",
+          not kickapi.verify(_entetes("m1", _now, _corps, _autre), _corps))
+finally:
+    kickapi.public_key = _vraie_cle
 tries = []
 real_call, real_sleep = kickapi._call, time.sleep
 try:

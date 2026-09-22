@@ -14,6 +14,7 @@ Three things live here because all three are about trust, not about the channel:
 The bot holds no HTTP of its own; this module holds no opinion about chat.
 """
 import base64
+import calendar
 import hashlib
 import json
 import os
@@ -184,7 +185,14 @@ def verify(headers, body, now=None):
     if not (message_id and stamp and signature):
         return False
     try:
-        sent = time.mktime(time.strptime(stamp[:19], "%Y-%m-%dT%H:%M:%S")) - time.timezone
+        # timegm et pas mktime: l horodatage de Kick est en UTC, mktime le lit
+        # comme une heure locale. Sur Oracle, qui tourne en UTC, les deux
+        # tombent juste et c est la seule raison pour laquelle personne ne l a
+        # vu. Mesure du 2026-09-22 sur une machine a Paris en heure d ete:
+        # 3600 s d ecart contre une fenetre de 300, donc tout webhook refuse,
+        # le chat muet, et "signature invalide" dans le log, ce qui se lit
+        # comme une attaque et pas comme un fuseau horaire.
+        sent = calendar.timegm(time.strptime(stamp[:19], "%Y-%m-%dT%H:%M:%S"))
     except ValueError:
         return False
     if abs((time.time() if now is None else now) - sent) > SIGNATURE_WINDOW:
