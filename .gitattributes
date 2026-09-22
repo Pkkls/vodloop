@@ -12,3 +12,7 @@ vodloopctl text eol=lf
 claw/*     text eol=lf
 # v2: the board runs these through busybox sh, which refuses CRLF outright.
 v2/claw/*  text eol=lf
+
+# Ce depot se deploie par scp depuis Windows: un fichier livre doit partir
+# comme il est commite, sinon la copie de travail expedie des CRLF a Linux.
+*.py       text eol=lf
