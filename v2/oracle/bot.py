@@ -536,10 +536,6 @@ SAID = {
                     "!list の番号では", "!list numarası değil"),
     "no_video_there": ("no video at that number", "no hay vídeo ahí",
                       "その番号はなし", "o numarada yok"),
-    "not_a_link": ("not a YouTube link", "no es un enlace de YouTube",
-                  "リンクが違います", "YouTube bağlantısı değil"),
-    "not_in_sources": ("not one of this channel's streams", "no es de este canal",
-                      "このチャンネル外", "bu kanaldan değil"),
     "already_shown": ("already been on", "ya emitido", "放送済み", "yayınlandı"),
     "name_a_place": ("name a place, like Thailand", "di un lugar, como Tailandia",
                     "場所を（例: タイ）", "bir yer yaz, Tayland gibi"),
@@ -966,45 +962,36 @@ def waiting_for(seconds):
 # kil, 2026-09-21: the five at a hundred points each. They were priced against
 # each other, a skip cheap and a fetch dear, which only made the dear ones
 # never happen; one price says every lever is worth pulling.
-# kil, 2026-09-21: "c'est tres geek, il faut quelque chose international". The
-# channel films Japan, Turkey and South America and its chat follows, so each
-# reward says what it does in the four languages that watch it, English first
-# because that is what the rest of the interface is in. "was" carries the title
-# a reward had before, which is what lets an existing one be renamed in place:
-# a redemption is matched on its title, so creating the new one beside the old
-# would leave the old taking points for something nothing answers any more.
-# kil, 2026-09-22: "c'est que de l'AI slop la, incomprehensible. il faut que ce
-# soit minimaliste". Four languages on one line is already a crowd, and a whole
-# sentence in each made it a wall. Each one is now the shortest phrase that
-# still says what happens, and nothing else. What a refusal gives back is said
-# in chat at the moment it happens, which is the only moment it is worth reading.
+# "was" carries every title a reward has had, which is what lets an existing one
+# be renamed in place: a redemption is matched on its title, so creating the new
+# one beside the old would leave the old taking points for something nothing
+# answers any more.
+# kil, 2026-09-21: "c'est tres geek, il faut quelque chose international", so
+# each title and description carried English, Spanish, Japanese and Turkish.
+# kil, 2026-09-22: "on sait meme pas ce que ca fait !! c'est ca le plus gros AI
+# SLOP". The points panel shows the title and nothing else, in a tile two lines
+# tall, so four languages there meant nobody read any of them: "Skip · Saltar ·
+# スキップ · Geç" wrapped mid-word and said less than "Skip" would have. One
+# language, one word in the tile, one plain sentence underneath that names what
+# the button does. The chat still answers in four languages, because that is a
+# line somebody reads once, not a label they scan.
 REWARDS = [
-    {"key": "skip", "title": "Skip · Saltar · スキップ · Geç", "cost": 100, "input": False,
-     "was": ["Skip this hour"],
-     "description": "Another stream, now · Otro directo, ya · 今すぐ別の配信 · "
-                    "Hemen başka yayın"},
-    {"key": "stay", "title": "Stay · Seguir · 続ける · Devam", "cost": 100, "input": False,
-     "was": ["Keep this one going"],
-     "description": "One more hour of this · Una hora más · もう1時間 · "
-                    "Bir saat daha"},
-    {"key": "pick", "title": "Pick · Elegir · 選ぶ · Seç", "cost": 100, "input": True,
-     "was": ["Pick what plays next"],
-     "description": "!list in chat, then the number here · !list en el chat, "
-                    "el número aquí · チャットで!list、番号をここに · "
-                    "Sohbette !list, numara buraya"},
-    {"key": "request", "title": "Request · Pedir · リクエスト · İste", "cost": 100, "input": True,
-     "was": ["Request a stream"],
-     "description": "Paste a YouTube link from this channel · Pega un enlace "
-                    "del canal · このチャンネルのYouTubeリンクを貼る · "
-                    "Bu kanalın YouTube linkini yapıştır"},
-    {"key": "jump", "title": "+10 min · Avanzar · 10分進む · İleri sar", "cost": 100,
-     "input": False, "was": ["+30 min · Avanzar · 30分進む · İleri sar"],
-     "description": "Jumps 10 minutes ahead · Avanza 10 minutos · 10分進む · "
-                    "10 dakika ileri sarar"},
-    {"key": "place", "title": "Travel · Viajar · 旅先 · Gezi", "cost": 100, "input": True,
-     "was": ["Take me somewhere"],
-     "description": "A country or a city · Un país o una ciudad · 国か都市の名前 · "
-                    "Bir ülke veya şehir"},
+    {"key": "skip", "title": "Skip", "cost": 100, "input": False,
+     "was": ["Skip · Saltar · スキップ · Geç", "Skip this hour"],
+     "description": "Plays a different stream right now"},
+    {"key": "stay", "title": "Stay", "cost": 100, "input": False,
+     "was": ["Stay · Seguir · 続ける · Devam", "Keep this one going"],
+     "description": "Keeps this stream on for one more hour"},
+    {"key": "pick", "title": "Pick", "cost": 100, "input": True,
+     "was": ["Pick · Elegir · 選ぶ · Seç", "Pick what plays next"],
+     "description": "Type !list in chat, then put that number here"},
+    {"key": "jump", "title": "+10 min", "cost": 100, "input": False,
+     "was": ["+10 min · Avanzar · 10分進む · İleri sar",
+             "+30 min · Avanzar · 30分進む · İleri sar"],
+     "description": "Jumps 10 minutes forward in this stream"},
+    {"key": "place", "title": "Travel", "cost": 100, "input": True,
+     "was": ["Travel · Viajar · 旅先 · Gezi", "Take me somewhere"],
+     "description": "Type a country or a city, a stream from there plays next"},
 ]
 # the old spellings answer too: a redemption made in the seconds before the
 # rename lands carries the title the viewer saw, and it was paid for all the same
@@ -1093,18 +1080,6 @@ def place_terms(wanted):
     return PLACES.get(wanted, (wanted,))
 
 
-# every shape a viewer might paste, down to the bare id
-LINK = re.compile(
-    r"(?:youtu\.be/|youtube\.com/(?:watch\?(?:[\w=&]*&)?v=|live/|embed/|shorts/|v/)|^)"
-    r"([A-Za-z0-9_-]{11})(?![A-Za-z0-9_-])")
-
-
-def video_asked(text):
-    """The video id in whatever somebody pasted, or None."""
-    found = LINK.search((text or "").strip())
-    return found.group(1) if found else None
-
-
 def too_long_for_now(seconds):
     """Whether this length is more than the supply line can spare right now.
 
@@ -1154,36 +1129,6 @@ def queue_request(data, now, who, vid, title):
     return True, None
 
 
-def reward_request(data, now, who, text):
-    """A stream a viewer found on YouTube, fetched next.
-
-    Only what the channel already lists as a source is accepted. Oracle cannot
-    ask YouTube about a single video at all, the player API is walled from a
-    datacenter address, so anything outside the catalogue could not be checked
-    for length, shape or content before the board spent an hour on it. Inside
-    the catalogue every one of those is already known.
-    """
-    vid = video_asked(text)
-    if not vid:
-        return False, f"@{who} " + four("not_a_link")
-    titles = supply.catalog_titles()
-    if vid not in titles:
-        return False, (f"@{who} " + four("not_in_sources"))
-    if vid in supply.excluded(now):
-        return False, (f"@{who} {clean_title(titles[vid], SLUG)[:40]} · "
-                       + four("already_shown"))
-    for path, _ in shelf():
-        if chan.video_id(path) == vid:
-            PICK.write_text(json.dumps({"name": path.name, "at": int(now)}))
-            return True, f"@{who} {clean_title(titles[vid], SLUG)[:44]} · " + four("is_next")
-    queued, refusal = queue_request(data, now, who, vid, titles[vid])
-    if not queued:
-        return False, refusal
-    play_short()
-    return True, (f"@{who} {clean_title(titles[vid], SLUG)[:40]} · "
-                  + four("downloading") + f" {waiting_for(catalog_seconds(vid))}")
-
-
 def reward_place(data, now, who, text):
     """A stream shot somewhere in particular, from the disk or from the shelf's
     six hundred entries.
@@ -1228,7 +1173,7 @@ def reward_place(data, now, who, text):
 
 
 ACTIONS = {"skip": reward_skip, "stay": reward_stay, "pick": reward_pick,
-           "place": reward_place, "request": reward_request, "jump": reward_jump}
+           "place": reward_place, "jump": reward_jump}
 
 
 def redeemed(payload):
