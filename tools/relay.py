@@ -387,9 +387,12 @@ def deliver(conf, path):
         print("  nom impossible a passer au shell: %s" % name[:50])
         return None
     queued = "%d-%s" % (int(time.time()), name)
+    # stat plutot que wc: c est ce que la carte fait contre cette meme machine
+    # depuis toujours, et ca ne peut pas se mettre a lire cinq gigaoctets sur
+    # une VM a un vCPU qui diffuse pendant ce temps
     script = (
         "cd '%s' || exit 1\n"
-        "t=$(wc -c < 'upload/%s' 2>/dev/null || echo 0)\n"
+        "t=$(stat -c %%s 'upload/%s' 2>/dev/null || echo 0)\n"
         "if [ \"$t\" = '%d' ]; then mv 'upload/%s' 'queue/%s' && echo ok; "
         "else echo \"taille $t\"; fi\n"
         % (FAR, name, path.stat().st_size, name, queued))
