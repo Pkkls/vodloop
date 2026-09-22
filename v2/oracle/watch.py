@@ -28,6 +28,12 @@ STALE_SECONDS = 30 * 60
 DRY_ARRIVAL_SECONDS = 12 * 3600
 # under two hours of unseen material the board has about one delivery of grace
 THIN_RUNWAY_SECONDS = 2 * 3600
+# A delivery is the card's business from end to end: it copies into upload/ and
+# it is the only thing that moves the file out of it. So a file that stops
+# growing there is one nothing will ever claim, and on 2026-09-22 that was a
+# whole seven hour stream, complete and playable, sitting on five gigabytes of
+# disk while the channel was short of material and nobody could see it.
+UPLOAD_STALL_SECONDS = 60 * 60
 
 
 def sent_bytes(pid):
@@ -56,6 +62,15 @@ def newest_arrival():
     stamps = [p.stat().st_mtime for folder in (chan.QUEUE, chan.CURRENT, chan.AIRED)
               for p in chan.media(folder)]
     return max(stamps) if stamps else 0
+
+
+def stalled_deliveries(stamped, now, limit=UPLOAD_STALL_SECONDS):
+    """Names in upload/ that stopped growing. (name, mtime) pairs in, pure.
+
+    A live copy touches its file continuously, so age alone tells a stalled
+    transfer from a slow one whatever its size.
+    """
+    return [name for name, mtime in stamped if now - mtime > limit]
 
 
 def main(argv):
@@ -119,6 +134,12 @@ def main(argv):
     free = shutil.disk_usage(chan.ROOT).free
     if free < chan.FLOOR_BYTES:
         faults["disque"] = f"{free / chan.GIB:.1f} Go libres, sous le plancher"
+    figes = stalled_deliveries([(p.name, p.stat().st_mtime)
+                                for p in chan.media(chan.UPLOAD)], now)
+    if figes:
+        faults["livraison"] = (f"{len(figes)} fichier(s) figes dans upload/ depuis "
+                               f"plus de {UPLOAD_STALL_SECONDS // 60} min, que rien "
+                               f"ne viendra prendre: {figes[0][:44]}")
 
     print(f"chunks {chunks}, file {want.get('queue_hours')} h, inedit "
           f"{(want.get('runway_seconds') or 0) / 3600:.1f} h, besoin "

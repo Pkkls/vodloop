@@ -973,6 +973,21 @@ finally:
     for stale in (un, deux):
         stale.unlink(missing_ok=True)
 
+print("watch: a delivery nothing will ever claim is said out loud")
+import watch  # noqa: E402
+
+# 2026-09-22: seven hours of playable video sat in upload/ while the channel
+# was short of material, because only the board moves a file out of there and
+# that one had not arrived through the board
+instant = 1790000000
+check("a file that stopped growing is named",
+      watch.stalled_deliveries([("Korea.mkv", instant - 3700)], instant)
+      == ["Korea.mkv"])
+check("control: a copy still being written is not",
+      watch.stalled_deliveries([("Korea.mkv", instant - 60)], instant) == [])
+check("control: an empty upload says nothing",
+      watch.stalled_deliveries([], instant) == [])
+
 print("bot: a vote that sends the board shopping puts a short on the wire")
 real_conf = dict(chan.CONF)
 real_probe = chan.probe
