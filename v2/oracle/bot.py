@@ -227,6 +227,7 @@ def load():
     data = chan.read_json(STATE, {})
     data.setdefault("vote", None)
     data.setdefault("skips", [])
+    data.setdefault("jumps", [])
     data.setdefault("seen", [])
     data.setdefault("users", {})
     data.setdefault("title", "")
@@ -240,6 +241,7 @@ def save(data):
     data["seen"] = data["seen"][-SEEN_KEPT:]
     cutoff = time.time() - 7200
     data["skips"] = [r for r in skips_since(data, cutoff)]
+    data["jumps"] = [r for r in data.get("jumps", []) if float(r.get("at", 0)) > cutoff]
     data["users"] = {u: t for u, t in data["users"].items() if t > time.time() - 3600}
     chan.write_json(STATE, data)
 
@@ -376,6 +378,18 @@ def skips_since(data, when):
 
 def wasted_recently(data, now):
     return sum(float(r.get("cost", 0)) for r in skips_since(data, now - 3600))
+
+
+def jumped_recently(data, now):
+    """Seconds a jump has thrown away in the last hour.
+
+    A jump destroys unseen minutes exactly as a skip does, so it answers to
+    the same budget. Kept in its own list rather than added to the skips: a
+    jump must not close the door on a vote, it only has to stop one viewer
+    walking the channel through an hour ten minutes at a time.
+    """
+    return sum(float(r.get("cost", 0)) for r in data.get("jumps", [])
+               if float(r.get("at", 0)) > now - 3600)
 
 
 def other_stream_hours(live):
@@ -1040,7 +1054,19 @@ def reward_jump(data, now, who, text):
     if cut.ahead_seconds() < JUMP_SECONDS:
         return False, (f"@{who} " + four("not_cut_ahead", min=JUMP_SECONDS // 60)
                       )
+    # kil, 2026-09-22: "met les points de chaine a 1". The buffer was the only
+    # guard and it was enough at a hundred points, which this docstring said
+    # out loud. At one point it is not: measured the same day, a buffer of
+    # 3900 s against a 600 s jump let one viewer walk the channel through a
+    # whole hour for six points, past every floor and cooldown a skip answers
+    # to. So a jump draws on the same budget of unseen minutes as a skip.
+    cost = float(JUMP_SECONDS)
+    spent = jumped_recently(data, now) + wasted_recently(data, now)
+    if spent + cost > waste_allowance(unseen_hours() * 3600):
+        return False, f"@{who} " + four("too_much_skipped")
     cut.JUMP.write_text(str(JUMP_SECONDS))
+    data.setdefault("jumps", []).append(
+        {"at": now, "cost": cost, "who": data.get("redeemer_id") or who})
     return True, f"@{who} " + four("forward", min=JUMP_SECONDS // 60)
 
 

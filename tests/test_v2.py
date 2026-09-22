@@ -861,7 +861,7 @@ finally:
     bot.PICK.unlink(missing_ok=True)
 
 print("bot: thirty minutes forward takes a slice out of the hour, not the hour")
-real_playing_j, real_ahead = bot.playing, cut.ahead_seconds
+real_playing_j, real_ahead, real_shelf_j = bot.playing, cut.ahead_seconds, bot.shelf
 try:
     chan.CHUNKS.mkdir(parents=True, exist_ok=True)
     for stale in chan.CHUNKS.glob("*.ts"):
@@ -875,9 +875,27 @@ try:
     check("with less cut ahead than the jump it is refused and refunded",
           ok is False and said and not cut.JUMP.exists(), said)
     cut.ahead_seconds = lambda: 3600
+    bot.shelf = lambda: [(pathlib.Path("1790-Autre-aB3dEfGhIjK.mkv"), 12)]
     ok, said = bot.reward_jump({}, 1000, "v", "")
     check("with the hour in hand it is taken and the cutter is told",
           ok is True and cut.JUMP.read_text() == str(bot.JUMP_SECONDS), said)
+    # at a hundred points the buffer was guard enough, and the docstring said
+    # so. At one point, 3900 s of buffer against a 600 s jump let one viewer
+    # walk the channel through an hour for six points, past every floor a skip
+    # answers to, so a jump draws on the same budget of unseen minutes
+    plein = {"jumps": [{"at": 1000, "cost": bot.waste_allowance(12 * 3600),
+                        "who": "v"}]}
+    ok, said = bot.reward_jump(plein, 1000, "v", "")
+    check("a jump past the hour's budget of unseen minutes is refused",
+          ok is False and said, said)
+    maigre = {"jumps": [{"at": 1000 - 7200, "cost": 99999.0, "who": "v"}]}
+    cut.JUMP.unlink(missing_ok=True)
+    ok, said = bot.reward_jump(maigre, 1000, "v", "")
+    check("control: what it spent more than an hour ago does not count",
+          ok is True and cut.JUMP.exists(), said)
+    check("control: and the jump is written down, or it would never add up",
+          len(maigre["jumps"]) == 2 and maigre["jumps"][-1]["cost"] == bot.JUMP_SECONDS,
+          maigre["jumps"])
     for n in range(12):
         (chan.CHUNKS / f"{n:05d}.ts").write_bytes(b"x")
     goes = int(bot.JUMP_SECONDS // chan.CHUNK_SECONDS)
@@ -897,7 +915,7 @@ try:
     check("control: with nothing on air there is nothing to jump into",
           ok is False and "nothing on air" in said, said)
 finally:
-    bot.playing, cut.ahead_seconds = real_playing_j, real_ahead
+    bot.playing, cut.ahead_seconds, bot.shelf = real_playing_j, real_ahead, real_shelf_j
     cut.JUMP.unlink(missing_ok=True)
     cut.FLUSH.unlink(missing_ok=True)
     for stale in chan.CHUNKS.glob("*.ts"):
