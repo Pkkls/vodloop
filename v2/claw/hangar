@@ -149,6 +149,21 @@ ship() {
 # show and how the last one ended. A function rather than eight lines inside
 # fill() because this is the rule that broke on 2026-09-22 and a rule nothing
 # can call is a rule nothing can test.
+# Why the draw should take the shortest candidates rather than any of them, or
+# nothing when it should not. Two cases and they are not the same case: an
+# empty queue is the channel about to show a loading card, too few recordings
+# is the chat having nowhere to skip to. A far side too old to send streams
+# writes nothing, which reads as zero and leaves the rule as it was.
+shortest_first() {
+  queue_files=$1
+  streams=$2
+  if [ "$queue_files" -eq 0 ]; then
+    echo "file vide"
+  elif [ "$streams" -gt 0 ] && [ "$streams" -lt "$BREADTH" ]; then
+    echo "$streams inedite(s) seulement"
+  fi
+}
+
 gap_for() {
   runway_h=$1
   last_res=$2
@@ -235,12 +250,10 @@ fill() {
   # time. An older far side writes no streams field, which reads as 0 and
   # leaves this rule exactly as it was.
   streams=$(num "$(field streams "$want")")
-  if [ "$(num "$(field queue_files "$want")")" -eq 0 ]; then
+  why=$(shortest_first "$(num "$(field queue_files "$want")")" "$streams")
+  if [ -n "$why" ]; then
     cands=$(printf '%s\n' "$cands" | sort -k2 -n | head -20)
-    log "$chan: file vide, tirage parmi les 20 plus courtes"
-  elif [ "$streams" -gt 0 ] && [ "$streams" -lt "$BREADTH" ]; then
-    cands=$(printf '%s\n' "$cands" | sort -k2 -n | head -20)
-    log "$chan: $streams inedite(s) seulement, tirage parmi les 20 plus courtes"
+    log "$chan: $why, tirage parmi les 20 plus courtes"
   fi
   skip=$( { ls "$dir" | sed -n 's/.*-\([A-Za-z0-9_-]\{11\}\)\.[a-z0-9]*$/\1/p'
             awk -v t=$((now - 7 * 86400)) -v m="$MAX_FAILS" \

@@ -38,5 +38,11 @@ is "mur avec une reserve confortable: la meme"     "$(gap_for 20 wall)" "$FAIL_G
 is "temoin: en le prenant pour un echec ordinaire, on retapait dans le mur" \
    "$(gap_for 2 fail)" 25
 
+echo "le tirage vise court quand la chaine manque de largeur"
+is "file vide: la question n est plus laquelle merite un tour"    "$(shortest_first 0 4)" "file vide"
+is "deux enregistrements inedits: le chat n a nulle part ou sauter"    "$(shortest_first 2 2)" "2 inedite(s) seulement"
+is "controle: trois, c est assez, on tire large" "$(shortest_first 2 3)" ""
+is "controle: un far side trop vieux pour envoyer streams ne declenche rien"    "$(shortest_first 2 0)" ""
+
 echo
 [ "$fail" -eq 0 ] && echo "tout passe" || { echo "$fail echec(s)"; exit 1; }
