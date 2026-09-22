@@ -894,6 +894,19 @@ bot.note_use(data, "pick", ["banane"])
 check("control: something that is not a number leaves the depth alone",
       data["used"]["pick_max"] == 340 and data["used"]["pick"] == 4, data["used"])
 
+print("check: a skip that landed nowhere is readable from history alone")
+# imported under another name: this file already has a check() of its own
+import check as chain  # noqa: E402
+meme = [(100, "un"), (200, "un"), (300, "deux")]
+check("un saut qui retombe sur le meme enregistrement est vu",
+      chain.skips_that_landed_nowhere([{"at": 150}], meme) == [150])
+check("control: un saut qui change de flux ne l est pas",
+      chain.skips_that_landed_nowhere([{"at": 250}], meme) == [])
+check("control: sans historique apres le saut, rien n est affirme",
+      chain.skips_that_landed_nowhere([{"at": 999}], meme) == [])
+check("control: sans saut du tout, rien n est en faute",
+      chain.skips_that_landed_nowhere([], meme) == [])
+
 print("supply: a delivery says so once, and an empty run says nothing")
 real_tg = chan.telegram
 said_tg = []

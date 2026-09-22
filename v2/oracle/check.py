@@ -87,6 +87,43 @@ def oversized(paths, session):
     return out
 
 
+def aired_rows():
+    """(epoch, video id) of every unit the wire has sent, oldest first.
+
+    Both ledgers, because the granularity moved and the old rows are still
+    history: units.tsv is the one that grows, hours.tsv stopped on 2026-09-20.
+    """
+    rows = []
+    for name in ("units.tsv", "hours.tsv"):
+        try:
+            for line in (chan.STATE / name).read_text().splitlines():
+                fields = line.split("	")
+                if len(fields) >= 3:
+                    rows.append((int(fields[0]), fields[1]))
+        except (OSError, ValueError):
+            continue
+    return sorted(rows)
+
+
+def skips_that_landed_nowhere(skips, rows):
+    """Skips after which the wire went back to the recording it had just left.
+
+    The promise a skip makes is a different stream, not the next hour of the
+    same one. It is checkable from history alone: what aired last before the
+    skip, what aired first after it. No state has to be fabricated, which is
+    what makes this one of the few promise guards that can be read off the
+    running channel rather than reasoned about.
+    """
+    out = []
+    for skip in skips:
+        when = skip.get("at", 0)
+        before = [vid for at, vid in rows if at <= when]
+        after = [vid for at, vid in rows if at > when]
+        if before and after and before[-1] == after[0]:
+            out.append(int(when))
+    return out
+
+
 def newest_arrival(folders):
     newest = 0
     for folder in folders:
@@ -139,6 +176,15 @@ def run():
           # a picture no session opened on can accept, put to the same function
           witness=not (session and feed.exceeds((3840, 2160, 60.0), tuple(session))),
           detail=f"{len(ready)} shorts prets")
+
+    rows = aired_rows()
+    skips = chan.read_json(chan.STATE / "bot.json", {}).get("skips") or []
+    landed = skips_that_landed_nowhere(skips, rows)
+    check("aucun saut n est retombe sur le meme enregistrement", not landed,
+          witness=not skips_that_landed_nowhere(
+              [{"at": 10}], [(5, "meme"), (15, "meme")]),
+          detail=f"{len(skips)} saut(s) examine(s)"
+                 + (f", {len(landed)} en faute" if landed else ""))
 
     board = chan.read_json(chan.ROOT.parent / "board.json", {})
     age = (time.time() - board.get("at", 0)) / 60
