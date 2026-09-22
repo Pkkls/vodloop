@@ -552,6 +552,11 @@ report() {
   done
   last_at=0; last_res=none
   [ -f "$BASE/last" ] && read -r last_at last_res < "$BASE/last"
+  # How much of its budget the card is currently allowed, because a card that
+  # has halved itself looks exactly like a healthy one from the far side. Read,
+  # never computed here: throttle_level has a side effect and the beacon is not
+  # the place to spend it.
+  lvl=0; [ -f "$BASE/throttle" ] && read -r lvl _rest < "$BASE/throttle"
   # The card checks its own rules and says so through the one channel it
   # already has. Nineteen comparisons in pure shell, no network and no disk to
   # speak of, against a beacon that goes out every five minutes anyway. Without
@@ -561,7 +566,7 @@ report() {
   if [ -r "$BASE/test_hangar_rules.sh" ]; then
     sh "$BASE/test_hangar_rules.sh" /usr/bin/hangar >/dev/null 2>&1 && rules=ok || rules=casse
   fi
-  printf '{"at":%s,"free_mb":%s,"last_fetch":%s,"last_result":"%s","rules":"'"$rules"'","hangar":{%s}}'     "$(date +%s)" "$(num "$free")" "$(num "$last_at")" "$last_res" "$parts"     | $OSSH "$ORACLE" "cat > $V2/board.json.tmp && mv $V2/board.json.tmp $V2/board.json" 2>/dev/null
+  printf '{"at":%s,"free_mb":%s,"last_fetch":%s,"last_result":"%s","throttle":%s,"rules":"'"$rules"'","hangar":{%s}}'     "$(date +%s)" "$(num "$free")" "$(num "$last_at")" "$last_res" "$(num "$lvl")" "$parts"     | $OSSH "$ORACLE" "cat > $V2/board.json.tmp && mv $V2/board.json.tmp $V2/board.json" 2>/dev/null
 }
 
 report

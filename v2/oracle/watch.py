@@ -105,6 +105,15 @@ def main(argv):
     board = chan.read_json(chan.ROOT.parent / "board.json", {})
     if now - board.get("at", 0) > STALE_SECONDS:
         faults["carte"] = "la carte ne donne plus signe de vie"
+    # A budget the board has halved against itself is invisible from here: the
+    # beacon said the card was alive and fetching, and on 2026-09-22 the
+    # channel spent a day on half its supply without a word. What the card is
+    # allowed to carry belongs in the same list as the disk and the reserve.
+    level = int(board.get("throttle") or 0)
+    if level:
+        faults["budget carte"] = (f"la carte s'est bridee au niveau {level}: "
+                                  f"budget divise par {2 ** level} tant que "
+                                  f"YouTube refuse")
     if want.get("need_seconds") and now - newest_arrival() > DRY_ARRIVAL_SECONDS:
         faults["approvisionnement"] = "rien de neuf depuis 12 h alors que la file manque"
     free = shutil.disk_usage(chan.ROOT).free
