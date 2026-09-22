@@ -1909,8 +1909,12 @@ try:
         check("TEMOIN: a second paid pick is refused instead of swallowed",
               bot.set_next("trois.mkv", 1000, paid=True) is False
               and chan.read_json(bot.PICK, {})["name"] == "deux.mkv")
-        check("control: the same paid pick again is not a refusal",
-              bot.set_next("deux.mkv", 1000, paid=True))
+        # even the same name: the slot is already bought, so a second point on
+        # it buys nothing. Two viewers paying to keep the same stream on get
+        # one extra hour between them, and the second should hear it
+        check("TEMOIN: the same name again is refused too, it was already bought",
+              bot.set_next("deux.mkv", 1000, paid=True) is False
+              and chan.read_json(bot.PICK, {})["name"] == "deux.mkv")
         check("control: a room that voted still outranks one paid point",
               bot.set_next("quatre.mkv", 1000)
               and chan.read_json(bot.PICK, {})["name"] == "quatre.mkv")

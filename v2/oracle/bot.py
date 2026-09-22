@@ -483,7 +483,11 @@ def set_next(name, now, paid=False, force=False):
     spent hours earlier and the alternative is stranding them.
     """
     pending = chan.read_json(PICK, {})
-    if paid and not force and pending.get("paid") and pending.get("name") != name:
+    # including the same name: the slot is already bought, so a second point
+    # spent on it buys nothing at all. Two viewers paying to keep the same
+    # stream on get one extra hour between them, and the second one should
+    # hear that rather than pay for it
+    if paid and not force and pending.get("paid"):
         return False
     PICK.write_text(json.dumps({"name": name, "at": int(now), "paid": bool(paid)}))
     return True
