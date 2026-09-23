@@ -196,6 +196,31 @@ def ledger():
     return out
 
 
+def aired_seconds(book):
+    """Seconds the ledger says went out, grain spent.
+
+    The ledger counts in chunks whatever shape a row arrived in, so a count of
+    its entries is a count of grains and not of hours. Saying so in one place,
+    because the channel told its viewers it had aired 1370 hours when it had
+    aired 114: the count was printed with an h on it.
+
+    It reads slightly high on purpose. A skip marks the whole hour on air as
+    spent the moment its first chunk goes out, since that is what the reserve
+    has lost; measured 107% of the ledger's own age on 2026-09-23.
+    """
+    return sum(len(spent) for spent in book.values()) * unit_seconds()
+
+
+def first_aired_at(book):
+    """When the first chunk of this ledger went out, 0 if nothing is dated.
+
+    Rows recovered from older shapes carry no time and are written as zero, so
+    they are skipped rather than dragged to the epoch.
+    """
+    dated = [when for spent in book.values() for when in spent.values() if when]
+    return min(dated) if dated else 0
+
+
 def played(name, book=None, since=0):
     """The chunk numbers of this video that have already been on the wire.
 

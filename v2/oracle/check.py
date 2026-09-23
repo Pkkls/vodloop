@@ -165,6 +165,32 @@ def hour_overrun(title):
     return bool(found) and int(found.group(1)) > int(found.group(2))
 
 
+def claims_more_than_it_lived(book, now, slack=3.0):
+    """Hours the ledger claims against hours the channel has existed.
+
+    The wire runs at 1x, so a ledger cannot hold much more time than the
+    channel has been alive. This is the only check on that number that does not
+    go through the same arithmetic that produces it, which is why it lives here
+    and not only in a test: on 2026-09-23 the chat had been answering "1370h
+    aired" for days, 12.8 times the channel's own age, because a count of
+    chunks was printed with an h on it.
+
+    The slack is wide on purpose. A skip marks the whole hour on air as spent,
+    so the ledger legitimately reads above wall time; measured 107% the day this
+    was written. Three times never cries wolf and still catches a grain
+    confusion, which is always a factor of twelve or more.
+    """
+    lived = now - cut.first_aired_at(book)
+    return lived > 0 and cut.aired_seconds(book) > lived * slack
+
+
+def as_if_chunks_were_hours(book):
+    """The same ledger with the grain left unspent, which is the bug itself."""
+    first = cut.first_aired_at(book)
+    spent = sum(len(v) for v in book.values()) * cut.per_slice()
+    return {"temoin": {n: first for n in range(spent)}}
+
+
 # --- the pass ---------------------------------------------------------------
 
 def run():
@@ -197,6 +223,13 @@ def run():
     check("aucune heure n est inscrite deux fois au registre", not doubled(book),
           witness=not doubled({"temoin": [3, 3]}),
           detail=", ".join(doubled(book))[:60])
+
+    now = time.time()
+    check("les heures diffusees tiennent dans la vie de la chaine",
+          not claims_more_than_it_lived(book, now),
+          witness=not claims_more_than_it_lived(as_if_chunks_were_hours(book), now),
+          detail=(f"{cut.aired_seconds(book) / 3600:.0f} h pour "
+                  f"{(now - cut.first_aired_at(book)) / 3600:.0f} h de vie"))
 
     durations = chan.read_json(chan.STATE / "durations.json", {})
     held = cut.reserved()

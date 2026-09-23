@@ -474,6 +474,20 @@ try:
           cut.slice_of(12, 10080) == 2)
     check("control: a five hour file's last chunk is in hour 5",
           cut.slice_of(59, 18000) == 5, cut.slice_of(59, 18000))
+    # the channel told its viewers "1370h aired" when it had aired 114: the
+    # ledger's entries were printed with an h on them
+    book = {"un": {n: 1790000000 + n for n in range(12)},
+            "deux": {n: 1790100000 + n for n in range(24)}}
+    check("thirty-six chunks are three hours, not thirty-six",
+          cut.aired_seconds(book) == 3 * 3600, cut.aired_seconds(book))
+    check("witness: counting the entries instead reads twelve times high",
+          sum(len(v) for v in book.values()) == 36)
+    check("the ledger's age is its first dated chunk",
+          cut.first_aired_at(book) == 1790000000, cut.first_aired_at(book))
+    check("witness: a row recovered without a date does not drag it to the epoch",
+          cut.first_aired_at({"trois": {0: 0}, **book}) == 1790000000)
+    check("control: nothing dated at all is no age rather than the epoch",
+          cut.first_aired_at({"trois": {0: 0}}) == 0)
     span = cut.per_slice()
     check("the ledger counts in chunks, twelve to an aired hour",
           (cut.unit_seconds(), span, cut.units_in(18000)) == (300, 12, 60),

@@ -679,10 +679,10 @@ def cmd_source(*_):
 
 def cmd_stats(*_):
     book = cut.ledger()
-    hours = sum(len(v) for v in book.values())
+    aired = cut.aired_seconds(book) / 3600
     rows = shelf()
     return (f"{len(rows)} · " + four("ready_here") + f" | {unseen_hours():.1f}h · "
-            + four("never_shown") + f" | {hours}h · " + four("aired"))
+            + four("never_shown") + f" | {aired:.0f}h · " + four("aired"))
 
 
 def last_arrival_minutes(now):
@@ -717,7 +717,7 @@ def cmd_fetch(data, now, sender, args):
     if landed:
         more += " · " + four("landed_waiting", n=len(landed))
     since = last_arrival_minutes(now)
-    tail = f"{unseen_hours():.1f}h · " + four("ready_here")
+    tail = f"{unseen_hours():.1f}h · " + four("never_shown")
     if since:
         tail += " · " + four("last_landed", min=since)
     if not coming:
