@@ -701,6 +701,31 @@ def cmd_stats(*_):
             + four("never_shown") + f" | {aired:.0f}h · " + four("aired"))
 
 
+CHAT_LIMIT = int(chan.conf_num("CHAT_LIMIT", 500))
+
+
+def within_limit(pieces, limit=CHAT_LIMIT):
+    """As much of pieces as the platform will carry, in the order given.
+
+    Kick cuts a message at five hundred characters, mid-word and mid-language.
+    Saying everything four times means the reply with the most to say is the one
+    that overflows, and what falls off the end is always the fourth language: a
+    !fetch with four videos coming and one landed measures 516, and the sixteen
+    characters lost are the Turkish end of the last phrase. One reader in four
+    then gets a stump.
+
+    pieces are (text, how droppable), 0 meaning never. Ties drop in the order
+    they are written, so the order here is a statement about what matters.
+    """
+    kept = [piece for piece in pieces if piece[0]]
+    while len(" · ".join(text for text, _ in kept)) > limit:
+        loose = max(kept, key=lambda piece: piece[1])
+        if not loose[1]:
+            break
+        kept.remove(loose)
+    return " · ".join(text for text, _ in kept)
+
+
 def last_arrival_minutes(now):
     """Minutes since the board last put a file on this disk, 0 if none has."""
     newest = 0
@@ -729,16 +754,23 @@ def cmd_fetch(data, now, sender, args):
     shown = " · ".join(f"{clean_title(str(row.get('title') or vid), SLUG)[:26]} "
                        f"@{row.get('who', '?')} ~{fetch_eta(catalog_seconds(vid))} min"
                        for vid, row in coming[:3])
-    more = " · " + four("more_asked", n=len(coming) - 3) if len(coming) > 3 else ""
-    if landed:
-        more += " · " + four("landed_waiting", n=len(landed))
     since = last_arrival_minutes(now)
-    tail = f"{unseen_hours():.1f}h · " + four("never_shown")
-    if since:
-        tail += " · " + four("last_landed", min=since)
+    reserve = f"{unseen_hours():.1f}h · " + four("never_shown")
+    landed_line = four("landed_waiting", n=len(landed)) if landed else ""
+    last_line = four("last_landed", min=since) if since else ""
     if not coming:
-        return four("nothing_asked") + f" · {tail} · " + four("ask_with")
-    return f"{len(coming)} " + four("downloading") + f" · {shown}{more} · {tail}"
+        return within_limit([(four("nothing_asked"), 0), (reserve, 2),
+                             (last_line, 3), (four("ask_with"), 1)])
+    # what is coming is the answer to the question asked; everything after it is
+    # context, and context goes over the side before an answer does
+    return within_limit([
+        (f"{len(coming)} " + four("downloading"), 0),
+        (shown, 0),
+        (four("more_asked", n=len(coming) - 3) if len(coming) > 3 else "", 4),
+        (landed_line, 3),
+        (reserve, 2),
+        (last_line, 5),
+    ])
 
 
 def cmd_vote(data, now, sender, args):

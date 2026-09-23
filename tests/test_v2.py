@@ -762,6 +762,31 @@ check("a skip past the end of its block costs nothing rather than a negative",
       bot.skip_cost(dict(short_block, elapsed=4000)))
 chan.PART_SECONDS = was
 
+print("bot: nothing the chat says is cut in half by the platform")
+# measured 2026-09-23: a !fetch with four videos coming, long names and a long
+# handle, came to 516 characters against Kick's 500, and what was cut was the
+# Turkish end of the last phrase
+core = ("A" * 200, 0)
+check("a reply that fits is left exactly as written",
+      bot.within_limit([core, ("court", 1)]) == "A" * 200 + " · court")
+check("the least useful piece is the one dropped",
+      bot.within_limit([core, ("garder", 1), ("jeter", 9)], limit=215)
+      == "A" * 200 + " · garder",
+      bot.within_limit([core, ("garder", 1), ("jeter", 9)], limit=215))
+check("witness: without a limit both stay, so the drop is the limit's doing",
+      bot.within_limit([core, ("garder", 1), ("jeter", 9)]).endswith("jeter"))
+check("what may never be dropped is kept even over the limit, whole",
+      bot.within_limit([core, ("aussi obligatoire", 0)], limit=10)
+      == "A" * 200 + " · aussi obligatoire")
+check("witness: the same piece marked droppable does go",
+      bot.within_limit([core, ("aussi obligatoire", 1)], limit=10) == "A" * 200)
+check("an empty piece takes no separator with it",
+      bot.within_limit([("a", 0), ("", 1), ("b", 0)]) == "a · b")
+check("ties go in writing order, so the order of the list is the priority",
+      bot.within_limit([core, ("premier", 4), ("second", 4)], limit=209)
+      == "A" * 200 + " · second",
+      bot.within_limit([core, ("premier", 4), ("second", 4)], limit=209))
+
 print("bot: the guards on skipping")
 real_shelf = bot.shelf
 try:
