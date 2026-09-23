@@ -847,7 +847,7 @@ def ask_for(data, now, sender, row):
     """
     vid, _, title, seconds = row
     if too_long_for_now(seconds):
-        return four("too_long", hours=seconds // 3600)
+        return too_long_line(seconds)
     held = waiting_requests(data)
     asked = data.get("asked") or {}
     if vid in held:
@@ -1248,6 +1248,15 @@ def too_long_for_now(seconds):
     return runway < REQUEST_RICH_SECONDS
 
 
+def too_long_line(seconds):
+    """The refusal, with the length rounded up to the tenth of an hour.
+
+    Rounded down to the hour, the fifth of the catalogue that runs between six
+    and seven hours was refused as "6 h is too long" under a cap of six hours.
+    """
+    return four("too_long", hours=f"{-(-seconds // 360) / 10:g}")
+
+
 def waiting_requests(data):
     """The paid fetches the board still owes."""
     return [v for v, row in (data.get("asked") or {}).items()
@@ -1265,7 +1274,7 @@ def queue_request(data, now, who, vid, title):
     """
     held = waiting_requests(data)
     if too_long_for_now(catalog_seconds(vid)):
-        return False, (f"@{who} " + four("too_long", hours=catalog_seconds(vid) // 3600))
+        return False, f"@{who} " + too_long_line(catalog_seconds(vid))
     if vid in held:
         # overwriting the row would strand the first viewer's redemption in
         # Kick's queue for good, with their points gone and nobody to settle it

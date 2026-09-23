@@ -905,6 +905,14 @@ try:
     check("a long one is refused while the channel is short, and says how long",
           "too long" in bot.ask_for(data, 1015, viewer, long_row) and
           "12 h" in bot.ask_for(data, 1015, viewer, long_row))
+    # a fifth of the catalogue runs six to seven hours, and rounded down to the
+    # hour each of those was refused as "6 h is too long" under a six hour cap
+    said = bot.too_long_line(6 * 3600 + 1440)
+    check("a length just over the cap is said as it is, not as the cap",
+          "6.4 h" in said and "6 h" not in said, said)
+    said = bot.too_long_line(6 * 3600 + 1)
+    check("witness: even one second over never reads as the cap itself",
+          "6.1 h" in said, said)
     chan.write_json(chan.STATE / "want.json", {"runway_seconds": 20 * 3600})
     check("control: with a deep reserve the same request goes through",
           not too_long_check(bot, long_row))
