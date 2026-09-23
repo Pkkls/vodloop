@@ -8,6 +8,7 @@ aired, a 50 fps one is refused and never reaches the wire.
 import base64
 import os
 import pathlib
+import re
 import shutil
 import subprocess
 import time
@@ -996,7 +997,7 @@ try:
     check("every phrase carries exactly four languages",
           all(len(v) == 4 for v in bot.SAID.values()),
           [k for k, v in bot.SAID.items() if len(v) != 4])
-    filled = {k: bot.four(k, n=3, min=15, need=3, max=527, place="peru", hours=12)
+    filled = {k: bot.four(k, n=3, min=15, need=3, max=527, place="peru", hours=12, h=6)
               for k in bot.SAID}
     longest = max(filled.items(), key=lambda row: len(row[1]))
     check("and none of them is longer than 200 characters on its own",
@@ -1009,6 +1010,18 @@ try:
     check("control: a phrase with a slot left unfilled is caught, not sent",
           "{" not in "".join(filled.values()),
           [k for k, v in filled.items() if "{" in v])
+    # 2026-09-23: seven lines were still written straight into say() in English,
+    # among them the two that tell a viewer who paid that it failed. The rule is
+    # that a viewer line goes through four(); this reads the source for any that
+    # does not, since a line that is never triggered in a test is never seen.
+    source = pathlib.Path(bot.__file__).read_text(encoding="utf-8")
+    bare = [line.strip() for line in source.splitlines()
+            if re.search(r'say\(f?"', line) and "four(" not in line]
+    check("no viewer line is written straight into say() in one language",
+          not bare, bare)
+    check("witness: the line that was there is caught by the same search",
+          bool([l for l in ['say(f"not enough votes ({n}), it stays on")']
+                if re.search(r'say\(f?"', l) and "four(" not in l]))
 finally:
     pass
 
@@ -1804,12 +1817,25 @@ try:
                                "started": 0, "elapsed": 60}
         bot.announce(state)
         check("a new hour is announced once", len(said) == 1 and "now playing" in said[0], said)
+        check("and in the four languages the channel is watched in",
+              all(w in said[0] for w in ("now playing", "sonando", "再生中", "çalıyor")), said)
         bot.announce(state)
         check("and not announced again while it is still on", len(said) == 1, said)
+        # a skip that falls to a short: a few seconds of interlude, not a dry shelf
         bot.playing = lambda: None
+        chan.write_json(bot.feed.ONAIR, {"filler": True, "short": "abc", "at": 0})
         bot.announce(state)
-        check("an empty shelf is said out loud too",
-              len(said) == 2 and "nothing new to play" in said[1], said)
+        check("a short between two blocks is passed over in silence",
+              len(said) == 1, said)
+        check("and leaves the mark alone, so the block after it is announced once",
+              state["said_playing"].endswith("#2"), state["said_playing"])
+        chan.write_json(bot.feed.ONAIR, {"filler": True, "at": 0})
+        bot.announce(state)
+        check("witness: the standby clip with no short is a dry shelf, and said so",
+              len(said) == 2 and "nothing ready" in said[1], said)
+        check("in four languages too",
+              all(w in said[1] for w in ("nada listo", "準備中", "hazır")), said)
+        bot.feed.ONAIR.unlink(missing_ok=True)
     finally:
         bot.say = real_say
         bot.playing = lambda: {"title": "t", "name": "t.mkv", "hour": 1, "hours": 4,

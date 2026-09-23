@@ -518,6 +518,7 @@ SAID = {
                     "最終到着{min}分前", "son {min} dk önce"),
     "help": ("playing, list, choose, skip, downloads, source", "sonando, lista, elegir, saltar, descargas, fuente",
             "再生中 / 一覧 / 選ぶ / スキップ / 取得中 / 元動画", "çalan, liste, seç, atla, indirilenler, kaynak"),
+    "now_playing": ("now playing", "sonando ahora", "再生中", "şimdi çalıyor"),
     "short_playing": ("a short while the next stream downloads",
                       "un short mientras baja el siguiente",
                       "次の配信の取得中、ショート再生", "sonraki yayın inerken bir short"),
@@ -583,6 +584,18 @@ SAID = {
     "nothing_asked": ("nothing asked for right now", "nada pedido ahora mismo",
                       "今リクエストはありません", "şu anda istek yok"),
     "points_back": ("points back", "puntos devueltos", "ポイント返却", "puan iade"),
+    "your_stream_on": ("the stream you asked for is on now", "lo que pediste está sonando",
+                       "リクエストした配信を再生中", "istediğin yayın şimdi açık"),
+    "your_stream_landed": ("the stream you asked for landed, on in ~{min} min",
+                           "lo que pediste llegó, sale en ~{min} min",
+                           "リクエストが到着、約{min}分後に再生",
+                           "istediğin yayın geldi, ~{min} dk sonra"),
+    "cannot_fetch": ("that one cannot be fetched after all", "al final no se puede bajar",
+                     "結局取得できませんでした", "sonunda indirilemedi"),
+    "did_not_arrive": ("that one did not arrive within {h} h", "no llegó en {h} h",
+                       "{h}時間以内に届きませんでした", "{h} saatte gelmedi"),
+    "not_enough_votes": ("not enough votes, it stays on", "faltan votos, sigue",
+                         "票が足りず、このまま", "oy yetmedi, devam"),
     "broke": ("that one broke, points back", "eso falló, puntos devueltos",
              "エラーです、ポイント返却", "hata oldu, puan iade"),
     "not_a_number": ("not a number from !list", "no es un número de !list",
@@ -1441,15 +1454,26 @@ def announce(data):
     said is remembered, so a restart does not repeat it.
     """
     live = playing()
+    # A short is an interlude of a few seconds between two blocks, not a dry
+    # shelf. It used to read as one: playing() is None for anything marked
+    # filler, a short is marked filler, so a skip that fell to a short told the
+    # chat "nothing new to play" and then, twenty seconds later, what was. It is
+    # passed over in silence and the mark is left alone, so the block after it
+    # is announced once, like any other.
+    if not live and chan.read_json(feed.ONAIR, {}).get("short"):
+        return
     mark = f"{live['name']}#{live['hour']}" if live else "filler"
     if mark == data.get("said_playing"):
         return
     data["said_playing"] = mark
+    # The line the channel says most often, once an hour and once per skip, and
+    # it was the one line left in English only
     if not live:
-        say("nothing new to play, the next stream is on its way")
+        say(four("nothing_ready"))
         return
     piece = f" (hour {live['hour']}/{live['hours']})" if live["hours"] > 1 else ""
-    say(f"now playing: {clean_title(live['name'], SLUG)}{piece} · !now !list !skip")
+    say(f"{clean_title(live['name'], SLUG)}{piece} · " + four("now_playing")
+        + " · !now !list !skip")
 
 
 def settle_request(row, honoured):
@@ -1499,7 +1523,7 @@ def announce_arrivals(data):
             # it is on the disk and picked; the only thing left to say is that
             # it is actually going out, which is the thing that was paid for
             if live and live["vid"] == vid:
-                say(f"@{who} the stream you asked for is on now: {title}")
+                say(f"@{who} {title} · " + four("your_stream_on"))
                 asked.pop(vid)
             elif now - row.get("at", 0) > REQUEST_DEADLINE:
                 asked.pop(vid)  # still on the disk, it will come round by itself
@@ -1513,8 +1537,7 @@ def announce_arrivals(data):
                     set_next(path.name, now, paid=True, force=True)
                     break
             settle_request(row, True)
-            say(f"@{who} the stream you asked for landed: {title} "
-                f", on next in ~{air_eta()} min")
+            say(f"@{who} {title} · " + four("your_stream_landed", min=air_eta()))
             row["state"], row["at"] = "here", int(now)
             continue
         if vid in landing:
@@ -1522,16 +1545,19 @@ def announce_arrivals(data):
         barred = supply.excluded(now) if barred is None else barred
         # a request from the chat costs nothing, so telling that viewer their
         # points are back names points they never spent
-        back = ", points back" if row.get("redemption") else ""
+        back = " · " + four("points_back") if row.get("redemption") else ""
         if vid in barred:
             settle_request(row, False)
-            say(f"@{who} {title} cannot be fetched after all{back}")
+            say(f"@{who} {title} · " + four("cannot_fetch") + back)
             asked.pop(vid)
         elif now - row.get("at", 0) > REQUEST_DEADLINE:
             settle_request(row, False)
-            say(f"@{who} {title} did not arrive within "
-                f"{REQUEST_DEADLINE // 3600} h, the board is at its daily "
-                f"ceiling{back}")
+            # no cause is named: it used to say "the board is at its daily
+            # ceiling", which is one reason among a refusal from the source, a
+            # merge that died and a board that is off, and the viewer being
+            # refunded is the one person that sentence was sure to mislead
+            say(f"@{who} {title} · " + four("did_not_arrive", h=REQUEST_DEADLINE // 3600)
+                + back)
             asked.pop(vid)
     data["asked"] = asked
 
@@ -1542,7 +1568,7 @@ def close_stale_vote(data, now):
         data["vote"] = None
         data["vote_failed_at"] = now
         save(data)
-        say(f"not enough votes ({len(vote['voters'])}/{vote['need']}), it stays on")
+        say(f"{len(vote['voters'])}/{vote['need']} · " + four("not_enough_votes"))
 
 
 def ensure_subscription():
