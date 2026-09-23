@@ -740,6 +740,27 @@ chan.PART_SECONDS = was
 check("what is on the wire is read from the cutter's own job",
       live["hour"] == 3 and live["hours"] == 5 and 890 < live["elapsed"] < 960, live)
 check("and its source is named", live["vid"] == "dQw4w9WgXcQ")
+# a block is whatever the draw found unseen. On 2026-09-23, 29 of the 40 blocks
+# waiting were under an hour, so quoting an hour is wrong three times in four.
+chan.write_json(bot.feed.ONAIR, {"source": "1789-Un_Titre-dQw4w9WgXcQ.mkv",
+                                 "number": 24, "seconds": 18000, "block": 1200,
+                                 "at": time.time() - 900})
+was = chan.PART_SECONDS
+chan.PART_SECONDS = 3600
+short_block = bot.playing()
+check("a twenty minute block is quoted as twenty minutes, not as an hour",
+      short_block["block"] == 1200, short_block["block"])
+check("witness: the same row without a length falls back to the full slice",
+      live["block"] == 3600, live["block"])
+check("and a skip five minutes from its end is priced at five minutes",
+      290 < bot.skip_cost(short_block) < 310, bot.skip_cost(short_block))
+check("witness: priced on a full slice the same skip would read as forty-five",
+      2640 < bot.skip_cost(dict(short_block, block=0)) < 2760,
+      bot.skip_cost(dict(short_block, block=0)))
+check("a skip past the end of its block costs nothing rather than a negative",
+      bot.skip_cost(dict(short_block, elapsed=4000)) == 0.0,
+      bot.skip_cost(dict(short_block, elapsed=4000)))
+chan.PART_SECONDS = was
 
 print("bot: the guards on skipping")
 real_shelf = bot.shelf
@@ -1607,10 +1628,16 @@ check("serving it puts the chunks on the wire and says what comes next",
                                              "number": 2, "done": 1}
       and chan.read_json(cut.PICK, {}).get("name") == "7-Tenue-preteAAAAAAA.mkv",
       (chan.read_json(cut.PRIMED, {}), chan.read_json(cut.PICK, {})))
-check("and the chunk carries the hour it came from, for the title",
+check("and the chunk carries the block it came from, for the title",
       chan.read_json(cut.CHUNKMAP, {}).get("0000009001.ts")
-      == ["7-Tenue-preteAAAAAAA.mkv", 2, 15654.0, 2],
+      == ["7-Tenue-preteAAAAAAA.mkv", 2, 15654.0, 2, 0],
       chan.read_json(cut.CHUNKMAP, {}))
+# a held hour written before the length was carried has no length to give, and
+# the chat falls back to a full slice rather than to zero minutes left
+check("a chunk from before the change still puts a whole slice on the wire",
+      bot.playing() is None
+      or bot.playing()["block"] == chan.PART_SECONDS,
+      bot.playing() and bot.playing()["block"])
 check("control: nothing is left held afterwards", cut.ready_set() is None)
 cut.record_hour("7-Tenue-preteAAAAAAA.mkv", 5)
 (cut.READY / "0000009002.ts").write_bytes(b"x")

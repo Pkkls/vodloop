@@ -249,10 +249,17 @@ def reserved(folder=None):
     return out
 
 
-def remember_chunk(chunk, source, number, seconds, unit=0):
-    """Tie a chunk to the hour and the minute it came from, and forget the sent."""
+def remember_chunk(chunk, source, number, seconds, unit=0, block=0):
+    """Tie a chunk to the block and the minute it came from, and forget the sent.
+
+    block is how long the block it belongs to really runs. Measured, not
+    assumed to be an hour: 72% of the blocks waiting on 2026-09-23 were
+    shorter, because a skip leaves its unwatched minutes behind as a shorter
+    run and the draw takes those too. Everything that quoted an hour there was
+    wrong on three blocks out of four.
+    """
     data = chan.read_json(CHUNKMAP, {})
-    data[chunk] = [source, number, seconds, unit]
+    data[chunk] = [source, number, seconds, unit, block]
     alive = {p.name for p in chan.CHUNKS.glob("*.ts")} | {chunk}
     chan.write_json(CHUNKMAP, {k: v for k, v in data.items() if k in alive})
 
@@ -679,7 +686,7 @@ def prime():
     drawn = window(source, info["seconds"], None, since)
     if drawn is None:
         return
-    start, _, number = drawn
+    start, block, number = drawn
     READY.mkdir(parents=True, exist_ok=True)
     job = subprocess.run(
         ["ffmpeg", "-hide_banner", "-loglevel", "error",
@@ -708,7 +715,7 @@ def prime():
         return
     chan.write_json(READY_JOB, {"source": source.name, "number": number,
                                 "seconds": info["seconds"], "chunks": kept,
-                                "at": int(time.time())})
+                                "block": block, "at": int(time.time())})
     chan.log(f"tenu pret: {source.name[:50]} heure "
              f"{number // per_slice() + 1} (chunk {number}), {len(kept)} chunks")
 
@@ -733,7 +740,8 @@ def serve_ready():
         if not piece.exists():
             break
         piece.replace(chan.CHUNKS / name)
-        remember_chunk(name, source, number, held["seconds"], number + len(moved))
+        remember_chunk(name, source, number, held["seconds"], number + len(moved),
+                       held.get("block") or 0)
         moved.append(name)
     clear_ready()
     if not moved:
@@ -876,7 +884,7 @@ def run_job(source, origin, skip, number=None, since=0):
                 # nothing is written to the ledger here: a chunk is spent when
                 # the feeder sends it, and one that a skip throws away was
                 # never seen, so its minutes go back in the draw
-                remember_chunk(chunk, source.name, number, info["seconds"], unit)
+                remember_chunk(chunk, source.name, number, info["seconds"], unit, length)
                 chan.write_json(JOB, {"source": source.name, "origin": origin,
                                       "done": moved + 1, "number": number,
                                       "seconds": info["seconds"], "started": started_at})

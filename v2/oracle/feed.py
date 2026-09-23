@@ -169,7 +169,10 @@ def note_on_air(chunk):
         found = chan.read_json(chan.STATE / "chunkmap.json", {}).get(chunk.name)
         if not found:
             return
-        row = {"source": found[0], "number": found[1], "seconds": found[2]}
+        row = {"source": found[0], "number": found[1], "seconds": found[2],
+               # how long this block really runs, for the chat to quote instead
+               # of assuming an hour. Absent on chunks cut before it was written.
+               "block": found[4] if len(found) >= 5 else 0}
         # this is the moment a chunk is spent: it is going out. Written here
         # and not by the cutter, so minutes that a skip throws away before
         # they are sent stay unseen and come back in the draw.

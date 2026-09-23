@@ -70,12 +70,20 @@ USER_COOLDOWN = int(chan.conf_num("USER_COOLDOWN_SECONDS", 15))
 # A paid fetch rides on top of the supply the channel already needs, so the
 # board's own ceilings can swallow one. kil, 2026-09-19: "si ca bloque, refund
 # les points". Both numbers exist so that the points come back.
-# A skip does not cost one hour, it destroys whatever is left of the hour on
-# air: that hour is spent in the ledger the moment its first chunk goes out,
-# and nothing spent is ever shown again. Skipping ten minutes in throws away
-# fifty. At three an hour that is 3.5 h of reserve consumed per hour of wall
-# clock, against a board that delivers about one. The old limit was a count,
-# which prices a skip at minute 55 the same as one at minute 10.
+# A skip is priced on what is left of the block on air, not on a count, because
+# a count prices a skip at minute 55 the same as one at minute 10. The block is
+# whatever the draw found unseen, which is under an hour three times out of four
+# ([cut.remember_chunk]), so the length is carried from the cutter and not
+# assumed.
+#
+# 2026-09-23: this budget no longer prices what it says it prices. It was
+# written when the ledger counted in hours and an hour was spent the moment its
+# first chunk went out, so the rest of it was genuinely destroyed. The ledger
+# counts in chunks now and a chunk is spent when the feeder sends it, so the
+# minutes a skip leaves behind go back in the draw and nothing is lost but the
+# cutting. What the budget still does, and does well, is rate-limit skipping;
+# what it no longer measures is waste. Whether it should be loosened now that
+# the loss is not real is kil's call, not a bug to be quietly fixed.
 SKIP_FLOOR = int(chan.conf_num("SKIP_FLOOR_HOURS", 3)) * 3600
 SKIP_WASTE_CAP = int(chan.conf_num("SKIP_WASTE_MINUTES_PER_HOUR", 60)) * 60
 # over how many hours the reserve above the floor may be spent. A fixed budget
@@ -185,6 +193,9 @@ def playing():
     # uploader's file name: !now said "260203 nanatty - Day 17 IRL Ushuaia"
     return {"name": live["source"], "title": clean_title(live["source"], SLUG),
             "hour": cut.slice_of(number, seconds),
+            # what this block really runs, falling back to a full slice for
+            # chunks cut before the length was carried
+            "block": float(live.get("block") or 0) or chan.PART_SECONDS,
             "hours": cut.slices_in(seconds) if seconds else 1,
             "started": started,
             "elapsed": max(0.0, time.time() - started) if started else 0.0,
@@ -334,16 +345,21 @@ def tg_loop():
 # --- the guards ------------------------------------------------------------
 
 def skip_cost(live):
-    """Seconds of unseen material a skip right now would throw away.
+    """Seconds of the block on air that a skip right now would cut short.
 
-    The hour on air is already spent, so what a skip destroys is the part of
-    it nobody will ever see. Late in the hour that is nearly nothing, early in
-    it that is nearly the whole hour, and pricing both the same is what let a
-    handful of votes drain a day of supply.
+    Late in the block that is nearly nothing, early in it that is nearly all of
+    it, and pricing both the same is what let a handful of votes drain a day of
+    supply. The block's own length is used and not a full slice: three blocks
+    out of four are shorter, and quoting an hour there overprices every skip on
+    them by up to fifty-five minutes.
+
+    It is no longer material destroyed, whatever the budget above still calls
+    it: a chunk is spent when the feeder sends it, so what a skip cuts short
+    comes back in the draw.
     """
     if not live or not chan.PART_SECONDS:
         return 0.0
-    return max(0.0, chan.PART_SECONDS - live.get("elapsed", 0))
+    return max(0.0, (live.get("block") or chan.PART_SECONDS) - live.get("elapsed", 0))
 
 
 def waste_allowance(reserve):
@@ -617,7 +633,7 @@ def cmd_vod(*_):
         if chan.read_json(feed.ONAIR, {}).get("short"):
             return four("short_playing")
         return four("nothing_on")
-    left = max(0, chan.PART_SECONDS - live["elapsed"]) if chan.PART_SECONDS else 0
+    left = max(0, live["block"] - live["elapsed"]) if chan.PART_SECONDS else 0
     # hours and minutes as numbers: a viewer reads 3/9 in any language
     piece = f" · {live['hour']}/{live['hours']}" if live["hours"] > 1 else ""
     tail = f" · {int(left / 60)} min" if left else ""
