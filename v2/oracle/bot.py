@@ -1051,11 +1051,22 @@ def fetch_eta(seconds):
 
 
 def air_eta():
-    """Minutes before the hour on the wire ends and the next one is drawn."""
-    live = playing()
-    if not live or not chan.PART_SECONDS:
-        return 0
-    return max(0, int((chan.PART_SECONDS - live["elapsed"]) / 60))
+    """Minutes before something picked now reaches the wire.
+
+    A pick is read at the next draw, and the cutter draws only once the block
+    it is cutting is done and the wire holds less than AHEAD_SECONDS. So what
+    stands in front is every chunk waiting plus what is left to cut of the
+    last block, not what is left of the block on air. The old reading said 37
+    minutes on 2026-09-23 for a wait of 95, and a pick drawn on 2026-09-22 with
+    nothing skipped after it aired 55 minutes after its draw.
+    """
+    waiting = sorted(p.name for p in chan.CHUNKS.glob("*.ts"))
+    ahead = len(waiting) * chan.CHUNK_SECONDS
+    last = chan.read_json(cut.CHUNKMAP, {}).get(waiting[-1]) if waiting else None
+    if last:
+        _, number, _, unit, block = last
+        ahead += max(0, block - (unit - number + 1) * chan.CHUNK_SECONDS)
+    return int(ahead / 60)
 
 
 def waiting_for(seconds):

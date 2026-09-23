@@ -1879,9 +1879,33 @@ try:
           two_hours % 5 == 0 and four_hours % 5 == 0, (two_hours, four_hours))
     check("the slot allowance is in it even for something tiny",
           bot.fetch_eta(1) >= bot.BOARD_SLOT_MIN, bot.fetch_eta(1))
-    line = bot.waiting_for(7200)
-    check("a viewer is told both when it arrives and when it airs",
-          line.startswith("~") and "on air ~" in line and "yay" in line, line)
+    # a pick is read at the next draw, and the cutter is an hour ahead of the
+    # wire: what is left of the block on air said 37 minutes for a wait of 95
+    real_chunks, real_map = chan.CHUNKS, cut.CHUNKMAP
+    try:
+        chan.CHUNKS = chan.STATE / "eta-chunks"
+        chan.CHUNKS.mkdir(exist_ok=True)
+        cut.CHUNKMAP = chan.STATE / "eta-chunkmap.json"
+        check("witness: with nothing waiting nothing stands in front", bot.air_eta() == 0,
+              bot.air_eta())
+        for n in (1, 2, 3):
+            (chan.CHUNKS / f"{n:010d}.ts").write_bytes(b"x")
+        # two chunks of a ten minute block, then the first of an hour being cut
+        chan.write_json(cut.CHUNKMAP, {"0000000001.ts": ["a.mkv", 0, 5000, 0, 600],
+                                       "0000000002.ts": ["a.mkv", 0, 5000, 1, 600],
+                                       "0000000003.ts": ["b.mkv", 24, 9000, 24, 3600]})
+        check("a pick waits for all that is cut and the rest of the hour being cut",
+              bot.air_eta() == 70, bot.air_eta())
+        line = bot.waiting_for(7200)
+        check("a viewer is told both when it arrives and when it airs",
+              line.startswith("~") and "on air ~" in line and "yay" in line, line)
+        chan.write_json(cut.CHUNKMAP, {"0000000003.ts": ["b.mkv", 24, 9000, 35, 3600]})
+        check("control: once the last block is all cut only what waits counts",
+              bot.air_eta() == 15, bot.air_eta())
+    finally:
+        for stale in chan.CHUNKS.glob("*.ts"):
+            stale.unlink()
+        chan.CHUNKS, cut.CHUNKMAP = real_chunks, real_map
     chan.PART_SECONDS = was_part
 
     # kil, 2026-09-22: "enleve le paste a youtube link, c'est a proscrire". The
