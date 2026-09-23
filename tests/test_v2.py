@@ -1025,6 +1025,20 @@ try:
 finally:
     pass
 
+print("bot: a paid request is quoted the wait a refusal really imposes")
+# after a refusal from the source nothing jumps the board's wait, not even a
+# paid request, and the quote said thirty-five minutes all the same
+t0 = 1790000000
+check("an hour into a three hour refusal, two hours are still owed",
+      bot.board_wall_minutes(t0, {"last_result": "wall", "last_fetch": t0 - 3600}) == 120,
+      bot.board_wall_minutes(t0, {"last_result": "wall", "last_fetch": t0 - 3600}))
+check("witness: the same beacon after a success owes nothing",
+      bot.board_wall_minutes(t0, {"last_result": "ok", "last_fetch": t0 - 3600}) == 0)
+check("control: a refusal that has run its course owes nothing, not a negative",
+      bot.board_wall_minutes(t0, {"last_result": "wall", "last_fetch": t0 - 4 * 3600}) == 0)
+check("control: no beacon at all owes nothing",
+      bot.board_wall_minutes(t0, {}) == 0)
+
 print("bot: !fetch shows the board's queue, whose it is and what is left")
 real_shelf, real_eta, real_secs = bot.shelf, bot.fetch_eta, bot.catalog_seconds
 try:

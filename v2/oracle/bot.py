@@ -981,6 +981,27 @@ BOARD_SLOT_MIN = chan.conf_num("BOARD_SLOT_MINUTES", 15)
 # what the board allows itself to pull in any rolling hour, mirrored from its
 # own HOUR_MB. Only used to say how long a wait is, never to gate anything.
 BOARD_HOUR_MB = chan.conf_num("BOARD_HOUR_MB", 2500)
+# the board's own FAIL_GAP_MIN, mirrored: after a refusal from the source
+# nothing jumps the wait, not even a paid request, and that is the one wait
+# the chat was not counting
+BOARD_WALL_MIN = chan.conf_num("BOARD_WALL_MINUTES", 180)
+
+
+def board_wall_minutes(now, board=None):
+    """Minutes the board still has to sit out after the source refused it.
+
+    A paid request goes past the board's pacing, but not past a refusal from
+    the source: that one is about the address and not about the video, so on
+    2026-09-22 the rule became that nothing jumps it. The quote given to the
+    viewer did not follow. With two refusals a day and three hours each, a
+    quarter of all paid requests were told thirty-five minutes for a wait of
+    three hours and more.
+    """
+    board = chan.read_json(chan.ROOT.parent / "board.json", {}) if board is None else board
+    if board.get("last_result") != "wall":
+        return 0
+    left = float(board.get("last_fetch") or 0) + BOARD_WALL_MIN * 60 - now
+    return max(0, int(left / 60))
 
 
 def catalog_seconds(vid):
@@ -1024,7 +1045,7 @@ def fetch_eta(seconds):
     it reads as the estimate it is.
     """
     rate = chan.read_json(chan.STATE / "want.json", {}).get("rate_bps") or 250_000
-    minutes = (board_busy_minutes() + BOARD_SLOT_MIN
+    minutes = (max(board_busy_minutes(), board_wall_minutes(time.time())) + BOARD_SLOT_MIN
                + (seconds * rate / 1e6) / max(1.0, BOARD_MB_PER_MIN))
     return int(round(minutes / 5.0) * 5)
 
