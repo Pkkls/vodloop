@@ -1038,6 +1038,17 @@ check("control: a refusal that has run its course owes nothing, not a negative",
       bot.board_wall_minutes(t0, {"last_result": "wall", "last_fetch": t0 - 4 * 3600}) == 0)
 check("control: no beacon at all owes nothing",
       bot.board_wall_minutes(t0, {}) == 0)
+real_wall = bot.board_wall_minutes
+try:
+    bot.board_wall_minutes = lambda now, board=None: 120
+    walled = bot.fetch_eta(1)
+    bot.board_wall_minutes = lambda now, board=None: 0
+    clear = bot.fetch_eta(1)
+finally:
+    bot.board_wall_minutes = real_wall
+check("and the quote itself carries the refusal, which is what the chat said wrong",
+      walled >= 120 + bot.BOARD_SLOT_MIN, walled)
+check("witness: the same quote without a refusal is under two hours", clear < 120, clear)
 
 print("bot: !fetch shows the board's queue, whose it is and what is left")
 real_shelf, real_eta, real_secs = bot.shelf, bot.fetch_eta, bot.catalog_seconds
