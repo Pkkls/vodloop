@@ -192,6 +192,7 @@ def playing():
     # the title a viewer reads here is the one the channel carries, not the
     # uploader's file name: !now said "260203 nanatty - Day 17 IRL Ushuaia"
     return {"name": live["source"], "title": clean_title(live["source"], SLUG),
+            "number": number,
             "hour": cut.slice_of(number, seconds),
             # what this block really runs, falling back to a full slice for
             # chunks cut before the length was carried
@@ -1145,6 +1146,19 @@ def reward_skip(data, now, who, text):
     return True, f"@{who} " + four("moving_on")
 
 
+def block_ahead(live):
+    """Seconds of the block on air still waiting in chunks/.
+
+    The jump drops the oldest chunks whatever block they belong to, and
+    everything waiting behind the block on air is another stream. Guarded on
+    the whole buffer, which held an hour of four blocks, 4 of 27 jumps from
+    2026-09-21 to 23 landed in another stream, past every guard a skip has.
+    """
+    mapped = chan.read_json(cut.CHUNKMAP, {})
+    return sum(chan.CHUNK_SECONDS for p in chan.CHUNKS.glob("*.ts")
+               if (mapped.get(p.name) or [None, None])[:2] == [live["name"], live["number"]])
+
+
 def reward_jump(data, now, who, text):
     """Thirty minutes forward inside the stream on air, not off it.
 
@@ -1152,9 +1166,10 @@ def reward_jump(data, now, who, text):
     it all would end the hour, which is a skip, and a skip has floors and
     cooldowns this one is not allowed to walk past for the same hundred points.
     """
-    if not playing():
+    live = playing()
+    if not live:
         return False, f"@{who} " + four("nothing_on")
-    if cut.ahead_seconds() < JUMP_SECONDS:
+    if block_ahead(live) <= JUMP_SECONDS:
         return False, (f"@{who} " + four("not_cut_ahead", min=JUMP_SECONDS // 60)
                       )
     # kil, 2026-09-22: "met les points de chaine a 1". The buffer was the only

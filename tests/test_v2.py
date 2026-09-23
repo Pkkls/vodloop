@@ -940,20 +940,41 @@ finally:
     bot.PICK.unlink(missing_ok=True)
 
 print("bot: thirty minutes forward takes a slice out of the hour, not the hour")
-real_playing_j, real_ahead, real_shelf_j = bot.playing, cut.ahead_seconds, bot.shelf
+real_playing_j, real_ahead, real_shelf_j = bot.playing, bot.block_ahead, bot.shelf
+real_map_j = cut.CHUNKMAP
 try:
     chan.CHUNKS.mkdir(parents=True, exist_ok=True)
     for stale in chan.CHUNKS.glob("*.ts"):
         stale.unlink()
     cut.JUMP.unlink(missing_ok=True)
     cut.FLUSH.unlink(missing_ok=True)
-    bot.playing = lambda: {"title": "t", "name": "t.mkv", "hour": 1, "hours": 2,
-                           "vid": "x", "started": 0, "elapsed": 900}
-    cut.ahead_seconds = lambda: bot.JUMP_SECONDS - chan.CHUNK_SECONDS
+    live_j = {"title": "t", "name": "t.mkv", "number": 12, "hour": 1, "hours": 2,
+              "vid": "x", "started": 0, "elapsed": 900}
+    # the jump drops the oldest chunks whatever block they are, so what counts
+    # is the block on air: three chunks of it, then the next stream
+    cut.CHUNKMAP = chan.STATE / "jump-chunkmap.json"
+    for n in range(6):
+        (chan.CHUNKS / f"{n:010d}.ts").write_bytes(b"x")
+    chan.write_json(cut.CHUNKMAP, {f"{n:010d}.ts": (["t.mkv", 12, 9000, 12 + n, 900] if n < 3
+                                                   else ["u.mkv", 0, 9000, n - 3, 3600])
+                                   for n in range(6)})
+    check("only the block on air counts toward a jump, not the stream behind it",
+          bot.block_ahead(live_j) == 3 * chan.CHUNK_SECONDS, bot.block_ahead(live_j))
+    check("witness: the same chunks under another block number count for nothing",
+          bot.block_ahead(dict(live_j, number=0)) == 0, bot.block_ahead(dict(live_j, number=0)))
+    for stale in chan.CHUNKS.glob("*.ts"):
+        stale.unlink()
+    cut.CHUNKMAP = real_map_j
+    bot.playing = lambda: live_j
+    bot.block_ahead = lambda live: bot.JUMP_SECONDS - chan.CHUNK_SECONDS
     ok, said = bot.reward_jump({}, 1000, "v", "")
     check("with less cut ahead than the jump it is refused and refunded",
           ok is False and said and not cut.JUMP.exists(), said)
-    cut.ahead_seconds = lambda: 3600
+    bot.block_ahead = lambda live: bot.JUMP_SECONDS
+    ok, said = bot.reward_jump({}, 1000, "v", "")
+    check("with exactly the jump left it is refused too, since it would end the block",
+          ok is False and "ready ahead" in said and not cut.JUMP.exists(), said)
+    bot.block_ahead = lambda live: 3600
     bot.shelf = lambda: [(pathlib.Path("1790-Autre-aB3dEfGhIjK.mkv"), 12)]
     ok, said = bot.reward_jump({}, 1000, "v", "")
     check("with the hour in hand it is taken and the cutter is told",
@@ -994,7 +1015,8 @@ try:
     check("control: with nothing on air there is nothing to jump into",
           ok is False and "nothing on air" in said, said)
 finally:
-    bot.playing, cut.ahead_seconds, bot.shelf = real_playing_j, real_ahead, real_shelf_j
+    bot.playing, bot.block_ahead, bot.shelf = real_playing_j, real_ahead, real_shelf_j
+    cut.CHUNKMAP = real_map_j
     cut.JUMP.unlink(missing_ok=True)
     cut.FLUSH.unlink(missing_ok=True)
     for stale in chan.CHUNKS.glob("*.ts"):
