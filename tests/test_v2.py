@@ -428,8 +428,15 @@ if shutil.which("ffmpeg"):
         source.replace(chan.AIRED / source.name)
         check("control: a spent file offers no unaired hour",
               cut.unaired(chan.AIRED / source.name, cut.ledger(), {}) == set())
-        check("with every hour spent just now, nothing is drawn rather than repeated",
-              cut.next_source() == (None, None))
+        # kil, 2026-09-26: "on doit avoir des 24/7 disponibilites 24h/24". This
+        # assertion held the opposite rule until that day: a disk with nothing
+        # unseen answered with the standby clip. A full library behind a loading
+        # card is an outage, so the oldest hour comes back instead.
+        retour, origine3 = cut.next_source()
+        check("with every hour spent just now, the oldest comes back rather than a card",
+              retour is not None and retour.name == source.name, (retour, origine3))
+        if retour is not None:
+            retour.replace(chan.AIRED / retour.name)
         # the same disk, but everything on it aired longer ago than the window
         old = int(time.time()) - cut.REPEAT_AFTER - 86400
         rows = [(old, chan.video_id(source.name), u) for u in
@@ -453,6 +460,24 @@ if shutil.which("ffmpeg"):
         cut.HOURS.unlink(missing_ok=True)
 else:
     print("  (ffmpeg absent: real pass skipped)")
+
+print("cut: le dernier recours rend ce qui est hors antenne depuis le plus longtemps")
+# Pur, donc il tourne meme sans ffmpeg: c est la regle qui tient le 24/7, et une
+# regle qui ne se verifie que la moitie du temps ne tient rien.
+check("un registre vide n ouvre aucun dernier recours", cut.longest_off_air({}) == 0)
+vieux, recent = 1_000_000, 2_000_000
+livre = {"aaaaaaaaaaa": {0: recent, 1: recent}, "bbbbbbbbbbb": {0: vieux, 1: recent}}
+seuil = cut.longest_off_air(livre)
+check("le seuil se pose juste apres la plus ancienne diffusion",
+      seuil == vieux + 1, seuil)
+check("il libere le morceau diffuse le plus tot, et lui seul",
+      cut.played("x-bbbbbbbbbbb.mkv", livre, seuil) == {1},
+      cut.played("x-bbbbbbbbbbb.mkv", livre, seuil))
+check("TEMOIN: rien de plus recent ne redevient inedit",
+      cut.played("x-aaaaaaaaaaa.mkv", livre, seuil) == {0, 1},
+      "sinon ce palier rendrait ce qui vient de passer")
+check("TEMOIN: sans seuil, tout reste vu",
+      cut.played("x-bbbbbbbbbbb.mkv", livre, 0) == {0, 1})
 
 print("cut: an hour at a time, taken from anywhere in the file")
 real_part = chan.PART_SECONDS
@@ -572,10 +597,18 @@ if shutil.which("ffmpeg"):
         cut.run_job(source, origin, 0)
         send_everything()
         cut.next_source()   # the sweep is where a fully spent file retires now
-        check("the last hour retires it", (chan.AIRED / back.name).exists()
-              and "partvideo01" in (chan.STATE / "aired.tsv").read_text())
-        check("control: the ledger keeps every hour, so none comes back",
-              len(cut.played(back.name)) == cut.slices_in(chan.duration(chan.AIRED / back.name)),
+        # The sweep retires it and the last resort, since 2026-09-26, takes it
+        # straight back onto the wire. Both assertions used to read the file's
+        # location a moment later, which stopped saying anything about the
+        # sweep: what proves the retirement is aired.tsv, which is also what
+        # keeps the id out of the catalogue.
+        ou = next((f / back.name for f in (chan.AIRED, chan.CURRENT)
+                   if (f / back.name).exists()), None)
+        check("the last hour retires it", ou is not None
+              and "partvideo01" in (chan.STATE / "aired.tsv").read_text(), ou)
+        check("control: the last resort draws from the ledger without rewriting it",
+              ou is not None
+              and len(cut.played(back.name)) == cut.slices_in(chan.duration(ou)),
               cut.played(back.name))
     finally:
         chan.PART_SECONDS, cut.TAIL_SECONDS = real_part, real_tail

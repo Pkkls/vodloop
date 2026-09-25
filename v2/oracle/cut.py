@@ -367,7 +367,7 @@ def unaired(path, book, durations, held=None, since=0):
 def next_source():
     """(path, origin) of what airs next, moved into current/, or (None, None).
 
-    Three tiers, taken in order, and the wire decides the order:
+    Four tiers, taken in order, and the wire decides the order:
 
       queue     something delivered and never aired. Drawn at random, because
                 the point of slicing is that two hours of the channel are not
@@ -375,9 +375,15 @@ def next_source():
       reserve   something in aired/ that still holds an hour nobody has seen.
                 It is on the disk already, so it beats a loading card by the
                 whole time a delivery would take.
-    There is no third tier. An hour that has been on the wire is spent, and a
-    disk with nothing unseen on it means the supply failed, which is a thing to
-    fix and not a thing to paper over by showing the same hour twice.
+      fenetre   nothing unseen anywhere, so what aired more than REPEAT_AFTER
+                ago is offered again.
+      dernier   not even that, so the oldest hour on the disk comes back. It
+                is the tier that keeps the channel on air with a full library
+                behind it, and it arrived on 2026-09-26 with the requirement
+                that made it necessary. The alarm still fires underneath it.
+
+    Only an empty disk reaches the standby clip now. That is the difference
+    between a supply that failed and a channel that is off.
 
     Unsliced, the tiers collapse to the oldest file in the queue, as before.
     """
@@ -467,6 +473,18 @@ def draw(book, durations, just_played, avoid=(), held=None, since=0):
     return None, None
 
 
+def longest_off_air(book):
+    """The moment just past the oldest airing, or 0 when nothing ever aired.
+
+    Used as the `since` of the last resort. Setting it here rather than to a
+    round number is what makes that tier take the material which has been off
+    the wire longest: one tick past the oldest row frees that row and nothing
+    younger, so the draw can only land on the oldest thing the disk holds.
+    """
+    times = [when for rows in book.values() for when in rows.values()]
+    return min(times) + 1 if times else 0
+
+
 def draw_or_repeat(book, durations, just_played, avoid=(), held=None, now=None):
     """The draw, and what to fall back on when nothing on the disk is unseen.
 
@@ -485,18 +503,43 @@ def draw_or_repeat(book, durations, just_played, avoid=(), held=None, now=None):
     path, origin = draw(book, durations, just_played, avoid, held)
     if path is not None:
         return path, origin, 0
-    # One window and no last resort. A tier below this one would have to
-    # accept something aired minutes ago, which is the complaint that started
-    # all of this, and it would make the window mean nothing. If everything on
-    # the disk is younger than REPEAT_AFTER the answer is the standby clip and
-    # the alarm in watch.py, because that is supply having failed and it is a
-    # thing to fix rather than to paper over.
     since = now - REPEAT_AFTER
     path, origin = draw(book, durations, just_played, avoid, held, since)
     if path is not None:
         chan.log(f"plus rien d'inedit, rediffusion de ce qui a plus de "
                  f"{REPEAT_AFTER // 86400} jours: {path.name[:52]}")
         return path, origin, since
+    # Last resort, and it did not exist until 2026-09-26. There used to be one
+    # window and nothing under it: when the whole disk was younger than
+    # REPEAT_AFTER the answer was the standby clip, on the grounds that a repeat
+    # was the complaint that started all of this and that supply is the real
+    # cure. Both of those are still true, and neither survives contact with what
+    # the channel is for.
+    #
+    # kil, 2026-09-19: "tu me repasses PAS 2 fois le meme chunk d'une heure".
+    # kil, 2026-09-26: "c'est un produit obligatoire, on doit avoir des 24/7
+    # disponibilites 24h/24". The second outranks the first, and says so: an
+    # hour seen twice is a disappointment, a loading card is an outage. On
+    # 2026-09-25 the disk held 28.6 h and offered 1.4 h, every recording having
+    # aired inside the ten day window, and the channel was hours from that card
+    # with a full library sitting behind it. Nothing was missing but permission
+    # to use it.
+    #
+    # What comes back is what has been off the wire longest, never what is
+    # nearest: `since` is set just past the oldest airing in the ledger, so the
+    # only thing it frees is the oldest chunk on the disk. That is what keeps
+    # this from being the tier the old comment refused, the one that would take
+    # something aired minutes ago and make the window above it meaningless.
+    #
+    # The alarm is not touched. watch.py still reports the supply failure that
+    # got us here, because staying on air and knowing why are not alternatives.
+    since = longest_off_air(book)
+    if since:
+        path, origin = draw(book, durations, just_played, avoid, held, since)
+        if path is not None:
+            chan.log(f"disque entierement vu, retour du plus ancien: "
+                     f"{path.name[:52]}")
+            return path, origin, since
     return None, None, 0
 
 
