@@ -1055,16 +1055,23 @@ finally:
     for stale in chan.CHUNKS.glob("*.ts"):
         stale.unlink()
 
-print("bot: every answer is said in four languages and still fits a chat line")
+print("bot: une seule langue dans le chat, et les autres restent recuperables")
 try:
-    check("every phrase carries exactly four languages",
+    # Les quatre parts restent dans SAID: remettre une langue doit etre un choix
+    # d index, pas cinquante-huit traductions a refaire.
+    check("chaque phrase garde ses quatre parts",
           all(len(v) == 4 for v in bot.SAID.values()),
           [k for k, v in bot.SAID.items() if len(v) != 4])
-    filled = {k: bot.four(k, n=3, min=15, need=3, max=527, place="peru", hours=12, h=6)
+    filled = {k: bot.dit(k, n=3, min=15, need=3, max=527, place="peru", hours=12, h=6)
               for k in bot.SAID}
+    # kil, 2026-09-26: "ca traduis en 5 langues, c'est de l'ia slop"
+    cjk = [k for k, v in filled.items()
+           if any("　" <= c <= "鿿" for c in v)]
+    check("TEMOIN: plus une seule reponse ne part en plusieurs langues", not cjk, cjk)
     longest = max(filled.items(), key=lambda row: len(row[1]))
-    check("and none of them is longer than 200 characters on its own",
-          len(longest[1]) <= 200, (longest[0], len(longest[1])))
+    # une ligne de chat se lit en defilant: 90 caracteres, pas 200
+    check("et la plus longue tient dans une ligne qu on lit en defilant",
+          len(longest[1]) <= 90, (longest[0], len(longest[1])))
     # the two longest an answer can pair: a refusal plus the points coming back
     worst = max(len(f"@somebodywithalongname {line} · {filled['points_back']}")
                 for key, line in filled.items())
@@ -1079,8 +1086,8 @@ try:
     # does not, since a line that is never triggered in a test is never seen.
     source = pathlib.Path(bot.__file__).read_text(encoding="utf-8")
     bare = [line.strip() for line in source.splitlines()
-            if re.search(r'say\(f?"', line) and "four(" not in line]
-    check("no viewer line is written straight into say() in one language",
+            if re.search(r'say\(f?"', line) and "dit(" not in line]
+    check("aucune ligne pour le chat n est ecrite en dur a cote du tableau",
           not bare, bare)
     check("witness: the line that was there is caught by the same search",
           bool([l for l in ['say(f"not enough votes ({n}), it stays on")']
@@ -1126,7 +1133,7 @@ try:
     data["asked"]["id9"] = {"who": "u9", "title": "Deja la", "state": "here"}
     line = bot.cmd_fetch(data, 1000, {"user_id": "u", "name": "u"}, [])
     check("it counts what is coming and names who asked",
-          line.startswith("5 downloading · descargando") and "@u0 ~20 min" in line, line)
+          line.startswith("5 downloading") and "@u0 ~20 min" in line, line)
     check("it does not read out more than three of them",
           "2 more asked" in line and line.count(" @u") == 3, line)
     check("one already landed is said apart, not counted as coming",
@@ -1905,8 +1912,11 @@ try:
                                "started": 0, "elapsed": 60}
         bot.announce(state)
         check("a new hour is announced once", len(said) == 1 and "now playing" in said[0], said)
-        check("and in the four languages the channel is watched in",
-              all(w in said[0] for w in ("now playing", "sonando", "再生中", "çalıyor")), said)
+        # kil, 2026-09-26: une seule langue. Le temoin est l absence des autres,
+        # pas la presence de l anglais, qui etait deja verifiee au-dessus.
+        check("TEMOIN: et dans cette langue seulement",
+              not any("　" <= c <= "鿿" for c in said[0])
+              and "sonando" not in said[0], said)
         bot.announce(state)
         check("and not announced again while it is still on", len(said) == 1, said)
         # a skip that falls to a short: a few seconds of interlude, not a dry shelf
@@ -1921,8 +1931,9 @@ try:
         bot.announce(state)
         check("witness: the standby clip with no short is a dry shelf, and said so",
               len(said) == 2 and "nothing ready" in said[1], said)
-        check("in four languages too",
-              all(w in said[1] for w in ("nada listo", "準備中", "hazır")), said)
+        check("TEMOIN: la ligne d etagere vide non plus n est pas traduite",
+              not any("　" <= c <= "鿿" for c in said[1])
+              and "nada listo" not in said[1], said)
         bot.feed.ONAIR.unlink(missing_ok=True)
     finally:
         bot.say = real_say
@@ -1961,7 +1972,8 @@ try:
               bot.air_eta() == 70, bot.air_eta())
         line = bot.waiting_for(7200)
         check("a viewer is told both when it arrives and when it airs",
-              line.startswith("~") and "on air ~" in line and "yay" in line, line)
+              line.startswith("~") and "on air ~" in line
+              and not any("　" <= c <= "鿿" for c in line), line)
         chan.write_json(cut.CHUNKMAP, {"0000000003.ts": ["b.mkv", 24, 9000, 35, 3600]})
         check("control: once the last block is all cut only what waits counts",
               bot.air_eta() == 15, bot.air_eta())

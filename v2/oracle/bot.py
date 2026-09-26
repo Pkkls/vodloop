@@ -438,35 +438,35 @@ def skip_blocked(data, now, live, who=None):
     reserve = unseen_hours() * 3600
     cost = skip_cost(live)
     if reserve < 3600:
-        return four("nothing_else")
+        return dit("nothing_else")
     if other_stream_hours(live) < 0.5:
-        return four("only_stream")
+        return dit("only_stream")
     if reserve - cost < SKIP_FLOOR:
-        return four("not_enough")
+        return dit("not_enough")
     allowed = waste_allowance(reserve)
     spent = wasted_recently(data, now)
     if spent + cost > allowed:
         if spent:
-            return four("too_much_skipped")
+            return dit("too_much_skipped")
         # nothing was skipped this hour, so what is expensive is this skip:
         # most of the hour is still unseen and it would all be thrown away
-        return four("too_early")
+        return dit("too_early")
     recent = skips_since(data, now - 3600)
     if len(recent) >= SKIP_MAX_PER_HOUR:
-        return four("skip_limit", n=len(recent))
+        return dit("skip_limit", n=len(recent))
     last = max((r["at"] for r in recent), default=0)
     if last and now - last < SKIP_COOLDOWN:
         left = int((SKIP_COOLDOWN - (now - last)) / 60) + 1
-        return four("just_skipped", min=left)
+        return dit("just_skipped", min=left)
     if live and live["elapsed"] < SKIP_MIN_AIRED:
         left = int((SKIP_MIN_AIRED - live["elapsed"]) / 60) + 1
-        return four("just_started", min=left)
+        return dit("just_started", min=left)
     if who:
         mine = [r for r in skips_since(data, now - USER_SKIP_COOLDOWN)
                 if r.get("who") == who]
         if mine:
             left = int((USER_SKIP_COOLDOWN - (now - max(r["at"] for r in mine))) / 60) + 1
-            return four("your_turn_over", min=left)
+            return dit("your_turn_over", min=left)
     return None
 
 
@@ -628,15 +628,33 @@ SAID = {
 }
 
 
-def four(key, **data):
-    """One answer, said in the four languages the channel is watched in."""
-    return " · ".join(part.format(**data) for part in SAID[key])
+def dit(key, **data):
+    """One answer, in one language.
+
+    kil, 2026-09-26: "ca traduis en 5 langues, c'est de l'ia slop". It did, and
+    it was. Every line left as English, then Spanish, then Japanese, then
+    Turkish, joined by dots, so a viewer read three quarters of a sentence he
+    had no use for before reaching his own, and "!now" answered with a hundred
+    and eighty characters of it. A chat line is scanned in the second it takes
+    to scroll past, which is the whole argument: four languages is not four
+    times the reach, it is one line nobody finishes.
+
+    The same reasoning already settled the points panel on 2026-09-22, where the
+    title was the only thing shown and four languages wrapped it mid-word. The
+    chat was left alone that day, on the grounds that a line is read once rather
+    than scanned. That was wrong, and this is the correction.
+
+    SAID keeps its four parts. Nothing is deleted, the other three are simply not
+    said, so putting a language back is picking an index rather than translating
+    fifty-eight entries again.
+    """
+    return SAID[key][0].format(**data)
 
 
 # --- commands --------------------------------------------------------------
 
 def cmd_aide(*_):
-    return "!now !list !pick <n> !skip !fetch !link · " + four("help")
+    return "!now !list !pick <n> !skip !fetch !link · " + dit("help")
 
 
 def cmd_vod(*_):
@@ -645,8 +663,8 @@ def cmd_vod(*_):
         # the wire is never silent: when it is not the channel's material it is
         # a short, and a viewer arriving then deserves better than "nothing on"
         if chan.read_json(feed.ONAIR, {}).get("short"):
-            return four("short_playing")
-        return four("nothing_on")
+            return dit("short_playing")
+        return dit("nothing_on")
     left = max(0, live["block"] - live["elapsed"]) if chan.PART_SECONDS else 0
     # hours and minutes as numbers: a viewer reads 3/9 in any language
     piece = f" · {live['hour']}/{live['hours']}" if live["hours"] > 1 else ""
@@ -683,7 +701,7 @@ def cmd_liste(data, now, sender, args):
     ready, pool = pickable()
     rows = ready + pool
     if not rows:
-        return four("nothing_ready")
+        return dit("nothing_ready")
     pages = (len(rows) - 1) // LIST_PAGE + 1
     try:
         page = min(max(1, int(args[0])), pages)
@@ -699,11 +717,11 @@ def cmd_liste(data, now, sender, args):
 def cmd_source(*_):
     live = playing()
     if not live:
-        return four("nothing_on")
+        return dit("nothing_on")
     if not live["vid"]:
-        return four("no_link")
+        return dit("no_link")
     if re.match(r"^k[0-9a-f]{8}\d{2}$", live["vid"]):
-        return four("own_vod")
+        return dit("own_vod")
     return f"https://youtu.be/{live['vid']}"
 
 
@@ -711,8 +729,8 @@ def cmd_stats(*_):
     book = cut.ledger()
     aired = cut.aired_seconds(book) / 3600
     rows = shelf()
-    return (f"{len(rows)} · " + four("ready_here") + f" | {unseen_hours():.1f}h · "
-            + four("never_shown") + f" | {aired:.0f}h · " + four("aired"))
+    return (f"{len(rows)} · " + dit("ready_here") + f" | {unseen_hours():.1f}h · "
+            + dit("never_shown") + f" | {aired:.0f}h · " + dit("aired"))
 
 
 CHAT_LIMIT = int(chan.conf_num("CHAT_LIMIT", 500))
@@ -769,18 +787,18 @@ def cmd_fetch(data, now, sender, args):
                        f"@{row.get('who', '?')} ~{fetch_eta(catalog_seconds(vid))} min"
                        for vid, row in coming[:3])
     since = last_arrival_minutes(now)
-    reserve = f"{unseen_hours():.1f}h · " + four("never_shown")
-    landed_line = four("landed_waiting", n=len(landed)) if landed else ""
-    last_line = four("last_landed", min=since) if since else ""
+    reserve = f"{unseen_hours():.1f}h · " + dit("never_shown")
+    landed_line = dit("landed_waiting", n=len(landed)) if landed else ""
+    last_line = dit("last_landed", min=since) if since else ""
     if not coming:
-        return within_limit([(four("nothing_asked"), 0), (reserve, 2),
-                             (last_line, 3), (four("ask_with"), 1)])
+        return within_limit([(dit("nothing_asked"), 0), (reserve, 2),
+                             (last_line, 3), (dit("ask_with"), 1)])
     # what is coming is the answer to the question asked; everything after it is
     # context, and context goes over the side before an answer does
     return within_limit([
-        (f"{len(coming)} " + four("downloading"), 0),
+        (f"{len(coming)} " + dit("downloading"), 0),
         (shown, 0),
-        (four("more_asked", n=len(coming) - 3) if len(coming) > 3 else "", 4),
+        (dit("more_asked", n=len(coming) - 3) if len(coming) > 3 else "", 4),
         (landed_line, 3),
         (reserve, 2),
         (last_line, 5),
@@ -800,16 +818,16 @@ def cmd_vote(data, now, sender, args):
                 # a room that voted outranks one viewer who spent a point
                 set_next(vote["target"], now, force=True)
                 data["vote"] = None
-                return f"{pretty(vote['target'])} · " + four("is_next")
+                return f"{pretty(vote['target'])} · " + dit("is_next")
             do_skip(data, now, "vote", playing(), vote["voters"][0])
-            return four("moving_on")
-        return f"{len(vote['voters'])}/{need} · " + four("to_skip")
+            return dit("moving_on")
+        return f"{len(vote['voters'])}/{need} · " + dit("to_skip")
     if vote and now - vote.get("failed_at", 0) < 0:
         return None
     last_fail = data.get("vote_failed_at", 0)
     if now - last_fail < VOTE_FAIL_COOLDOWN:
         left = int((VOTE_FAIL_COOLDOWN - (now - last_fail)) / 60) + 1
-        return four("vote_failed", min=left)
+        return dit("vote_failed", min=left)
     blocked = skip_blocked(data, now, live, sender["user_id"])
     if blocked:
         return blocked
@@ -818,8 +836,8 @@ def cmd_vote(data, now, sender, args):
                     "need": need, "closes": now + VOTE_WINDOW}
     if need <= 1:
         do_skip(data, now, "vote", live, sender["user_id"])
-        return four("moving_on")
-    return four("vote_needs", need=need)
+        return dit("moving_on")
+    return dit("vote_needs", need=need)
 
 
 def play_short():
@@ -852,31 +870,31 @@ def ask_for(data, now, sender, row):
     held = waiting_requests(data)
     asked = data.get("asked") or {}
     if vid in held:
-        return f"{title[:40]} · " + four("already_coming") + f" {waiting_for(seconds)}"
+        return f"{title[:40]} · " + dit("already_coming") + f" {waiting_for(seconds)}"
     if any(asked.get(v, {}).get("who") == sender["name"] for v in held):
-        return four("one_each")
+        return dit("one_each")
     if len(held) >= REQUEST_MAX_PENDING:
-        return four("queue_full", n=len(held))
+        return dit("queue_full", n=len(held))
     with supply.REQUESTS.open("a") as fh:
         fh.write(vid + "\n")
     data.setdefault("asked", {})[vid] = {"who": sender["name"], "title": title,
                                          "at": int(now), "state": "waiting",
                                          "redemption": None}
     play_short()
-    return f"{title[:40]} · " + four("downloading") + f" {waiting_for(seconds)}"
+    return f"{title[:40]} · " + dit("downloading") + f" {waiting_for(seconds)}"
 
 
 def cmd_pick(data, now, sender, args):
     ready, pool = pickable()
     rows = ready + pool
     if not rows:
-        return four("nothing_to_pick")
+        return dit("nothing_to_pick")
     try:
         index = int(args[0]) - 1
     except (IndexError, ValueError):
-        return four("pick_usage")
+        return dit("pick_usage")
     if not 0 <= index < len(rows):
-        return four("pick_range", max=len(rows))
+        return dit("pick_range", max=len(rows))
     if index >= len(ready):
         return ask_for(data, now, sender, rows[index])
     target, said = ready[index][1], ready[index][2]
@@ -884,15 +902,15 @@ def cmd_pick(data, now, sender, args):
     if vote and vote["closes"] > now and vote["kind"] == "pick" and vote["target"] == target:
         return cmd_vote(data, now, sender, args)
     if vote and vote["closes"] > now:
-        return four("vote_running")
+        return dit("vote_running")
     need = threshold()
     data["vote"] = {"kind": "pick", "target": target, "voters": [sender["user_id"]],
                     "need": need, "closes": now + VOTE_WINDOW}
     if need <= 1:
         set_next(target, now, force=True)
         data["vote"] = None
-        return f"{said} · " + four("is_next")
-    return f"{said[:40]} · " + four("vote_play", need=need, n=index + 1)
+        return f"{said} · " + dit("is_next")
+    return f"{said[:40]} · " + dit("vote_play", need=need, n=index + 1)
 
 
 def cmd_force(data, now, sender, args):
@@ -901,11 +919,11 @@ def cmd_force(data, now, sender, args):
     live = playing()
     reserve = unseen_hours() * 3600
     if other_stream_hours(live) < 0.5:
-        return four("only_stream")
+        return dit("only_stream")
     if reserve - skip_cost(live) < SKIP_FLOOR:
-        return four("not_enough")
+        return dit("not_enough")
     do_skip(data, now, f"forced by {sender['name']}", live, "")
-    return four("moving_on")
+    return dit("moving_on")
 
 
 COMMANDS = {
@@ -1081,7 +1099,7 @@ def waiting_for(seconds):
     soon, then = fetch_eta(seconds), air_eta()
     if not then:
         return f"~{soon} min"
-    return f"~{soon} min · " + four("then_on_air", min=soon + then)
+    return f"~{soon} min · " + dit("then_on_air", min=soon + then)
 
 
 # --- channel points --------------------------------------------------------
@@ -1141,9 +1159,9 @@ def reward_skip(data, now, who, text):
     live = playing()
     blocked = skip_blocked(data, now, live, data.get("redeemer_id") or who)
     if blocked:
-        return False, f"@{who} {blocked} · " + four("points_back")
+        return False, f"@{who} {blocked} · " + dit("points_back")
     do_skip(data, now, f"points from {who}", live, data.get("redeemer_id") or who)
-    return True, f"@{who} " + four("moving_on")
+    return True, f"@{who} " + dit("moving_on")
 
 
 def block_ahead(live):
@@ -1168,9 +1186,9 @@ def reward_jump(data, now, who, text):
     """
     live = playing()
     if not live:
-        return False, f"@{who} " + four("nothing_on")
+        return False, f"@{who} " + dit("nothing_on")
     if block_ahead(live) <= JUMP_SECONDS:
-        return False, (f"@{who} " + four("not_cut_ahead", min=JUMP_SECONDS // 60)
+        return False, (f"@{who} " + dit("not_cut_ahead", min=JUMP_SECONDS // 60)
                       )
     # kil, 2026-09-22: "met les points de chaine a 1". The buffer was the only
     # guard and it was enough at a hundred points, which this docstring said
@@ -1181,11 +1199,11 @@ def reward_jump(data, now, who, text):
     cost = float(JUMP_SECONDS)
     spent = jumped_recently(data, now) + wasted_recently(data, now)
     if spent + cost > waste_allowance(unseen_hours() * 3600):
-        return False, f"@{who} " + four("too_much_skipped")
+        return False, f"@{who} " + dit("too_much_skipped")
     cut.JUMP.write_text(str(JUMP_SECONDS))
     data.setdefault("jumps", []).append(
         {"at": now, "cost": cost, "who": data.get("redeemer_id") or who})
-    return True, f"@{who} " + four("forward", min=JUMP_SECONDS // 60)
+    return True, f"@{who} " + dit("forward", min=JUMP_SECONDS // 60)
 
 
 def reward_pick(data, now, who, text):
@@ -1194,9 +1212,9 @@ def reward_pick(data, now, who, text):
     try:
         index = int(re.sub(r"\D", "", text or "")) - 1
     except ValueError:
-        return False, f"@{who} " + four("not_a_number")
+        return False, f"@{who} " + dit("not_a_number")
     if not rows or not 0 <= index < len(rows):
-        return False, f"@{who} " + four("no_video_there")
+        return False, f"@{who} " + dit("no_video_there")
     if index >= len(ready):
         # the numbers in !list run on into the catalogue, so a paid pick can
         # land on something that has to be fetched first. That is the request
@@ -1205,11 +1223,11 @@ def reward_pick(data, now, who, text):
         ok, refusal = queue_request(data, now, who, vid, title)
         if not ok:
             return False, refusal
-        return True, (f"@{who} {title[:44]} · " + four("downloading")
+        return True, (f"@{who} {title[:44]} · " + dit("downloading")
                       + f" {waiting_for(seconds)}")
     if not set_next(ready[index][1], now, paid=True):
-        return False, f"@{who} " + four("already_picked")
-    return True, f"@{who} {ready[index][2][:48]} · " + four("is_next")
+        return False, f"@{who} " + dit("already_picked")
+    return True, f"@{who} {ready[index][2][:48]} · " + dit("is_next")
 
 
 def reward_stay(data, now, who, text):
@@ -1221,7 +1239,7 @@ def reward_stay(data, now, who, text):
     """
     live = playing()
     if not live:
-        return False, f"@{who} " + four("nothing_on")
+        return False, f"@{who} " + dit("nothing_on")
     book, durations = cut.ledger(), chan.read_json(chan.STATE / "durations.json", {})
     # current/ first: the file on air lives there for as long as its cutting job
     # is alive, which is most of the hour it is playing. Without it this reward
@@ -1231,9 +1249,9 @@ def reward_stay(data, now, who, text):
         path = folder / live["name"]
         if path.exists() and cut.unaired(path, book, durations, cut.reserved()):
             if not set_next(live["name"], now, paid=True):
-                return False, f"@{who} " + four("already_picked")
-            return True, f"@{who} {live['title'][:44]} · " + four("one_more_hour")
-    return False, f"@{who} " + four("no_hours_left")
+                return False, f"@{who} " + dit("already_picked")
+            return True, f"@{who} {live['title'][:44]} · " + dit("one_more_hour")
+    return False, f"@{who} " + dit("no_hours_left")
 
 
 # Titles name cities, not countries: "japan" matched six videos while Osaka
@@ -1269,7 +1287,7 @@ def too_long_line(seconds):
     Rounded down to the hour, the fifth of the catalogue that runs between six
     and seven hours was refused as "6 h is too long" under a cap of six hours.
     """
-    return four("too_long", hours=f"{-(-seconds // 360) / 10:g}")
+    return dit("too_long", hours=f"{-(-seconds // 360) / 10:g}")
 
 
 def waiting_requests(data):
@@ -1293,9 +1311,9 @@ def queue_request(data, now, who, vid, title):
     if vid in held:
         # overwriting the row would strand the first viewer's redemption in
         # Kick's queue for good, with their points gone and nobody to settle it
-        return False, (f"@{who} " + four("already_coming"))
+        return False, (f"@{who} " + dit("already_coming"))
     if len(held) >= REQUEST_MAX_PENDING:
-        return False, (f"@{who} " + four("queue_full", n=len(held)))
+        return False, (f"@{who} " + dit("queue_full", n=len(held)))
     with supply.REQUESTS.open("a") as fh:
         fh.write(vid + "\n")
     data.setdefault("asked", {})[vid] = {"who": who, "title": title, "at": int(now),
@@ -1318,14 +1336,14 @@ def reward_place(data, now, who, text):
     """
     wanted = re.sub(r"[^\w ]", "", text or "").strip().lower()
     if len(wanted) < 3:
-        return False, f"@{who} " + four("name_a_place")
+        return False, f"@{who} " + dit("name_a_place")
     terms = place_terms(wanted)
     for path, _ in shelf():
         low = clean_title(path.name, SLUG).lower()
         if any(t in low for t in terms):
             if not set_next(path.name, now, paid=True):
-                return False, f"@{who} " + four("already_picked")
-            return True, f"@{who} {clean_title(path.name, SLUG)[:52]} · " + four("is_next")
+                return False, f"@{who} " + dit("already_picked")
+            return True, f"@{who} {clean_title(path.name, SLUG)[:52]} · " + dit("is_next")
     # kil, 2026-09-21: two "peru" and a "vietnam" came back refunded while the
     # catalogue held plenty of both. The first match was one somebody had
     # already asked for, and that refusal was the whole answer. A place is not
@@ -1345,10 +1363,10 @@ def reward_place(data, now, who, text):
             return False, refusal
         play_short()
         return True, (f"@{who} {clean_title(title, SLUG)[:38]} · "
-                      + four("downloading") + f" {waiting_for(catalog_seconds(vid))}")
+                      + dit("downloading") + f" {waiting_for(catalog_seconds(vid))}")
     if already:
-        return False, (f"@{who} " + four("place_coming", place=wanted))
-    return False, f"@{who} " + four("nothing_there")
+        return False, (f"@{who} " + dit("place_coming", place=wanted))
+    return False, f"@{who} " + dit("nothing_there")
 
 
 ACTIONS = {"skip": reward_skip, "stay": reward_stay, "pick": reward_pick,
@@ -1380,7 +1398,7 @@ def redeemed(payload):
         # half-written by whatever stopped halfway through it.
         chan.log(f"recompense {known['key']} par {who} a casse: {problem}")
         data = load()
-        honoured, answer = False, f"@{who} " + four("broke")
+        honoured, answer = False, f"@{who} " + dit("broke")
     # A video the board has not brought back yet: accepting now would take the
     # points for a delivery the daily ceiling may still swallow, so the
     # redemption stays in Kick's queue and announce_arrivals settles it either
@@ -1525,10 +1543,10 @@ def announce(data):
     # The line the channel says most often, once an hour and once per skip, and
     # it was the one line left in English only
     if not live:
-        say(four("nothing_ready"))
+        say(dit("nothing_ready"))
         return
     piece = f" (hour {live['hour']}/{live['hours']})" if live["hours"] > 1 else ""
-    say(f"{clean_title(live['name'], SLUG)}{piece} · " + four("now_playing")
+    say(f"{clean_title(live['name'], SLUG)}{piece} · " + dit("now_playing")
         + " · !now !list !skip")
 
 
@@ -1579,7 +1597,7 @@ def announce_arrivals(data):
             # it is on the disk and picked; the only thing left to say is that
             # it is actually going out, which is the thing that was paid for
             if live and live["vid"] == vid:
-                say(f"@{who} {title} · " + four("your_stream_on"))
+                say(f"@{who} {title} · " + dit("your_stream_on"))
                 asked.pop(vid)
             elif now - row.get("at", 0) > REQUEST_DEADLINE:
                 asked.pop(vid)  # still on the disk, it will come round by itself
@@ -1593,7 +1611,7 @@ def announce_arrivals(data):
                     set_next(path.name, now, paid=True, force=True)
                     break
             settle_request(row, True)
-            say(f"@{who} {title} · " + four("your_stream_landed", min=air_eta()))
+            say(f"@{who} {title} · " + dit("your_stream_landed", min=air_eta()))
             row["state"], row["at"] = "here", int(now)
             continue
         if vid in landing:
@@ -1601,10 +1619,10 @@ def announce_arrivals(data):
         barred = supply.excluded(now) if barred is None else barred
         # a request from the chat costs nothing, so telling that viewer their
         # points are back names points they never spent
-        back = " · " + four("points_back") if row.get("redemption") else ""
+        back = " · " + dit("points_back") if row.get("redemption") else ""
         if vid in barred:
             settle_request(row, False)
-            say(f"@{who} {title} · " + four("cannot_fetch") + back)
+            say(f"@{who} {title} · " + dit("cannot_fetch") + back)
             asked.pop(vid)
         elif now - row.get("at", 0) > REQUEST_DEADLINE:
             settle_request(row, False)
@@ -1612,7 +1630,7 @@ def announce_arrivals(data):
             # ceiling", which is one reason among a refusal from the source, a
             # merge that died and a board that is off, and the viewer being
             # refunded is the one person that sentence was sure to mislead
-            say(f"@{who} {title} · " + four("did_not_arrive", h=REQUEST_DEADLINE // 3600)
+            say(f"@{who} {title} · " + dit("did_not_arrive", h=REQUEST_DEADLINE // 3600)
                 + back)
             asked.pop(vid)
     data["asked"] = asked
@@ -1624,7 +1642,7 @@ def close_stale_vote(data, now):
         data["vote"] = None
         data["vote_failed_at"] = now
         save(data)
-        say(f"{len(vote['voters'])}/{vote['need']} · " + four("not_enough_votes"))
+        say(f"{len(vote['voters'])}/{vote['need']} · " + dit("not_enough_votes"))
 
 
 def ensure_subscription():
