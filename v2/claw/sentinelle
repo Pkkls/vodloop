@@ -1,0 +1,115 @@
+#!/bin/sh
+# Surveille Oracle depuis l'exterieur, et le dit quand Oracle ne peut plus le
+# dire lui-meme.
+#
+#   sentinelle            un tour, tel que le cron le lance
+#   sentinelle --check    les sondes, sans jamais alerter
+#   sentinelle --essai    envoie une ligne de test, pour prouver la route
+#
+# Ecrit le 2026-09-26. Jusqu'ici le seul veilleur etait watch.py, en cron SUR
+# Oracle. Il voit tres bien un pusher muet, une reserve mince ou un disque
+# plein, et il ne verra jamais la seule panne qui compte vraiment: la machine
+# qui s'arrete. Un veilleur qui vit dans ce qu'il surveille ne surveille pas, il
+# tombe avec.
+#
+# La carte convient parce qu'elle est deja allumee, deja sur un autre reseau,
+# deja munie de la cle d'Oracle, et parce qu'elle a son propre jeton Telegram:
+# une alerte qui doit lire le jeton sur la machine morte n'est pas une alerte.
+#
+# busybox: sh seulement, pas de pgrep, pas de tableaux, curl et pas wget qui ne
+# fait pas de HTTPS ici.
+set -u
+
+CONF=/root/v2/sentinelle.conf
+ETAT=/root/v2/sentinelle.state
+CREUX=2          # echecs consecutifs avant de parler, soit dix minutes
+[ -f "$CONF" ] || { echo "config absente: $CONF"; exit 1; }
+. "$CONF"
+
+OSSH="ssh -i $KEY -o BatchMode=yes -o ConnectTimeout=20 -o StrictHostKeyChecking=accept-new"
+
+dire() {
+  [ -n "${TG_TOKEN:-}" ] && [ -n "${TG_CHAT:-}" ] || return 0
+  curl -s --max-time 20 -o /dev/null \
+    --data-urlencode "text=sentinelle: $*" \
+    --data "chat_id=$TG_CHAT" \
+    "https://api.telegram.org/bot$TG_TOKEN/sendMessage"
+}
+
+# Une seule connexion pour toutes les sondes: chaque ssh coute une seconde sur
+# ce coeur unique, et trois sondes qui se connectent trois fois sont trois fois
+# plus de chances de compter une lenteur comme une panne.
+sonder() {
+  $OSSH "$ORACLE" "
+    printf 'pousseur=%s\n' \"\$(systemctl is-active vodloop-v2-push@$CHAN 2>/dev/null)\"
+    printf 'antenne=%s\n' \"\$(( \$(date +%s) - \$(stat -c %Y /home/ubuntu/v2/$CHAN/state/onair.json 2>/dev/null || echo 0) ))\"
+    printf 'morceaux=%s\n' \"\$(ls /home/ubuntu/v2/$CHAN/chunks/*.ts 2>/dev/null | wc -l)\"
+  " 2>/dev/null
+}
+
+verdict() {
+  out=$(sonder)
+  if [ -z "$out" ]; then
+    echo "Oracle injoignable en ssh"
+    return 1
+  fi
+  pousseur=$(echo "$out" | sed -n 's/^pousseur=//p')
+  antenne=$(echo "$out" | sed -n 's/^antenne=//p')
+  morceaux=$(echo "$out" | sed -n 's/^morceaux=//p')
+  case "$antenne" in ''|*[!0-9]*) antenne=999999 ;; esac
+  case "$morceaux" in ''|*[!0-9]*) morceaux=0 ;; esac
+  if [ "$pousseur" != "active" ]; then
+    echo "le pousseur n'est pas actif ($pousseur)"
+    return 1
+  fi
+  # Deux heures sans que onair.json bouge: le feeder n'avance plus, meme si le
+  # pousseur tient encore la connexion.
+  if [ "$antenne" -gt 7200 ]; then
+    echo "l'antenne n'a pas change depuis $((antenne / 60)) min"
+    return 1
+  fi
+  if [ "$morceaux" -le 0 ]; then
+    echo "aucun morceau pret: clip d'attente a l'antenne"
+    return 1
+  fi
+  echo "pousseur actif, antenne il y a $((antenne / 60)) min, $morceaux morceaux"
+  return 0
+}
+
+if [ "${1:-}" = "--essai" ]; then
+  dire "essai de route, tout va bien"
+  echo "ligne de test envoyee"
+  exit 0
+fi
+
+pourquoi=$(verdict); bon=$?
+
+if [ "${1:-}" = "--check" ]; then
+  [ "$bon" -eq 0 ] && echo "OK    $pourquoi" || echo "PANNE $pourquoi"
+  exit "$bon"
+fi
+
+echecs=0; dit=0
+[ -f "$ETAT" ] && read -r echecs dit < "$ETAT" 2>/dev/null
+case "$echecs" in ''|*[!0-9]*) echecs=0 ;; esac
+case "$dit" in ''|*[!0-9]*) dit=0 ;; esac
+
+if [ "$bon" -ne 0 ]; then
+  echecs=$((echecs + 1))
+  # On parle une fois, au creux, et plus ensuite: une panne de nuit ne doit pas
+  # laisser deux cents lignes derriere elle.
+  if [ "$echecs" -ge "$CREUX" ] && [ "$dit" -eq 0 ]; then
+    dire "$pourquoi (depuis $((echecs * 5)) min)"
+    dit=1
+  fi
+else
+  # Le retour se dit aussi, sinon on ne sait jamais si c'est repare ou si la
+  # sentinelle est morte a son tour.
+  [ "$dit" -eq 1 ] && dire "revenu: $pourquoi"
+  echecs=0; dit=0
+fi
+echo "$echecs $dit" > "$ETAT"
+echo "$(date '+%Y-%m-%d %H:%M:%S') $pourquoi (echecs $echecs)" >> /root/v2/sentinelle.log
+tail -n 500 /root/v2/sentinelle.log > /root/v2/sentinelle.log.tmp 2>/dev/null \
+  && mv /root/v2/sentinelle.log.tmp /root/v2/sentinelle.log
+exit 0
