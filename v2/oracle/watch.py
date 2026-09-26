@@ -34,6 +34,16 @@ THIN_RUNWAY_SECONDS = 2 * 3600
 # whole seven hour stream, complete and playable, sitting on five gigabytes of
 # disk while the channel was short of material and nobody could see it.
 UPLOAD_STALL_SECONDS = 60 * 60
+# kil, 2026-09-26: "on a recu un host a 400 personne hier, et il n'y avait qu'une
+# vod dispo". Le vivier est passe de 344 a 202 candidats le 25 au soir, sans une
+# ligne nulle part, et la chaine a mis deux jours a le payer a l'antenne. Une
+# chute du vivier est une panne d'approvisionnement visible des heures avant de
+# s'entendre, ce qui en fait le seul moment ou la dire sert encore a quelque
+# chose. Le seuil est relatif, parce qu une liste qui perd un tiers d un coup est
+# un listage rate et jamais une chaine qui a supprime un tiers de ses videos.
+POOL_DROP = 0.10
+# Et un plancher absolu, pour le jour ou la chute est lente au lieu d etre nette.
+POOL_FLOOR = 60
 
 
 def sent_bytes(pid):
@@ -152,6 +162,20 @@ def main(argv):
                                   f"YouTube refuse")
     if want.get("need_seconds") and now - newest_arrival() > DRY_ARRIVAL_SECONDS:
         faults["approvisionnement"] = "rien de neuf depuis 12 h alors que la file manque"
+    vivier = int(want.get("candidates") or 0)
+    avant = int(data.get("vivier") or 0)
+    if vivier and avant and vivier < avant * (1 - POOL_DROP):
+        faults["vivier"] = (f"le vivier tombe de {avant} a {vivier} candidats: "
+                            f"un listage a repondu court, pas une chaine qui se vide")
+    if vivier and vivier < POOL_FLOOR:
+        faults["vivier bas"] = (f"{vivier} candidats seulement, plancher {POOL_FLOOR}: "
+                                f"le chat n'a presque plus rien a demander")
+    # Le repere est le plus haut vu, sinon une chute etalee sur la journee ne
+    # declenche jamais, chaque passe trouvant la precedente deja basse. Mais il
+    # redescend de deux pour cent par passe, sinon un vivier reellement plus
+    # petit alarmerait jusqu a la fin des temps: une falaise se dit tout de
+    # suite, un nouveau niveau se tait au bout de deux heures.
+    data["vivier"] = max(vivier, int(avant * 0.98)) if vivier else avant
     free = shutil.disk_usage(chan.ROOT).free
     if free < chan.FLOOR_BYTES:
         faults["disque"] = f"{free / chan.GIB:.1f} Go libres, sous le plancher"
