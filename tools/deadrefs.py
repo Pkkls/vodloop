@@ -24,10 +24,19 @@ ROOT = pathlib.Path(__file__).resolve().parent.parent
 SUITES = [(ROOT / "tests", [ROOT / "v2" / "oracle", ROOT / "bin"])]
 
 
+# Python les pose sur tout module a l execution, et aucune ne s ecrit dans la
+# source, donc l analyse statique ne les voit pas. Le 2026-09-26 bot.__file__,
+# lu par un harnais pour verifier quel fichier il avait charge, est ressorti en
+# "n existe plus": un controle qui crie au loup sur un dunder est un controle
+# qu on finit par ignorer.
+DUNDERS = {"__file__", "__name__", "__doc__", "__dict__", "__path__", "__spec__",
+           "__loader__", "__package__", "__builtins__", "__all__", "__version__"}
+
+
 def defined(path):
     """Every name a module binds at its top level."""
     tree = ast.parse(io.open(path, encoding="utf-8").read())
-    names = set()
+    names = set(DUNDERS)
     for node in tree.body:
         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
             names.add(node.name)

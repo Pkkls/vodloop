@@ -332,14 +332,38 @@ def systemctl(*args):
 
 
 def telegram(text):
+    """Envoie une ligne, et ecrit ce qu il en est advenu.
+
+    kil, 2026-09-26: "si il n'y a pas assez de logs sur le bot telegram, please
+    add it". Il n y en avait aucun. Cette fonction envoyait et rendait True ou
+    False, que personne ne lisait: une alerte qui n arrive pas etait donc aussi
+    silencieuse que la panne qu elle annonçait, ce qui est la pire des deux.
+    Chaque tentative laisse maintenant une ligne, envoyee ou non, avec le debut
+    du message, de quoi savoir apres coup ce que la chaine a essaye de dire.
+
+    La trace passe par print et non par log(), et ce n est pas un detail. bot.py
+    branche chan.on_log sur son relais, lequel met la ligne en file et la poste
+    sur Telegram au vidage suivant. Un log() ici donnerait donc telegram ->
+    log -> relais -> telegram, sans fin, et le garde de re-entrance de log() n y
+    peut rien parce que le relais est asynchrone: il repart d une autre pile, ou
+    le garde est deja retombe. Le journal du processus suffit, c est la que se
+    lisent les autres lignes.
+    """
+    def trace(ligne):
+        print(f"{time.strftime('%Y-%m-%d %H:%M:%S')} {ligne}", flush=True)
+
     token, chat = CONF.get("TG_TOKEN"), CONF.get("TG_CHAT")
     if not token or not chat:
+        trace(f"telegram non configure, message perdu: {text[:90]}")
         return False
     body = urllib.parse.urlencode({"chat_id": chat, "text": f"{CONF.get('LABEL', NAME)} {text}"[:3900],
                                    "disable_web_page_preview": "true"}).encode()
     try:
         with urllib.request.urlopen(f"https://api.telegram.org/bot{token}/sendMessage",
                                     body, timeout=30) as response:
-            return json.load(response).get("ok", False)
-    except (OSError, ValueError):
+            ok = json.load(response).get("ok", False)
+    except (OSError, ValueError) as exc:
+        trace(f"telegram injoignable ({str(exc)[:40]}), message perdu: {text[:70]}")
         return False
+    trace(f"telegram {'envoye' if ok else 'REFUSE'}: {text[:100]}")
+    return ok

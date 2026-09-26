@@ -110,9 +110,8 @@ def suite_v2(witness):
                           capture_output=True, text=True, timeout=1200,
                           env=dict(os.environ, MSYS_NO_PATHCONV="1"))
     lignes = (done.stdout or done.stderr or "").strip().splitlines()
-    resume = lignes[-1][:96] if lignes else "(aucune sortie)"
-    ok = done.returncode == 0
-    return (not ok if witness else ok), resume
+    ok = done.returncode == 0 and bool(lignes)
+    return (not ok if witness else ok), muet(lignes)
 
 
 ERRORGUARD = [
@@ -158,6 +157,40 @@ def livraison_du_relais(witness):
     return run([sys.executable, cible])
 
 
+def commandes_du_chat(witness):
+    """Les commandes, jouees contre l etat reel, la ou il vit."""
+    sys.path.insert(0, str(ROOT / "tools"))
+    from drift import hosts, ssh_argv  # noqa: E402
+    conf = hosts()
+    local = ROOT / "tools" / "cmds.py"
+    scp = ["scp", "-i", os.path.expanduser(conf["ORACLE_KEY"]), "-o", "BatchMode=yes",
+           "-q", str(local), "%s:/tmp/gate_cmds_win.py" % conf["ORACLE"]]
+    if subprocess.run(scp, capture_output=True, timeout=300).returncode:
+        return False, "envoi du controle impossible"
+    lance = ("tr -d '\\r' < /tmp/gate_cmds_win.py > /tmp/gate_cmds.py; "
+             "cd /home/ubuntu/v2/nanatty247 && CHAN_ROOT=$PWD "
+             "PYTHONPATH=/home/ubuntu/v2/bin python3 /tmp/gate_cmds.py 2>&1 | tail -4")
+    if witness:
+        # son rouge: on le lance avec un chemin de modules qui n est pas le
+        # deploye, et le garde d import doit refuser de mesurer quoi que ce soit
+        lance = ("cd /home/ubuntu/v2/nanatty247 && CHAN_ROOT=$PWD "
+                 "VODLOOP_BIN=/chemin/qui/nexiste/pas "
+                 "PYTHONPATH=/home/ubuntu/v2/bin python3 /tmp/gate_cmds.py 2>&1 | tail -2")
+    done = subprocess.run(ssh_argv("oracle", conf, lance), capture_output=True,
+                          text=True, timeout=600,
+                          env=dict(os.environ, MSYS_NO_PATHCONV="1"))
+    lignes = (done.stdout or done.stderr or "").strip().splitlines()
+    ok = done.returncode == 0 and bool(lignes)
+    return (not ok if witness else ok), muet(lignes)
+
+
+# Une etape distante qui ne dit rien n a rien mesure. Le 2026-09-26 la suite v2
+# est passee au vert avec "(aucune sortie)": le ssh avait rendu zero sans une
+# ligne, ce qui est exactement la sonde qui ne fait rien et qu on croit.
+def muet(lignes):
+    return lignes[-1][:96] if lignes else "AUCUNE SORTIE: rien n a tourne la-bas"
+
+
 ETAPES = [
     ("noms morts dans les suites", noms_morts, False),
     ("regles du garde", regles_du_garde, False),
@@ -165,6 +198,7 @@ ETAPES = [
     ("livraison du relais", livraison_du_relais, False),
     ("derive deploye/commite", derive, True),
     ("suite v2 contre le deploye", suite_v2, True),
+    ("commandes du chat en vrai", commandes_du_chat, True),
 ]
 
 

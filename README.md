@@ -361,6 +361,29 @@ longest is 12.0 hours and none exceeds what already fits.
 
 ## Tests
 
+One command answers for all of it, and that is the one to run:
+
+```sh
+python tools/gate.py            # the number; --witness must give the same one
+python tools/gate.py --local    # only what needs no network
+```
+
+Seven checks: names the suites reach for that the code no longer defines, the
+two command guards and their corpora, what the relay keeps or throws away, drift
+between what runs and what is committed across the three machines, the v2 suite
+against the deployed modules, and the twelve chat commands played against live
+state. A step that cannot start, or that comes back with nothing, counts as a
+failure and never as a pass: the whole class of defect these were written for is
+a check that quietly does nothing.
+
+The tools it calls can be run alone. `drift.py` compares deployed against
+committed byte by byte and locates the first difference or declines to claim
+one. `stock.py` says what the channel holds and which of its two ceilings is the
+one actually binding. `cmds.py` plays the chat commands and refuses to measure
+anything if the module it loaded is not the deployed one.
+
+The suites themselves:
+
 ```sh
 for t in tests/test_*.py; do VODLOOP_ROOT=$(mktemp -d) python3 "$t"; done
 ```
