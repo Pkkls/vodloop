@@ -387,11 +387,29 @@ def refresh_catalog(apply):
         listees = len([l for l in out.splitlines() if l.strip()])
         chan.log(f"catalogue {url}: {len(kept)} dans la bande sur {listees} listee(s)")
     for rank in empty:
-        kept_back = {vid: row for vid, row in previous.items() if row[1] == rank}
-        if kept_back:
-            chan.log(f"source {rank} muette, ses {len(kept_back)} entrees sont gardees")
-        for vid, row in kept_back.items():
-            rows.setdefault(vid, row)
+        chan.log(f"source {rank} muette, rien de listé ce tour")
+    # kil, 2026-09-26: "on a recu un host a 400 personne et il n'y avait qu'une
+    # vod dispo". The mute-source rule above covered a listing that answered
+    # nothing and left a partial one authoritative, which is the failure that
+    # actually happens. On 2026-09-24 @nanattyarc answered nothing and its 229
+    # entries were held; on 2026-09-25 it answered 144, of which 87 were in
+    # band, and the other 142 left the pool without a line in the log. A flat
+    # listing is paginated and rate limited, more so unsigned, so a short answer
+    # is its ordinary failure and never evidence that a video stopped existing.
+    #
+    # The catalogue is a union from here on. A listing adds what it saw and
+    # refreshes where it sits; it never removes. Forgetting is a deliberate act,
+    # and the acts exist already: rejected.tsv for what the wire refused, and
+    # the failure count for what cannot be fetched. Both work one video at a
+    # time, which is the right granularity for losing something.
+    revenus = 0
+    for vid, row in previous.items():
+        if vid not in rows:
+            rows[vid] = row
+            revenus += 1
+    if revenus:
+        chan.log(f"{revenus} entree(s) connues et non relistees ce tour, gardees "
+                 f"(catalogue {len(rows)})")
     if failed == len(sources) or not rows:
         chan.log("aucune liste lue, catalogue precedent conserve")
         return

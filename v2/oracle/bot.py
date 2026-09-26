@@ -1113,20 +1113,20 @@ def waiting_for(seconds):
 # the button does. The chat still answers in four languages, because that is a
 # line somebody reads once, not a label they scan.
 REWARDS = [
-    {"key": "skip", "title": "Skip", "cost": 1, "input": False,
+    {"key": "skip", "title": "Skip", "cost": 200, "input": False,
      "was": ["Skip · Saltar · スキップ · Geç", "Skip this hour"],
      "description": "Plays a different stream right now"},
-    {"key": "stay", "title": "Stay", "cost": 1, "input": False,
+    {"key": "stay", "title": "Stay", "cost": 200, "input": False,
      "was": ["Stay · Seguir · 続ける · Devam", "Keep this one going"],
      "description": "Keeps this stream on for one more hour"},
-    {"key": "pick", "title": "Pick", "cost": 1, "input": True,
+    {"key": "pick", "title": "Pick", "cost": 200, "input": True,
      "was": ["Pick · Elegir · 選ぶ · Seç", "Pick what plays next"],
      "description": "Type !list in chat, then put that number here"},
-    {"key": "jump", "title": "+10 min", "cost": 1, "input": False,
+    {"key": "jump", "title": "+10 min", "cost": 200, "input": False,
      "was": ["+10 min · Avanzar · 10分進む · İleri sar",
              "+30 min · Avanzar · 30分進む · İleri sar"],
      "description": "Jumps 10 minutes forward in this stream"},
-    {"key": "place", "title": "Travel", "cost": 1, "input": True,
+    {"key": "place", "title": "Travel", "cost": 200, "input": True,
      "was": ["Travel · Viajar · 旅先 · Gezi", "Take me somewhere"],
      "description": "Type a country or a city, a stream from there plays next"},
 ]
